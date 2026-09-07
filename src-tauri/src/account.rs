@@ -855,7 +855,9 @@ pub fn sync_contact_snapshot(root: &Path, runtime: &AccountRuntime) -> Result<()
     let mut catalog_store = FileTzapIdentityCatalogStore::new(root);
     let mut catalog = ensure_catalog(root, runtime)?;
 
-    apply_contact_snapshot_to_catalog_with_intermediate_resolver(&mut catalog, &snapshot, now, Some(root), Some(&config.hosted_account_base_url));
+    let intermediate_cache = zmanager_core::trust::TzapIntermediateCache::new(root.join("intermediates"));
+    let intermediate_resolver = TzapOnlineIntermediateResolver::with_reqwest(intermediate_cache, Some(config.hosted_account_base_url.clone()));
+    apply_contact_snapshot_to_catalog(&mut catalog, &snapshot, now, Some(&intermediate_resolver));
 
     let expected_revision = catalog.revision;
     catalog.revision = catalog.revision.saturating_add(1);
@@ -864,16 +866,11 @@ pub fn sync_contact_snapshot(root: &Path, runtime: &AccountRuntime) -> Result<()
     Ok(())
 }
 
-pub fn apply_contact_snapshot_to_catalog(catalog: &mut TzapIdentityCatalog, snapshot: &zmanager_core::contact_snapshot::TzapContactSnapshot, now: u64) {
-    apply_contact_snapshot_to_catalog_with_intermediate_resolver(catalog, snapshot, now, None, None);
-}
-
-fn apply_contact_snapshot_to_catalog_with_intermediate_resolver(
+fn apply_contact_snapshot_to_catalog(
     catalog: &mut TzapIdentityCatalog,
     snapshot: &zmanager_core::contact_snapshot::TzapContactSnapshot,
     now: u64,
-    intermediate_cache_root: Option<&Path>,
-    service_base_url: Option<&str>,
+    intermediate_resolver: Option<&dyn zmanager_core::trust::TzapIntermediateResolver>,
 ) {
     // 1. Merge and prune tombstones (365 days retention)
     let mut tombstone_map = std::collections::BTreeMap::<String, u64>::new();
@@ -888,10 +885,6 @@ fn apply_contact_snapshot_to_catalog_with_intermediate_resolver(
     catalog.contacts.retain(|c| if let Some(&removed_at) = tombstone_map.get(&c.contact_id) { c.accepted_at_unix_seconds > removed_at } else { true });
 
     // 2. Process snapshot contacts: re-verify and merge
-    let resolver = intermediate_cache_root.map(|root| {
-        let cache = zmanager_core::trust::TzapIntermediateCache::new(root.join("intermediates"));
-        TzapOnlineIntermediateResolver::with_reqwest(cache, service_base_url.map(str::to_owned))
-    });
     let options = zmanager_core::contact_card::TzapContactCardImportOptions {
         verifier_time_unix_seconds: i64::try_from(now).unwrap_or(i64::MAX),
         official_root_pins: &zmanager_core::trust::OFFICIAL_TZAP_ROOT_PINS,
@@ -899,7 +892,7 @@ fn apply_contact_snapshot_to_catalog_with_intermediate_resolver(
         custom_trust_root_sha256: Vec::new(),
         custom_trust_root_certificates_der: Vec::new(),
         certificate_profile_options: zmanager_core::trust::TzapCertificateProfileOptions::default(),
-        intermediate_resolver: resolver.as_ref().map(|value| value as &dyn zmanager_core::trust::TzapIntermediateResolver),
+        intermediate_resolver,
     };
 
     let mut incoming_ids = std::collections::HashSet::new();
@@ -1480,7 +1473,7 @@ mod tests {
             vec![],
         );
 
-        apply_contact_snapshot_to_catalog(&mut catalog, &snapshot, 300);
+        apply_contact_snapshot_to_catalog(&mut catalog, &snapshot, 300, None);
 
         // contact-1 should NOT be restored because local tombstone (200) > accepted_at (150)
         assert!(!catalog.contacts.iter().any(|c| c.contact_id == "contact-1"));
