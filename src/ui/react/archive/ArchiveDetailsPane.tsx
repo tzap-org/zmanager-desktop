@@ -280,8 +280,11 @@ function TzapVerification() {
           >
             {verification.result.certificateSha256}
           </code>
-          {hasCaveat && verification.result.statusReason ? (
-            <span className="text-amber-700 dark:text-amber-300">{i18n.t("extract.tzapVerification.statusReason")}: {verification.result.statusReason}</span>
+          {hasCaveat && (verification.result.statusReason || verification.result.statusCheck === "status_unavailable") ? (
+            <span className="text-amber-700 dark:text-amber-300">
+              {i18n.t("extract.tzapVerification.statusReason")}
+              {verification.result.statusReason ? `: ${verification.result.statusReason}` : ""}
+            </span>
           ) : null}
         </div>
       ) : null}

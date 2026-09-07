@@ -551,6 +551,8 @@ function createToolbarUnavailableText(snapshot: ZManagerReactSnapshot): string {
       return i18n.t("create.status.starting");
     case "needsPlan":
       return i18n.t("create.status.needsPlan");
+    case "invalidSplitConfiguration":
+      return i18n.t("create.status.invalidSplitConfiguration");
     case null:
       return i18n.t("compress.createArchive");
   }

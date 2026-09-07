@@ -125,7 +125,23 @@ describe("extract workspace", () => {
       trustCheck: "production_root",
       certificateTime: "valid_at_signing",
       statusCheck: "status_unavailable",
-    }).tzapVerification.state).toBe("trusted");
+    }).tzapVerification.state).toBe("verifiedWithCaveat");
+    expect(workspace.acceptTzapVerification({
+      outcome: "cryptographically_intact_offline",
+      subject: "CN=Signer",
+      issuer: "CN=Root",
+      serialNumberHex: "01",
+      certificateSha256: "ab",
+      signedAtUnixSeconds: 1,
+      verifiedChainSubjects: ["CN=Signer", "CN=Root"],
+      diagnostics: [],
+      verificationState: "cryptographically_intact_offline",
+      signatureCheck: "ok",
+      trustCheck: "production_root",
+      certificateTime: "valid_at_signing",
+      statusCheck: "status_unavailable",
+    }).tzapVerification.state).toBe("verifiedWithCaveat");
+    expect(workspace.setTzapVerificationOptions({ checkCurrentStatus: false }));
     expect(workspace.acceptTzapVerification({
       outcome: "cryptographically_intact_offline",
       subject: "CN=Signer",

@@ -29,9 +29,11 @@ struct NativeHostEventEncoder {
         guard isCurrentCallback || isLegacyCallback,
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         else { return nil }
-        let values = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).compactMap {
-            item in item.value.map { (item.name, $0) }
-        })
+        var values = [String: String]()
+        for item in components.queryItems ?? [] {
+            guard let value = item.value, values[item.name] == nil else { return nil }
+            values[item.name] = value
+        }
         let forbidden = ["code", "token", "access_token", "authorization_code", "password", "relay_body", "session_token", "refresh_token", "id_token"]
         guard forbidden.allSatisfy({ values[$0] == nil }),
               let state = values["state"], (16 ... 256).contains(state.count),

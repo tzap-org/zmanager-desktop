@@ -1,6 +1,5 @@
-import { UserRound, Trash2, ShieldCheck, KeyRound, Plus, Download, UserCheck, RefreshCw, Smartphone } from "lucide-react";
+import { UserRound, Trash2, ShieldCheck, KeyRound, Plus, UserCheck, RefreshCw, Smartphone } from "lucide-react";
 import { Button } from "../../components/ui/button";
-import { Input } from "../../components/ui/input";
 import { Textarea } from "../../components/ui/textarea";
 import { useZManagerActions, useZManagerSnapshot } from "../AppProviders";
 import { useState } from "react";
@@ -10,13 +9,15 @@ export function ContactsTab() {
   const fullSnapshot = useZManagerSnapshot();
   const snapshot = fullSnapshot.account;
   const actions = useZManagerActions();
+  const hostedEnvironment = fullSnapshot.preferences.tzapEnvironment;
 
   const [contactCardText, setContactCardText] = useState("");
   const [verifiedContactCardText, setVerifiedContactCardText] = useState("");
-  const [exportName, setExportName] = useState("");
 
   const activeRecipientKeys = snapshot.recipientKeys.filter((key) => key.lifecycle === "active");
   const retiredRecipientKeys = snapshot.recipientKeys.filter((key) => key.lifecycle === "retired");
+  const isSignedIn = snapshot.authStatus === "signedIn";
+  const canLaunchHostedAuth = snapshot.capabilities.auth === "launch_only" || snapshot.capabilities.auth === "handoff_exchange";
   const syncCounts = snapshot.contactSyncCounts;
   const syncStatus = syncCounts?.statusRefreshFailed
     ? `${syncCounts.statusRefreshFailed} status checks unavailable`
@@ -175,15 +176,15 @@ export function ContactsTab() {
             variant="secondary"
             size="sm"
             className="h-8 text-xs shadow-sm"
-            disabled={snapshot.busy}
-            onClick={() =>
-              actions.handleAccountIntent({
-                type: "syncContacts",
-              })
-            }
+            disabled={snapshot.busy || (!isSignedIn && !canLaunchHostedAuth)}
+            onClick={() => actions.handleAccountIntent(
+              isSignedIn
+                ? { type: "syncContacts" }
+                : { type: "beginHostedAuth", environment: hostedEnvironment },
+            )}
           >
             <RefreshCw className={`mr-1.5 size-3.5 ${snapshot.busy ? "animate-spin" : ""}`} />
-            Sync with Phone
+            {isSignedIn ? "Download from Phone" : canLaunchHostedAuth ? "Sign in to sync contacts" : "Contact sync unavailable"}
           </Button>
         </div>
 
@@ -212,6 +213,10 @@ export function ContactsTab() {
                   <code className="block truncate font-mono text-[11px] text-slate-500 dark:text-slate-400">
                     {contact.recipientPublicKeyFingerprint}
                   </code>
+                  <p className={`text-[10px] ${contact.verificationState === "valid_now" ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"}`}>
+                    {contactTrustLabel(contact.verificationState)}
+                    {contact.missingStatusCaveat ? " — current server status was not established" : ""}
+                  </p>
                   {contact.phoneSourced ? (
                     <p className="text-[10px] text-slate-400 dark:text-slate-500">
                       Removed here; remove it on your phone to remove it everywhere.
@@ -299,39 +304,21 @@ export function ContactsTab() {
         </div>
       </InventorySection>
 
-      {/* Export Card Section */}
-      <InventorySection
-        title="Export Your Contact Card"
-        icon={<Download className="size-4 text-purple-600 dark:text-purple-400" />}
-        empty=""
-      >
-        <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900/40">
-          <div className="flex flex-wrap items-end gap-3">
-            <label className="grid flex-1 min-w-[200px] gap-1.5 text-xs font-semibold text-slate-900 dark:text-slate-100">
-              Display Name
-              <Input
-                className="h-8 text-xs"
-                placeholder="e.g. Jane Doe"
-                value={exportName}
-                onChange={(event) => setExportName(event.currentTarget.value)}
-              />
-            </label>
-            <Button
-              variant="secondary"
-              className="h-8 border-slate-300 bg-white text-xs hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
-              disabled={snapshot.busy || !exportName.trim()}
-              onClick={() => {
-                actions.handleAccountIntent({
-                  type: "exportContactCard",
-                });
-              }}
-            >
-              <Download className="mr-1.5 size-3.5 text-purple-600 dark:text-purple-400" />
-              {snapshot.busy ? "Exporting…" : "Export Contact Card"}
-            </Button>
-          </div>
-        </div>
-      </InventorySection>
     </div>
   );
+}
+
+function contactTrustLabel(verificationState: string): string {
+  switch (verificationState) {
+    case "valid_now": return "Verified now";
+    case "valid_at_trusted_time": return "Verified with trusted-time caveat";
+    case "cryptographically_intact_offline": return "Verified offline";
+    case "revoked": return "Revoked";
+    case "suspended": return "Suspended";
+    case "status_expired": return "Expired";
+    case "status_unavailable": return "Status unavailable";
+    case "status_mismatch": return "Status unavailable";
+    case "invalid": return "Invalid contact card";
+    default: return verificationState || "Verification unavailable";
+  }
 }

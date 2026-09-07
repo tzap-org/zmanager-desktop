@@ -13,6 +13,7 @@ import {
   getCreateArchiveExtension,
   getCreateFormatExtension,
   isCreatePlanRevisionCurrent,
+  isCreateSplitConfigurationValid,
   normalizeCreateVolumeSize,
   normalizeTzapVolumeCount,
   normalizeTzapRecoveryPercentage,
@@ -284,6 +285,67 @@ describe("create flow helpers", () => {
     expect(request).not.toHaveProperty("volumeSize");
     expect(request.volumeCount).toBe(4);
     expect(request.tzapVolumeLossTolerance).toBe(2);
+  });
+
+  it("requires an exact volume count before enabling count mode", () => {
+    expect(isCreateSplitConfigurationValid({
+      format: "tzap",
+      splitMode: "volumeCount",
+      volumeSize: null,
+      volumeCount: null,
+    })).toBe(false);
+    expect(createArchiveUnavailableReason({
+      sourceCount: 1,
+      destinationPath: "C:/tmp/output.tzap",
+      planState: "ready",
+      hasPlan: true,
+      submissionInFlight: false,
+      format: "tzap",
+      splitMode: "volumeCount",
+      volumeSize: null,
+      volumeCount: null,
+    })).toBe("invalidSplitConfiguration");
+    expect(isCreateSplitConfigurationValid({
+      format: "tzap",
+      splitMode: "volumeCount",
+      volumeSize: null,
+      volumeCount: 3,
+    })).toBe(true);
+  });
+
+  it("blocks recipient encryption when split or volume-loss settings are present", () => {
+    expect(isCreateSplitConfigurationValid({
+      format: "tzap",
+      splitMode: "volumeCount",
+      volumeSize: null,
+      volumeCount: 3,
+      tzapVolumeLossTolerance: 0,
+      recipientEncryptionSelected: true,
+    })).toBe(false);
+    expect(isCreateSplitConfigurationValid({
+      format: "tzap",
+      splitMode: "none",
+      volumeSize: null,
+      volumeCount: null,
+      tzapVolumeLossTolerance: 1,
+      recipientEncryptionSelected: true,
+    })).toBe(false);
+    expect(isCreateSplitConfigurationValid({
+      format: "tzap",
+      splitMode: "none",
+      volumeSize: null,
+      volumeCount: null,
+      tzapVolumeLossTolerance: 0,
+      recipientEncryptionSelected: true,
+    })).toBe(true);
+    expect(isCreateSplitConfigurationValid({
+      format: "tzap",
+      splitMode: "none",
+      volumeSize: null,
+      volumeCount: null,
+      tzapVolumeLossTolerance: 1,
+      recipientEncryptionSelected: false,
+    })).toBe(false);
   });
 
   it("passes tzapBootstrapSidecar toggle only for TZAP requests", () => {

@@ -33,6 +33,7 @@ import {
   type CreatePlanRow,
   type CreatePathHelpers,
   type TzapSplitMode,
+  isCreateSplitConfigurationValid,
 } from "../createFlow";
 import {
   applyHierarchicalRowSelectionIntent,
@@ -62,6 +63,7 @@ export type CreateWorkspacePlanMessageKey =
   | "create.error.pickDestination"
   | "create.error.refreshPlan"
   | "create.error.passwordMismatch"
+  | "create.error.invalidSplitConfiguration"
   | "create.error.unableStart";
 
 export type CreateWorkspacePlanStatus = Readonly<{
@@ -1039,6 +1041,18 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
         return startRequestUnavailableResult(state, "needsIncludedEntries");
       }
 
+      if (!isCreateSplitConfigurationValid({
+        format: state.options.format,
+        splitMode: state.options.splitMode,
+        volumeSize: state.options.volumeSize,
+        volumeCount: state.options.volumeCount,
+        tzapVolumeLossTolerance: state.options.tzapVolumeLossTolerance,
+        recipientEncryptionSelected: hasTzapRecipientSelection(state.options),
+      })) {
+        state = setPlanErrorState(state, { messageKey: "create.error.invalidSplitConfiguration" });
+        return startRequestUnavailableResult(state, "invalidSplitConfiguration", state.planStatus);
+      }
+
       const supportsPassword = createFormatSupportsPassword(state.options.format);
       const password = supportsPassword ? input?.password?.trim() ?? "" : "";
       const passwordConfirm = supportsPassword ? input?.passwordConfirm?.trim() ?? "" : "";
@@ -1529,6 +1543,12 @@ function buildStartCreateRequestFromState(
       ? state.options.tzapBootstrapSidecar
       : undefined,
   });
+}
+
+function hasTzapRecipientSelection(options: MutableCreateWorkspaceOptions): boolean {
+  return splitCertificatePaths(options.tzapRecipientCertificatePaths).length > 0
+    || splitSelectionIds(options.tzapRecipientKeyIds).length > 0
+    || splitSelectionIds(options.tzapContactRecipientIds).length > 0;
 }
 
 function tzapCertificateRequestFromState(
@@ -2386,6 +2406,12 @@ function createOptionsSnapshot(
     planState: state.planState,
     hasPlan: state.currentPlan !== null,
     submissionInFlight: state.options.submissionInFlight,
+    format: state.options.format,
+    splitMode: state.options.splitMode,
+    volumeSize: state.options.volumeSize,
+    volumeCount: state.options.volumeCount,
+    tzapVolumeLossTolerance: state.options.tzapVolumeLossTolerance,
+    recipientEncryptionSelected: hasTzapRecipientSelection(state.options),
   });
 
   return Object.freeze({

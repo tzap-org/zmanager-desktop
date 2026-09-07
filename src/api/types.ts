@@ -170,6 +170,17 @@ export type AccountCompleteHostedAuthRequest = {
   callbackUrl?: string;
 };
 
+export type AccountHostedAuthAudience = "sign.tzap.org" | "login.tzap.org";
+
+export type AccountBeginHostedAuthRequest = {
+  environment?: string;
+  audience?: AccountHostedAuthAudience;
+};
+
+export type AccountRenewCertificateRequest = {
+  certificateId: string;
+};
+
 export type AccountCurrentUserDto = {
   displayName: string;
   publicSignerId?: string | null;
@@ -614,6 +625,7 @@ export type VerifyTzapCertificateRequest = {
   trustedSystemRoots: boolean;
   includeOfficialTzapRoot: boolean;
   checkCurrentStatus?: boolean;
+  environment?: "local" | "staging" | "prod" | string;
 };
 
 export type VerifyTzapCertificateResponse = {

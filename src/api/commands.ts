@@ -2,6 +2,8 @@ import { invoke, type Channel } from "@tauri-apps/api/core";
 
 import type {
   AccountHostedAuthLaunchDto,
+  AccountHostedAuthAudience,
+  AccountBeginHostedAuthRequest,
   AccountContactCardPreviewDto,
   AccountGenerateSigningIdentityRequest,
   AccountImportSigningIdentityRequest,
@@ -52,6 +54,7 @@ import type {
   ValidateTzapSigningIdentityRequest,
   AccountCurrentUserDto,
   AccountCompleteHostedAuthRequest,
+  AccountRenewCertificateRequest,
   ValidateTzapSigningIdentityResponse,
   DetectArchiveFormatRequest,
   DetectArchiveFormatResponse,
@@ -69,10 +72,12 @@ export async function fetchAccountSnapshot(): Promise<AccountSnapshotDto> {
   return invoke<AccountSnapshotDto>("account_snapshot");
 }
 
-export async function beginAccountHostedAuth(environment: string = "prod"): Promise<AccountHostedAuthLaunchDto> {
-  return invoke<AccountHostedAuthLaunchDto>("account_begin_hosted_auth", {
-    request: { environment },
-  });
+export async function beginAccountHostedAuth(
+  environment: string = "prod",
+  audience: AccountHostedAuthAudience = "sign.tzap.org",
+): Promise<AccountHostedAuthLaunchDto> {
+  const request: AccountBeginHostedAuthRequest = { environment, audience };
+  return invoke<AccountHostedAuthLaunchDto>("account_begin_hosted_auth", { request });
 }
 
 export async function applyAccountHostedCallback(request: {
@@ -162,7 +167,8 @@ export async function enrollAccountCertificate(): Promise<AccountLifecycleResult
 }
 
 export async function renewAccountCertificate(certificateId: string): Promise<AccountLifecycleResultDto> {
-  return invoke<AccountLifecycleResultDto>("account_renew_certificate", { request: { certificateId } });
+  const request: AccountRenewCertificateRequest = { certificateId };
+  return invoke<AccountLifecycleResultDto>("account_renew_certificate", { request });
 }
 
 export async function retireAccountDevice(): Promise<AccountLifecycleResultDto> {

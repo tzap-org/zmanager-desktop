@@ -6,6 +6,7 @@ export function SessionStatus() {
   const fullSnapshot = useZManagerSnapshot();
   const snapshot = fullSnapshot.account;
   const actions = useZManagerActions();
+  const hostedEnvironment = fullSnapshot.preferences.tzapEnvironment;
 
   const isSignedIn = snapshot.authStatus === "signedIn";
   const canLaunchHostedAuth = snapshot.capabilities.auth === "launch_only" || snapshot.capabilities.auth === "handoff_exchange";
@@ -49,7 +50,7 @@ export function SessionStatus() {
               className="bg-blue-600 text-white shadow hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-500"
               disabled={snapshot.busy || !canLaunchHostedAuth}
               onClick={() =>
-                actions.handleAccountIntent({ type: "beginHostedAuth", environment: "prod" })
+                actions.handleAccountIntent({ type: "beginHostedAuth", environment: hostedEnvironment })
               }
             >
               <ExternalLink className="mr-1.5 size-3.5" />
@@ -87,7 +88,7 @@ export function SessionStatus() {
             <div className="space-y-1">
               <strong className="font-semibold">Local Storage Active</strong>
               <p className="leading-relaxed opacity-90">
-                You do not need to sign in to create archives, generate P-256 device signing certificates, or encrypt archives with recipient keys. Hosted sign-in is optional and used for organizational key sync.
+                You do not need to sign in to create archives, generate P-256 device signing certificates, or encrypt archives with recipient keys. Hosted sign-in is needed for enrollment, renewal, device retirement, and contact sync. Archive verification can optionally check public certificate status when online; cached hosted identities can still sign offline.
               </p>
             </div>
           </div>

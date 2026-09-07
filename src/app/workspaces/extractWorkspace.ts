@@ -13,9 +13,12 @@ export type TzapVerificationSnapshot = Readonly<{
   error: string;
 }>;
 
-function verificationStateForResult(result: VerifyTzapCertificateResponse): TzapVerificationState {
+function verificationStateForResult(result: VerifyTzapCertificateResponse, checkCurrentStatus: boolean): TzapVerificationState {
   if (["invalid", "revoked", "suspended", "unverifiable"].includes(result.outcome) || result.verificationState === "invalid") {
     return "error";
+  }
+  if (checkCurrentStatus && result.statusCheck === "status_unavailable") {
+    return "verifiedWithCaveat";
   }
   if (["signed_before_renewal", "verified_with_caveat", "status_unavailable"].includes(result.outcome)
     || ["signed_before_renewal", "verified_with_caveat", "status_unavailable"].includes(result.verificationState ?? "")) {
@@ -154,7 +157,7 @@ export function createExtractWorkspace(initialDefaults: ExtractWorkspaceDefaults
     },
 
     acceptTzapVerification(result) {
-      state = { ...state, tzapVerification: freezeVerification({ ...state.tzapVerification, state: verificationStateForResult(result), result: { ...result }, error: "" }) };
+      state = { ...state, tzapVerification: freezeVerification({ ...state.tzapVerification, state: verificationStateForResult(result, state.tzapVerification.checkCurrentStatus), result: { ...result }, error: "" }) };
       return cloneSnapshot(state);
     },
 

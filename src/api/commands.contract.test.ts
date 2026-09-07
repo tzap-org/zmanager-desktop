@@ -54,7 +54,7 @@ const COMMAND_WRAPPERS = [
   { command: "account_snapshot", call: () => api.fetchAccountSnapshot() },
   {
     command: "account_begin_hosted_auth",
-    request: { environment: "prod" },
+    request: { environment: "prod", audience: "sign.tzap.org" },
     call: () => api.beginAccountHostedAuth("prod"),
   },
   {
@@ -260,6 +260,7 @@ const COMMAND_WRAPPERS = [
       trustedSystemRoots: false,
       includeOfficialTzapRoot: true,
       checkCurrentStatus: false,
+      environment: "prod",
     },
     call: () => api.verifyTzapCertificate({
       archivePath: "C:/archives/demo.tzap",
@@ -268,6 +269,7 @@ const COMMAND_WRAPPERS = [
       trustedSystemRoots: false,
       includeOfficialTzapRoot: true,
       checkCurrentStatus: false,
+      environment: "prod",
     }),
   },
   {
@@ -411,6 +413,14 @@ describe("Tauri command contracts", () => {
         expect(invokeMock).toHaveBeenCalledWith(wrapper.command);
       }
     }
+  });
+
+  it("keeps organization retirement re-authentication on the login audience", async () => {
+    await api.beginAccountHostedAuth("prod", "login.tzap.org");
+
+    expect(invokeMock).toHaveBeenCalledWith("account_begin_hosted_auth", {
+      request: { environment: "prod", audience: "login.tzap.org" },
+    });
   });
 });
 

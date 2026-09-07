@@ -91,6 +91,41 @@ describe("React archive workspace", () => {
     expect(html).toMatch(/id="browse-message"[^>]*role="alert"/);
     expect(html).toContain("The archive could not be opened.");
   });
+
+  it("shows an explicit warning when a requested current-status check is unavailable", () => {
+    const initial = archiveSnapshot();
+    const html = renderArchiveWorkspace(
+      createZManagerReactSnapshot({
+        ...initial,
+        archive: { ...initial.archive, currentArchivePath: "C:/archives/demo.tzap" },
+        extract: {
+          ...initial.extract,
+          tzapVerification: {
+            ...initial.extract.tzapVerification,
+            checkCurrentStatus: true,
+            state: "verifiedWithCaveat",
+            result: {
+              outcome: "cryptographically_intact_offline",
+              subject: "CN=Signer",
+              issuer: "CN=Root",
+              serialNumberHex: "01",
+              certificateSha256: "sha256:signer",
+              signedAtUnixSeconds: 1,
+              verifiedChainSubjects: ["CN=Signer", "CN=Root"],
+              diagnostics: [],
+              verificationState: "cryptographically_intact_offline",
+              signatureCheck: "ok",
+              trustCheck: "production_root",
+              certificateTime: "valid_at_signing",
+              statusCheck: "status_unavailable",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(html).toContain("Current status could not be confirmed");
+  });
 });
 
 function renderArchiveWorkspace(snapshot: ZManagerReactSnapshot): string {

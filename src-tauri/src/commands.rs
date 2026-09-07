@@ -438,6 +438,9 @@ fn start_create_internal_with_resolver(
     };
 
     let password = request.password.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned);
+    if request.volume_count.is_some_and(|value| value < 2) {
+        return Err(CommandErrorDto::invalid_request("volumeCount must be at least 2 or omitted"));
+    }
     let requested_volume_size = request.volume_size.filter(|value| *value > 0);
     let requested_volume_count = request.volume_count.filter(|value| *value > 1);
     if let Some(certificates) = request.tzap_certificates.as_ref() {
@@ -462,8 +465,14 @@ fn start_create_internal_with_resolver(
     if request.format != crate::dto::ArchiveFormatDto::Tzap && requested_volume_count.is_some() {
         return Err(CommandErrorDto::invalid_request("volumeCount is supported only for TZAP archives"));
     }
+    if request.format != crate::dto::ArchiveFormatDto::Tzap && request.tzap_volume_loss_tolerance.unwrap_or(0) > 0 {
+        return Err(CommandErrorDto::invalid_request("volume-loss tolerance is supported only for TZAP archives"));
+    }
     if requested_volume_size.is_some() && requested_volume_count.is_some() {
         return Err(CommandErrorDto::invalid_request("volumeSize and volumeCount are mutually exclusive"));
+    }
+    if request.tzap_volume_loss_tolerance.unwrap_or(0) > 0 && requested_volume_size.is_none() && requested_volume_count.is_none() {
+        return Err(CommandErrorDto::invalid_request("volume-loss tolerance requires an active split mode"));
     }
     if let Some(count) = requested_volume_count {
         if u32::from(request.tzap_volume_loss_tolerance.unwrap_or(0)) >= count {
@@ -834,6 +843,15 @@ fn archive_verification_response(
     }
 }
 
+fn hosted_status_base_url(environment: Option<&str>) -> Result<&'static str, CommandErrorDto> {
+    match environment.unwrap_or("prod") {
+        "local" => Ok("http://localhost:8787"),
+        "staging" => Ok("https://staging.tzap.org"),
+        "prod" => Ok(SIGN_TZAP_BASE_URL),
+        _ => Err(CommandErrorDto::invalid_request("Unsupported hosted environment")),
+    }
+}
+
 #[tauri::command]
 pub fn verify_tzap_certificate(request: crate::dto::VerifyTzapCertificateRequest) -> Result<crate::dto::VerifyTzapCertificateResponse, CommandErrorDto> {
     let archive_path = ensure_non_empty_path(request.archive_path, "archivePath")?;
@@ -855,9 +873,10 @@ pub fn verify_tzap_certificate(request: crate::dto::VerifyTzapCertificateRequest
         let offline = zmanager_core::engine::tzap::verify_tzap_archive_public_no_key(&archive_path, &trust, now)
             .map_err(|error| CommandErrorDto::operation_failed(error.to_string()))?;
         let mut status_response = None;
+        let status_base_url = hosted_status_base_url(request.environment.as_deref())?;
         let verification = if let Some(signer) = &offline.signer {
             let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|error| CommandErrorDto::operation_failed(error))?;
-            let status_client = TzapStatusClient::new(SIGN_TZAP_BASE_URL, &transport);
+            let status_client = TzapStatusClient::new(status_base_url, &transport);
             match status_client.status_by_fingerprint(&signer.certificate_sha256_hex) {
                 Ok(status) => {
                     let composed = TzapArchiveStatusTarget::from_leaf_certificate_der(&signer.leaf_certificate_der, None)
@@ -2121,6 +2140,14 @@ mod tests {
     }
 
     #[test]
+    fn hosted_status_base_url_is_allow_listed_by_environment() {
+        assert_eq!(hosted_status_base_url(None).unwrap(), SIGN_TZAP_BASE_URL);
+        assert_eq!(hosted_status_base_url(Some("local")).unwrap(), "http://localhost:8787");
+        assert_eq!(hosted_status_base_url(Some("staging")).unwrap(), "https://staging.tzap.org");
+        assert!(hosted_status_base_url(Some("unknown")).is_err());
+    }
+
+    #[test]
     fn verify_tzap_certificate_defaults_to_offline_without_account_session() {
         let archive_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../zmanager/fixtures/archives/basic.tzap");
         assert!(archive_path.exists(), "shared TZAP fixture is required for the offline verification contract test");
@@ -2131,6 +2158,7 @@ mod tests {
             trusted_system_roots: false,
             include_official_tzap_root: false,
             check_current_status: false,
+            environment: None,
         })
         .unwrap();
         assert_eq!(result.status_check, "status_unavailable");
@@ -3334,6 +3362,186 @@ mod tests {
         for index in 0..3 {
             assert!(workspace.join(format!("created.vol{index:03}.tzap")).is_file(), "volume {index} should exist");
         }
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn command_boundary_start_create_rejects_zero_volume_count() {
+        let workspace = create_temp_workspace("start-create-zero-volume-count");
+        let sources = workspace.join("sources");
+        let destination = workspace.join("created.tzap");
+        fs::create_dir_all(&sources).expect("source directory should exist");
+        fs::write(sources.join("one.txt"), b"one").expect("fixture should write");
+
+        let result = start_create_internal(
+            StartCreateRequest {
+                sources: vec![sources.to_string_lossy().to_string()],
+                destination_path: destination.to_string_lossy().to_string(),
+                format: crate::dto::ArchiveFormatDto::Tzap,
+                clean_source: false,
+                exclude_names: None,
+                exclude_archive_paths: None,
+                include_archive_paths: None,
+                respect_gitignore: false,
+                follow_symlinks: false,
+                replace_existing: false,
+                destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
+                password: None,
+                compression_level: None,
+                volume_size: None,
+                volume_count: Some(0),
+                tzap_recovery_percentage: None,
+                tzap_volume_loss_tolerance: None,
+                zip_compression: None,
+                seven_z_solid: None,
+                seven_z_threads: None,
+                seven_z_chunk_size: None,
+                seven_z_encrypt_file_names: None,
+                tzap_certificates: None,
+                tzap_bootstrap_sidecar: None,
+                preserve_metadata: false,
+            },
+            &crate::job_registry::JobRegistry::new(),
+        );
+
+        let error = result.expect_err("zero volume count must be rejected");
+        assert_eq!(error.code, "invalid_request");
+        assert!(error.message.contains("volumeCount"));
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn command_boundary_start_create_rejects_single_volume_count() {
+        let workspace = create_temp_workspace("start-create-single-volume-count");
+        let sources = workspace.join("sources");
+        let destination = workspace.join("created.tzap");
+        fs::create_dir_all(&sources).expect("source directory should exist");
+        fs::write(sources.join("one.txt"), b"one").expect("fixture should write");
+
+        let result = start_create_internal(
+            StartCreateRequest {
+                sources: vec![sources.to_string_lossy().to_string()],
+                destination_path: destination.to_string_lossy().to_string(),
+                format: crate::dto::ArchiveFormatDto::Tzap,
+                clean_source: false,
+                exclude_names: None,
+                exclude_archive_paths: None,
+                include_archive_paths: None,
+                respect_gitignore: false,
+                follow_symlinks: false,
+                replace_existing: false,
+                destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
+                password: None,
+                compression_level: None,
+                volume_size: None,
+                volume_count: Some(1),
+                tzap_recovery_percentage: None,
+                tzap_volume_loss_tolerance: None,
+                zip_compression: None,
+                seven_z_solid: None,
+                seven_z_threads: None,
+                seven_z_chunk_size: None,
+                seven_z_encrypt_file_names: None,
+                tzap_certificates: None,
+                tzap_bootstrap_sidecar: None,
+                preserve_metadata: false,
+            },
+            &crate::job_registry::JobRegistry::new(),
+        );
+
+        let error = result.expect_err("a one-volume exact count must be rejected");
+        assert_eq!(error.code, "invalid_request");
+        assert!(error.message.contains("at least 2"));
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn command_boundary_start_create_rejects_tzap_tolerance_for_non_tzap_archive() {
+        let workspace = create_temp_workspace("start-create-non-tzap-tolerance");
+        let sources = workspace.join("sources");
+        let destination = workspace.join("created.zip");
+        fs::create_dir_all(&sources).expect("source directory should exist");
+        fs::write(sources.join("one.txt"), b"one").expect("fixture should write");
+
+        let result = start_create_internal(
+            StartCreateRequest {
+                sources: vec![sources.to_string_lossy().to_string()],
+                destination_path: destination.to_string_lossy().to_string(),
+                format: crate::dto::ArchiveFormatDto::Zip,
+                clean_source: false,
+                exclude_names: None,
+                exclude_archive_paths: None,
+                include_archive_paths: None,
+                respect_gitignore: false,
+                follow_symlinks: false,
+                replace_existing: false,
+                destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
+                password: None,
+                compression_level: None,
+                volume_size: Some(1024),
+                volume_count: None,
+                tzap_recovery_percentage: None,
+                tzap_volume_loss_tolerance: Some(1),
+                zip_compression: None,
+                seven_z_solid: None,
+                seven_z_threads: None,
+                seven_z_chunk_size: None,
+                seven_z_encrypt_file_names: None,
+                tzap_certificates: None,
+                tzap_bootstrap_sidecar: None,
+                preserve_metadata: false,
+            },
+            &crate::job_registry::JobRegistry::new(),
+        );
+
+        let error = result.expect_err("TZAP-only tolerance must be rejected for ZIP");
+        assert_eq!(error.code, "invalid_request");
+        assert!(error.message.contains("only for TZAP"));
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn command_boundary_start_create_rejects_volume_loss_tolerance_without_split() {
+        let workspace = create_temp_workspace("start-create-tolerance-without-split");
+        let sources = workspace.join("sources");
+        let destination = workspace.join("created.tzap");
+        fs::create_dir_all(&sources).expect("source directory should exist");
+        fs::write(sources.join("one.txt"), b"one").expect("fixture should write");
+
+        let result = start_create_internal(
+            StartCreateRequest {
+                sources: vec![sources.to_string_lossy().to_string()],
+                destination_path: destination.to_string_lossy().to_string(),
+                format: crate::dto::ArchiveFormatDto::Tzap,
+                clean_source: false,
+                exclude_names: None,
+                exclude_archive_paths: None,
+                include_archive_paths: None,
+                respect_gitignore: false,
+                follow_symlinks: false,
+                replace_existing: false,
+                destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
+                password: None,
+                compression_level: None,
+                volume_size: None,
+                volume_count: None,
+                tzap_recovery_percentage: None,
+                tzap_volume_loss_tolerance: Some(1),
+                zip_compression: None,
+                seven_z_solid: None,
+                seven_z_threads: None,
+                seven_z_chunk_size: None,
+                seven_z_encrypt_file_names: None,
+                tzap_certificates: None,
+                tzap_bootstrap_sidecar: None,
+                preserve_metadata: false,
+            },
+            &crate::job_registry::JobRegistry::new(),
+        );
+
+        let error = result.expect_err("tolerance without split must be rejected");
+        assert_eq!(error.code, "invalid_request");
+        assert!(error.message.contains("active split mode"));
         let _ = fs::remove_dir_all(&workspace);
     }
 

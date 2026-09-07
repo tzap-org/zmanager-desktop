@@ -1,0 +1,113 @@
+{
+  "oauthRegistration": {
+    "staging": {
+      "clientId": null,
+      "redirectUri": "tzap://auth/callback"
+    },
+    "production": {
+      "clientId": null,
+      "redirectUri": "tzap://auth/callback"
+    }
+  },
+  "authCallback": {
+    "request": {
+      "state": "state-1234567890",
+      "handoffCode": "handoff-code-1234567890",
+      "callbackUrl": "tzap://auth/callback?state=state-1234567890&result=completed"
+    },
+    "response": {
+      "authStatus": "signedIn",
+      "audience": "sign.tzap.org"
+    },
+    "failure": {
+      "code": "invalid_request",
+      "reason": "legacy_callback_payload_rejected"
+    }
+  },
+  "accountMutation": {
+    "request": {
+      "certificateId": "certificate-online-1"
+    },
+    "response": {
+      "outcome": "complete",
+      "attemptedDeviceIds": [],
+      "incompleteReasons": []
+    },
+    "failure": {
+      "code": "sign_session_required",
+      "reason": "login_audience_cannot_enroll_or_renew"
+    }
+  },
+  "certificateCatalog": {
+    "request": {
+      "operation": "account_snapshot"
+    },
+    "response": {
+      "identityId": "signing-hosted-1",
+      "certificateId": "certificate-online-1",
+      "certificateSha256": "sha256:certificate",
+      "state": "active",
+      "identityType": "hosted"
+    },
+    "failure": {
+      "code": "account_signing_key_missing",
+      "reason": "private_material_not_available_in_secure_store"
+    }
+  },
+  "contactSync": {
+    "request": {
+      "operation": "download_contacts_from_phone"
+    },
+    "response": {
+      "lastSuccessfulSyncAt": 1700000000,
+      "counts": {
+        "imported": 1,
+        "updated": 2,
+        "removed": 0,
+        "rejected": 0,
+        "rejectedReasons": [],
+        "statusRefreshFailed": 0
+      }
+    },
+    "failure": {
+      "code": "account_contact_sync_failed",
+      "reason": "cached_contacts_preserved"
+    }
+  },
+  "archiveVerification": {
+    "request": {
+      "archivePath": "C:/archives/demo.tzap",
+      "checkCurrentStatus": false,
+      "environment": "prod"
+    },
+    "response": {
+      "verificationState": "cryptographically_intact_offline",
+      "statusCheck": "status_unavailable",
+      "outcome": "cryptographically_intact_offline"
+    },
+    "failure": {
+      "code": "unsafe_archive",
+      "reason": "offline_verification_failed"
+    }
+  },
+  "archiveCreation": {
+    "request": {
+      "format": "tzap",
+      "splitMode": "volumeCount",
+      "volumeCount": 3,
+      "tzapVolumeLossTolerance": 1
+    },
+    "response": {
+      "volumeCount": 3,
+      "committedVolumePaths": [
+        "C:/output/demo.tzap.001",
+        "C:/output/demo.tzap.002",
+        "C:/output/demo.tzap.003"
+      ]
+    },
+    "failure": {
+      "code": "invalid_request",
+      "reason": "recipient_encryption_cannot_be_split"
+    }
+  }
+}

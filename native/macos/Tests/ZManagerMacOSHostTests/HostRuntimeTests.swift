@@ -89,6 +89,7 @@ private func promiseReleaseCallback(_: UnsafeMutableRawPointer?) {}
     let longState = String(repeating: "a", count: 257)
     let invalidState = "state.with punctuation"
     let invalidResult = "zmanager://auth-callback?state=state-1234567890&result=unknown"
+    let duplicateResult = "tzap://auth/callback?state=state-1234567890&result=completed&result=cancelled&handoff_code=handoff-code-1234567890"
 
     for value in [shortState, longState, invalidState] {
         let url = try #require(URL(string:
@@ -97,6 +98,7 @@ private func promiseReleaseCallback(_: UnsafeMutableRawPointer?) {}
         #expect(NativeHostEventEncoder.hostedAuthPayload(from: url) == nil)
     }
     #expect(NativeHostEventEncoder.hostedAuthPayload(from: try #require(URL(string: invalidResult))) == nil)
+    #expect(NativeHostEventEncoder.hostedAuthPayload(from: try #require(URL(string: duplicateResult))) == nil)
 
     let validMinimum = try #require(URL(string:
         "zmanager://shell-request/abcdefghijklmnopqrstuv"

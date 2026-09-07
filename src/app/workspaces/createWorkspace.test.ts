@@ -1402,7 +1402,7 @@ describe("create workspace option and readiness state", () => {
       compressionLevel: null,
       volumeSize: 4096,
       tzapRecoveryPercentage: 5,
-      tzapVolumeLossTolerance: 1,
+      tzapVolumeLossTolerance: 0,
     });
 
     expect(workspace.setOptions({ tzapVolumeLossTolerance: "17" }).snapshot.options.tzapVolumeLossTolerance).toBe(16);
@@ -1437,6 +1437,44 @@ describe("create workspace option and readiness state", () => {
     if (result.ok) {
       expect(result.request.volumeCount).toBe(4);
       expect(result.request).not.toHaveProperty("volumeSize");
+    }
+  });
+
+  it("blocks create until exact volume-count mode has a valid count", () => {
+    const workspace = readyWorkspace(createPlan());
+    workspace.changeFormat("tzap", formatDefaults());
+    workspace.setDestinationPath("C:/out/project.tzap");
+    workspace.setOptions({ splitMode: "volumeCount" });
+
+    expect(workspace.getSnapshot().options.readiness).toMatchObject({
+      canCreate: false,
+      unavailableReason: "invalidSplitConfiguration",
+    });
+    const result = workspace.buildStartCreateRequest();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("invalidSplitConfiguration");
+      expect(result.status).toEqual({ messageKey: "create.error.invalidSplitConfiguration" });
+    }
+
+    workspace.setOptions({ volumeCount: "3" });
+    expect(workspace.getSnapshot().options.readiness).toMatchObject({ canCreate: true, unavailableReason: null });
+  });
+
+  it("blocks recipient-encrypted TZAP when split settings are active", () => {
+    const workspace = readyWorkspace(createPlan());
+    workspace.changeFormat("tzap", formatDefaults());
+    workspace.setDestinationPath("C:/out/project.tzap");
+    workspace.setOptions({ splitMode: "volumeCount", volumeCount: "3", tzapRecipientKeyIds: "recipient-1" });
+
+    expect(workspace.getSnapshot().options.readiness).toMatchObject({
+      canCreate: false,
+      unavailableReason: "invalidSplitConfiguration",
+    });
+    const result = workspace.buildStartCreateRequest();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toBe("invalidSplitConfiguration");
     }
   });
 

@@ -21,8 +21,8 @@ use zmanager_core::identity_catalog::{
 };
 use zmanager_tzap_hosted::auth_client::{
     AUTH_HANDOFF_LIFETIME_SECONDS, LOGIN_TZAP_BASE_URL, SESSION_AUDIENCE_LOGIN_TZAP, SESSION_AUDIENCE_SIGN_TZAP, SIGN_TZAP_BASE_URL, TzapAuthError,
-    TzapCurrentUser, TzapHostedAuthCallback, TzapHostedAuthEnvironment, TzapHostedAuthLaunchConfig, TzapOAuthStateTracker, TzapPendingAuthState,
-    TzapSessionRecord, TzapSessionStore, complete_hosted_auth_handoff,
+    TzapAuthHttpTransport, TzapCurrentUser, TzapHostedAuthCallback, TzapHostedAuthEnvironment, TzapHostedAuthLaunchConfig, TzapOAuthStateTracker,
+    TzapPendingAuthState, TzapSessionRecord, TzapSessionStore, complete_hosted_auth_handoff_for_audience, fetch_current_user_for_audience,
 };
 use zmanager_tzap_hosted::backup_client::{TzapBackupClient, TzapBackupError};
 use zmanager_tzap_hosted::certificate_lifecycle::{
@@ -32,15 +32,14 @@ use zmanager_tzap_hosted::certificate_lifecycle::{
 use zmanager_tzap_hosted::enrollment_client::{TzapEnrollmentCertificateValidator, TzapEnrollmentClient, TzapEnrollmentError, TzapEnrollmentRequest};
 use zmanager_tzap_hosted::intermediate_client::TzapOnlineIntermediateResolver;
 use zmanager_tzap_hosted::local_identity_store::{TzapLocalIdentityStore, TzapSignDeviceRouting};
-use zmanager_tzap_hosted::reqwest_transport::exchange_handoff_code;
-use zmanager_tzap_hosted::status_client::{TzapBulkStatusLookup, TzapStatusClient, classify_contact_status};
+use zmanager_tzap_hosted::reqwest_transport::exchange_handoff_code_for_audience;
+use zmanager_tzap_hosted::status_client::{TzapBulkStatusLookup, TzapStatusClient, TzapStatusResponse, classify_contact_status};
 use zmanager_tzap_hosted::trust::{self, TzapCertificateProfileOptions};
 
 use crate::error::{CommandErrorDto, ErrorSeverityDto};
 use crate::secure_store::{NativeTzapLocalIdentityStore, NativeTzapSecretStore};
 
 const ACCOUNT_KEY: &str = "default";
-const CLIENT_ID: &str = "zmanager-desktop";
 const REDIRECT_URI: &str = "tzap://auth/callback";
 const DESKTOP_DEVICE_NAME: &str = "ZManager Desktop";
 
@@ -57,6 +56,36 @@ fn require_hosted_online_enabled() -> Result<(), CommandErrorDto> {
             "Hosted online features are unavailable until the hosted-auth security and OAuth registration gates are approved",
         ))
     }
+}
+
+fn hosted_session_audience(value: Option<&str>) -> Result<&'static str, CommandErrorDto> {
+    match value.unwrap_or(SESSION_AUDIENCE_SIGN_TZAP) {
+        SESSION_AUDIENCE_SIGN_TZAP => Ok(SESSION_AUDIENCE_SIGN_TZAP),
+        SESSION_AUDIENCE_LOGIN_TZAP => Ok(SESSION_AUDIENCE_LOGIN_TZAP),
+        _ => Err(CommandErrorDto::invalid_request("Unsupported hosted session audience")),
+    }
+}
+
+fn hosted_environment(value: &str) -> Result<TzapHostedAuthEnvironment, CommandErrorDto> {
+    match value {
+        "local" => Ok(TzapHostedAuthEnvironment::Local),
+        "staging" => Ok(TzapHostedAuthEnvironment::Staging),
+        "prod" => Ok(TzapHostedAuthEnvironment::Prod),
+        _ => Err(CommandErrorDto::invalid_request("Unsupported hosted environment")),
+    }
+}
+
+fn hosted_client_id(environment: TzapHostedAuthEnvironment) -> Result<&'static str, CommandErrorDto> {
+    let configured = match environment {
+        TzapHostedAuthEnvironment::Local => {
+            option_env!("TZAP_DESKTOP_LOCAL_CLIENT_ID").or(option_env!("TZAP_DESKTOP_CLIENT_ID")).or(Some("zmanager-desktop-local"))
+        }
+        TzapHostedAuthEnvironment::Staging => option_env!("TZAP_DESKTOP_STAGING_CLIENT_ID"),
+        TzapHostedAuthEnvironment::Prod => option_env!("TZAP_DESKTOP_PROD_CLIENT_ID"),
+    };
+    configured
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| account_error("oauth_registration_required", "Hosted OAuth client registration is not configured for this environment"))
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -168,6 +197,7 @@ pub struct AccountHostedAuthLaunchDto {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountBeginHostedAuthRequest {
     pub environment: Option<String>,
+    pub audience: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -259,10 +289,22 @@ pub struct AccountContactCardPreviewDto {
 
 struct AccountRuntimeState {
     pending: Option<TzapPendingAuthState>,
+    pending_audience: String,
+    pending_environment: Option<String>,
     auth_status: String,
     session: Option<TzapSessionRecord>,
     cached_user: Option<TzapCurrentUser>,
     environment: String,
+}
+
+fn restore_session_environment(session: Option<TzapSessionRecord>, persisted_environment: Option<String>) -> (Option<TzapSessionRecord>, String) {
+    match (session, persisted_environment) {
+        (Some(session), Some(environment)) => (Some(session), environment),
+        // An old or corrupt session without an environment must not be guessed
+        // as production; require a fresh sign-in instead.
+        (Some(_), None) => (None, "prod".to_owned()),
+        (None, _) => (None, "prod".to_owned()),
+    }
 }
 
 #[derive(Clone)]
@@ -271,10 +313,26 @@ pub struct AccountRuntime(Arc<Mutex<AccountRuntimeState>>, Arc<Mutex<NativeTzapS
 impl AccountRuntime {
     pub fn new() -> Self {
         let store = NativeTzapSecretStore::new(ACCOUNT_KEY).expect("default account secure-store scope is valid");
-        let session = store.load_session(ACCOUNT_KEY);
+        let persisted_session = store.load_session(ACCOUNT_KEY);
+        let persisted_environment = store.load_session_environment(ACCOUNT_KEY);
+        let had_persisted_session = persisted_session.is_some();
+        let (session, environment) = restore_session_environment(persisted_session, persisted_environment);
+        if had_persisted_session && session.is_none() {
+            let mut store = store.clone();
+            let _ = store.clear_session(ACCOUNT_KEY);
+            let _ = store.clear_session_environment(ACCOUNT_KEY);
+        }
         let auth_status = if session.is_some() { "signedIn".to_string() } else { "signedOut".to_string() };
         Self(
-            Arc::new(Mutex::new(AccountRuntimeState { pending: None, auth_status, session, cached_user: None, environment: "prod".to_string() })),
+            Arc::new(Mutex::new(AccountRuntimeState {
+                pending: None,
+                pending_audience: SESSION_AUDIENCE_SIGN_TZAP.to_owned(),
+                pending_environment: None,
+                auth_status,
+                session,
+                cached_user: None,
+                environment,
+            })),
             Arc::new(Mutex::new(store)),
             Arc::new(Mutex::new(())),
         )
@@ -325,6 +383,14 @@ fn active_hosted_session(runtime: &AccountRuntime) -> Result<(TzapSessionRecord,
     let state = runtime.0.lock().expect("account runtime lock poisoned");
     let session = state.session.clone().ok_or_else(|| CommandErrorDto::unauthorized("Hosted sign-in is required for this operation"))?;
     Ok((session, state.environment.clone()))
+}
+
+fn active_sign_hosted_session(runtime: &AccountRuntime) -> Result<(TzapSessionRecord, String), CommandErrorDto> {
+    let (session, environment) = active_hosted_session(runtime)?;
+    if session.audience != SESSION_AUDIENCE_SIGN_TZAP {
+        return Err(account_error("sign_session_required", "A signing-scope hosted session is required for this operation"));
+    }
+    Ok((session, environment))
 }
 
 fn lifecycle_pending_outcome(error: &TzapCertificateLifecycleError) -> Option<&'static str> {
@@ -384,12 +450,8 @@ pub fn account_enroll_certificate(app: AppHandle, runtime: State<'_, AccountRunt
     let _lifecycle_guard = runtime.2.lock().expect("account lifecycle lock poisoned");
     require_hosted_online_enabled()?;
     let root = account_state_dir(&app)?;
-    let (session, environment_str) = active_hosted_session(&runtime)?;
-    let environment = match environment_str.as_str() {
-        "local" => TzapHostedAuthEnvironment::Local,
-        "staging" => TzapHostedAuthEnvironment::Staging,
-        _ => TzapHostedAuthEnvironment::Prod,
-    };
+    let (session, environment_str) = active_sign_hosted_session(&runtime)?;
+    let environment = hosted_environment(&environment_str)?;
     let (sign_base_url, login_base_url) = hosted_service_base_urls(environment);
     let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|error| account_error("account_http_client_failed", error))?;
     let enrollment_client = if matches!(environment, TzapHostedAuthEnvironment::Local) {
@@ -449,7 +511,7 @@ pub fn account_renew_certificate(
         return Err(CommandErrorDto::invalid_request("certificateId must not be empty"));
     }
     let root = account_state_dir(&app)?;
-    let (session, environment_str) = active_hosted_session(&runtime)?;
+    let (session, environment_str) = active_sign_hosted_session(&runtime)?;
     let mut store = NativeTzapLocalIdentityStore::new(&root, ACCOUNT_KEY).map_err(|error| account_error("account_identity_store_failed", error))?;
     let inventory = store.load_inventory(ACCOUNT_KEY).map_err(|error| account_error("account_identity_store_failed", error))?;
     let certificate = inventory
@@ -483,11 +545,7 @@ pub fn account_renew_certificate(
     };
     let csr_der = generate_device_csr_from_private_key(&signing_key.private_key_der, &zmanager_core::device_identity::TzapDeviceCsrOptions::default())
         .map_err(|error| account_error("account_renewal_failed", error))?;
-    let environment = match environment_str.as_str() {
-        "local" => TzapHostedAuthEnvironment::Local,
-        "staging" => TzapHostedAuthEnvironment::Staging,
-        _ => TzapHostedAuthEnvironment::Prod,
-    };
+    let environment = hosted_environment(&environment_str)?;
     let (sign_base_url, login_base_url) = hosted_service_base_urls(environment);
     let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|error| account_error("account_http_client_failed", error))?;
     let lifecycle_client = if matches!(environment, TzapHostedAuthEnvironment::Local) {
@@ -528,11 +586,7 @@ pub fn account_retire_device(app: AppHandle, runtime: State<'_, AccountRuntime>)
     let inventory = store.load_inventory(ACCOUNT_KEY).map_err(|error| account_error("account_identity_store_failed", error))?;
     let personal_ids = inventory.active_personal_sign_device_ids().into_iter().map(ToOwned::to_owned).collect::<Vec<_>>();
     let organization_ids = inventory.active_organization_device_retirements().into_iter().map(|route| route.sign_device_id).collect::<Vec<_>>();
-    let environment = match environment_str.as_str() {
-        "local" => TzapHostedAuthEnvironment::Local,
-        "staging" => TzapHostedAuthEnvironment::Staging,
-        _ => TzapHostedAuthEnvironment::Prod,
-    };
+    let environment = hosted_environment(&environment_str)?;
     let (sign_base_url, login_base_url) = hosted_service_base_urls(environment);
     let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|error| account_error("account_http_client_failed", error))?;
     let lifecycle_client = if matches!(environment, TzapHostedAuthEnvironment::Local) {
@@ -541,6 +595,7 @@ pub fn account_retire_device(app: AppHandle, runtime: State<'_, AccountRuntime>)
         TzapCertificateLifecycleClient::with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
     };
     let mut attempted_device_ids = Vec::new();
+    let mut completed_device_ids = Vec::new();
     let mut incomplete_reasons = Vec::new();
 
     if session.audience == SESSION_AUDIENCE_SIGN_TZAP {
@@ -552,6 +607,7 @@ pub fn account_retire_device(app: AppHandle, runtime: State<'_, AccountRuntime>)
                 map_lifecycle_error(error)
             })?;
             attempted_device_ids.extend(report.attempted_sign_device_ids);
+            completed_device_ids.extend(report.completed_sign_device_ids);
             if matches!(report.completion, TzapRetirementCompletion::Incomplete) {
                 incomplete_reasons.extend(report.incomplete_reasons);
             }
@@ -569,6 +625,7 @@ pub fn account_retire_device(app: AppHandle, runtime: State<'_, AccountRuntime>)
                 map_lifecycle_error(error)
             })?;
             attempted_device_ids.extend(report.attempted_sign_device_ids);
+            completed_device_ids.extend(report.completed_sign_device_ids);
             if matches!(report.completion, TzapRetirementCompletion::Incomplete) {
                 incomplete_reasons.extend(report.incomplete_reasons);
             }
@@ -583,29 +640,37 @@ pub fn account_retire_device(app: AppHandle, runtime: State<'_, AccountRuntime>)
         attempted_device_ids.extend(organization_ids);
     }
 
+    mark_completed_retirement_devices(&mut store, &completed_device_ids)?;
+
     if !incomplete_reasons.is_empty() {
         return lifecycle_result(&app, &runtime, "incomplete", attempted_device_ids, incomplete_reasons);
-    }
-
-    if !attempted_device_ids.is_empty() {
-        let mut updated_inventory = store.load_inventory(ACCOUNT_KEY).map_err(|error| account_error("account_identity_store_failed", error))?;
-        for certificate in &mut updated_inventory.enrolled_certificates {
-            if attempted_device_ids.iter().any(|device_id| device_id == &certificate.sign_device_id) {
-                certificate.state = zmanager_tzap_hosted::local_identity_store::TzapLocalCertificateState::Revoked;
-            }
-        }
-        store.save_inventory(ACCOUNT_KEY, updated_inventory).map_err(|error| account_error("account_identity_store_failed", error))?;
     }
     {
         let mut secure_store = runtime.1.lock().expect("account store lock poisoned");
         let _ = secure_store.clear_session(ACCOUNT_KEY);
+        let _ = secure_store.clear_session_environment(ACCOUNT_KEY);
     }
     let mut state = runtime.0.lock().expect("account runtime lock poisoned");
     state.session = None;
     state.cached_user = None;
+    state.environment = "prod".to_owned();
     state.auth_status = "signedOut".to_owned();
     drop(state);
     lifecycle_result(&app, &runtime, "complete", attempted_device_ids, Vec::new())
+}
+
+fn mark_completed_retirement_devices(store: &mut impl TzapLocalIdentityStore, completed_device_ids: &[String]) -> Result<(), CommandErrorDto> {
+    if completed_device_ids.is_empty() {
+        return Ok(());
+    }
+    let mut inventory = store.load_inventory(ACCOUNT_KEY).map_err(|error| account_error("account_identity_store_failed", error))?;
+    for certificate in &mut inventory.enrolled_certificates {
+        if completed_device_ids.iter().any(|device_id| device_id == &certificate.sign_device_id) {
+            certificate.state = zmanager_tzap_hosted::local_identity_store::TzapLocalCertificateState::Revoked;
+        }
+    }
+    store.save_inventory(ACCOUNT_KEY, inventory).map_err(|error| account_error("account_identity_store_failed", error))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -631,20 +696,20 @@ pub fn account_begin_hosted_auth(
     let now = current_unix_seconds();
     let mut tracker = TzapOAuthStateTracker::new();
     let pending = tracker.begin("hosted", REDIRECT_URI, now);
+    let requested_audience = hosted_session_audience(request.audience.as_deref())?;
     let environment_str = request.environment.as_deref().unwrap_or("prod");
-    let environment = match environment_str {
-        "local" => TzapHostedAuthEnvironment::Local,
-        "staging" => TzapHostedAuthEnvironment::Staging,
-        _ => TzapHostedAuthEnvironment::Prod,
-    };
-    let config = TzapHostedAuthLaunchConfig::for_environment(environment, CLIENT_ID, REDIRECT_URI);
+    let environment = hosted_environment(environment_str)?;
+    let client_id = hosted_client_id(environment)?;
+    let mut config = TzapHostedAuthLaunchConfig::for_environment(environment, client_id, REDIRECT_URI);
+    config.requested_audience = requested_audience.to_owned();
     let launch_url = config.launch_url(&pending).map_err(|error| account_error("account_auth_launch_failed", error))?;
     let response =
         AccountHostedAuthLaunchDto { launch_url, state: pending.state.clone(), expires_at_unix_seconds: now.saturating_add(AUTH_HANDOFF_LIFETIME_SECONDS) };
     let mut state = runtime.0.lock().expect("account runtime lock poisoned");
     state.pending = Some(pending);
+    state.pending_audience = requested_audience.to_owned();
+    state.pending_environment = Some(environment_str.to_owned());
     state.auth_status = "pending".to_string();
-    state.environment = environment_str.to_string();
     Ok(response)
 }
 
@@ -666,37 +731,66 @@ pub fn account_complete_hosted_auth(
         return Err(CommandErrorDto::invalid_request("Hosted sign-in state did not match"));
     }
 
-    let environment_str = runtime.0.lock().expect("account runtime lock poisoned").environment.clone();
+    let (environment_str, requested_audience) = {
+        let state = runtime.0.lock().expect("account runtime lock poisoned");
+        (
+            state.pending_environment.clone().ok_or_else(|| CommandErrorDto::invalid_request("Hosted sign-in environment was not retained"))?,
+            state.pending_audience.clone(),
+        )
+    };
+    let requested_audience = hosted_session_audience(Some(&requested_audience))?;
 
     let mut tracker = TzapOAuthStateTracker::new();
     tracker.insert_pending(pending.clone()).map_err(|e| account_error("account_auth_callback_failed", e))?;
 
-    let environment = match environment_str.as_str() {
-        "local" => TzapHostedAuthEnvironment::Local,
-        "staging" => TzapHostedAuthEnvironment::Staging,
-        _ => TzapHostedAuthEnvironment::Prod,
-    };
-    let config = TzapHostedAuthLaunchConfig::for_environment(environment, CLIENT_ID, REDIRECT_URI);
+    let environment = hosted_environment(&environment_str)?;
+    let client_id = hosted_client_id(environment)?;
+    let config = TzapHostedAuthLaunchConfig::for_environment(environment, client_id, REDIRECT_URI);
     let _ = crate::hosted_transport::HostedHttpTransport::new().map_err(|e| account_error("account_http_client_failed", e))?;
-    let relay_body =
-        exchange_handoff_code(&config.hosted_auth_base_url, CLIENT_ID, REDIRECT_URI, &request_state, &pending.pkce.verifier, &request.handoff_code)
-            .map_err(|error| account_error("account_auth_callback_failed", error))?;
+    // The exchange response is created and consumed entirely inside Rust. It
+    // is never accepted from, serialized into, or emitted by the deep-link
+    // callback boundary.
+    let session_handoff_payload = exchange_handoff_code_for_audience(
+        &config.hosted_auth_base_url,
+        client_id,
+        REDIRECT_URI,
+        &request_state,
+        &pending.pkce.verifier,
+        &request.handoff_code,
+        requested_audience,
+    )
+    .map_err(|error| account_error("account_auth_callback_failed", error))?;
 
     let callback = TzapHostedAuthCallback {
         state: request_state.clone(),
         redirect_uri: REDIRECT_URI.to_string(),
         pkce_verifier: pending.pkce.verifier.clone(),
         callback_url: request.callback_url,
-        relay_body,
+        relay_body: session_handoff_payload,
     };
 
     let session = {
         let _ = take_matching_pending_auth(&runtime, &request_state)?;
         let mut store = runtime.1.lock().expect("account store lock poisoned");
-        complete_hosted_auth_handoff(&mut tracker, &mut *store, ACCOUNT_KEY, &callback, now).map_err(|e| account_error("account_auth_callback_failed", e))?
+        let session = complete_hosted_auth_handoff_for_audience(&mut tracker, &mut *store, ACCOUNT_KEY, &callback, now, requested_audience)
+            .map_err(|e| account_error("account_auth_callback_failed", e))?;
+        if let Err(error) = store.save_session_environment(ACCOUNT_KEY, &environment_str) {
+            let _ = store.clear_session(ACCOUNT_KEY);
+            let _ = store.clear_session_environment(ACCOUNT_KEY);
+            drop(store);
+            let mut state = runtime.0.lock().expect("account runtime lock poisoned");
+            state.session = None;
+            state.cached_user = None;
+            state.environment = "prod".to_owned();
+            state.auth_status = "failed".to_owned();
+            return Err(account_error("account_auth_callback_failed", error));
+        }
+        session
     };
     let mut state = runtime.0.lock().expect("account runtime lock poisoned");
     state.session = Some(session);
+    state.environment = environment_str;
+    state.pending_environment = None;
     state.cached_user = None;
     state.auth_status = "signedIn".to_string();
     drop(state);
@@ -713,6 +807,8 @@ fn take_matching_pending_auth(runtime: &AccountRuntime, expected_state: &str) ->
         state.pending = Some(pending);
         return Err(CommandErrorDto::invalid_request("Hosted sign-in state did not match"));
     }
+    state.pending_audience = SESSION_AUDIENCE_SIGN_TZAP.to_owned();
+    state.pending_environment = None;
     Ok(pending)
 }
 
@@ -733,14 +829,11 @@ pub fn account_fetch_current_user(app: AppHandle, runtime: State<'_, AccountRunt
 
     let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|e| account_error("account_http_client_failed", e))?;
 
-    let environment = match environment_str.as_str() {
-        "local" => TzapHostedAuthEnvironment::Local,
-        "staging" => TzapHostedAuthEnvironment::Staging,
-        _ => TzapHostedAuthEnvironment::Prod,
-    };
-    let config = TzapHostedAuthLaunchConfig::for_environment(environment, CLIENT_ID, REDIRECT_URI);
+    let environment = hosted_environment(&environment_str)?;
+    let client_id = hosted_client_id(environment)?;
+    let config = TzapHostedAuthLaunchConfig::for_environment(environment, client_id, REDIRECT_URI);
 
-    let user_result = zmanager_tzap_hosted::auth_client::fetch_current_user(&transport, &config.hosted_account_base_url, &session);
+    let user_result = fetch_current_user_for_audience(&transport, &config.hosted_account_base_url, &session, &session.audience);
 
     match user_result {
         Ok(user) => {
@@ -780,6 +873,8 @@ pub fn account_apply_hosted_callback(request: AccountHostedAuthCallbackRequest, 
         return Err(CommandErrorDto::invalid_request("Hosted sign-in state did not match"));
     }
     state.pending = None;
+    state.pending_audience = SESSION_AUDIENCE_SIGN_TZAP.to_owned();
+    state.pending_environment = None;
     state.auth_status = match request.result.as_str() {
         "completed" => "launchOnlyCallbackCompleted",
         "cancelled" => "cancelled",
@@ -799,6 +894,8 @@ pub fn account_forget(app: AppHandle, runtime: State<'_, AccountRuntime>) -> Res
     clear_hosted_session(&runtime, "signedOut");
     let mut state = runtime.0.lock().expect("account runtime lock poisoned");
     state.pending = None;
+    state.pending_audience = SESSION_AUDIENCE_SIGN_TZAP.to_owned();
+    state.pending_environment = None;
     drop(state);
     snapshot_from_catalog(&runtime, catalog)
 }
@@ -1173,8 +1270,12 @@ pub fn account_remove_contact(request: AccountIdRequest, app: AppHandle, runtime
 }
 
 #[tauri::command]
-pub fn account_inspect_contact_card(request: AccountContactCardRequest) -> Result<AccountContactCardPreviewDto, CommandErrorDto> {
-    let verified = verify_contact_card(&request.contact_card).map_err(|error| account_error("account_contact_card_invalid", error))?;
+pub fn account_inspect_contact_card(request: AccountContactCardRequest, app: AppHandle) -> Result<AccountContactCardPreviewDto, CommandErrorDto> {
+    let root = account_state_dir(&app)?;
+    let intermediate_cache = zmanager_core::trust::TzapIntermediateCache::new(root.join("intermediates"));
+    let intermediate_resolver = TzapOnlineIntermediateResolver::with_reqwest(intermediate_cache, None);
+    let verified = verify_contact_card_with_resolver(&request.contact_card, Some(&intermediate_resolver))
+        .map_err(|error| account_error("account_contact_card_invalid", error))?;
     Ok(contact_card_preview(&verified))
 }
 
@@ -1184,14 +1285,17 @@ pub fn account_accept_contact_card(
     app: AppHandle,
     runtime: State<'_, AccountRuntime>,
 ) -> Result<AccountSnapshotDto, CommandErrorDto> {
-    let verified = verify_contact_card(&request.contact_card).map_err(|error| account_error("account_contact_card_invalid", error))?;
+    let root = account_state_dir(&app)?;
+    let intermediate_cache = zmanager_core::trust::TzapIntermediateCache::new(root.join("intermediates"));
+    let intermediate_resolver = TzapOnlineIntermediateResolver::with_reqwest(intermediate_cache, None);
+    let verified = verify_contact_card_with_resolver(&request.contact_card, Some(&intermediate_resolver))
+        .map_err(|error| account_error("account_contact_card_invalid", error))?;
     let recipient_public_key_der = verified
         .payload
         .get("recipient_public_key")
         .and_then(Value::as_str)
         .and_then(|value| URL_SAFE_NO_PAD.decode(value).ok())
         .ok_or_else(|| account_error("account_contact_card_invalid", "Contact card recipient public key is invalid"))?;
-    let root = account_state_dir(&app)?;
     let mut catalog_store = FileTzapIdentityCatalogStore::new(&root);
     let mut catalog = ensure_catalog(&root, &runtime)?;
     let contact_id = verified.recipient_public_key_fingerprint.clone();
@@ -1221,11 +1325,17 @@ pub fn account_accept_contact_card(
 pub fn account_sync_contacts(app: AppHandle, runtime: State<'_, AccountRuntime>) -> Result<AccountContactSyncResultDto, CommandErrorDto> {
     require_hosted_online_enabled()?;
     let root = account_state_dir(&app)?;
-    let counts = sync_contact_snapshot(&root, &runtime)?;
+    let _lifecycle_guard = runtime.2.lock().expect("account lifecycle lock poisoned");
+    let counts = sync_contact_snapshot_inner(&root, &runtime)?;
     Ok(AccountContactSyncResultDto { snapshot: snapshot_at(&root, &runtime)?, last_successful_sync_at: current_unix_seconds(), counts })
 }
 
 pub fn sync_contact_snapshot(root: &Path, runtime: &AccountRuntime) -> Result<AccountContactSyncCountsDto, CommandErrorDto> {
+    let _lifecycle_guard = runtime.2.lock().expect("account lifecycle lock poisoned");
+    sync_contact_snapshot_inner(root, runtime)
+}
+
+fn sync_contact_snapshot_inner(root: &Path, runtime: &AccountRuntime) -> Result<AccountContactSyncCountsDto, CommandErrorDto> {
     expire_session_if_needed(runtime);
     let (session, environment_str) = {
         let state = runtime.0.lock().expect("account runtime lock poisoned");
@@ -1240,12 +1350,9 @@ pub fn sync_contact_snapshot(root: &Path, runtime: &AccountRuntime) -> Result<Ac
 
     let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|e| account_error("account_http_client_failed", e))?;
 
-    let environment = match environment_str.as_str() {
-        "local" => TzapHostedAuthEnvironment::Local,
-        "staging" => TzapHostedAuthEnvironment::Staging,
-        _ => TzapHostedAuthEnvironment::Prod,
-    };
-    let config = TzapHostedAuthLaunchConfig::for_environment(environment, CLIENT_ID, REDIRECT_URI);
+    let environment = hosted_environment(&environment_str)?;
+    let client_id = hosted_client_id(environment)?;
+    let config = TzapHostedAuthLaunchConfig::for_environment(environment, client_id, REDIRECT_URI);
     let backup_client = TzapBackupClient::new(&config.hosted_account_base_url, &transport);
 
     let backup_record = match backup_client.fetch_contact_backup(&session) {
@@ -1275,22 +1382,45 @@ pub fn sync_contact_snapshot(root: &Path, runtime: &AccountRuntime) -> Result<Ac
     }
 
     let now = current_unix_seconds();
-    let _ = ensure_catalog(root, runtime)?;
+    let original_catalog = ensure_catalog(root, runtime)?;
     let mut identity_store = NativeTzapLocalIdentityStore::new(root, ACCOUNT_KEY).map_err(|error| account_error("account_identity_store_failed", error))?;
     let intermediate_cache = zmanager_core::trust::TzapIntermediateCache::new(root.join("intermediates"));
     let intermediate_resolver = TzapOnlineIntermediateResolver::with_reqwest(intermediate_cache, Some(config.hosted_account_base_url.clone()));
-    let mut counts = apply_contact_snapshot_with_shared_core(&mut identity_store, ACCOUNT_KEY, &snapshot, now, Some(&intermediate_resolver))
-        .map_err(|error| account_error("account_contact_snapshot_apply_failed", error))?;
+    let mut counts = match apply_contact_snapshot_with_shared_core(&mut identity_store, ACCOUNT_KEY, &snapshot, now, Some(&intermediate_resolver)) {
+        Ok(counts) => counts,
+        Err(error) => {
+            let failure = account_error("account_contact_snapshot_apply_failed", error);
+            return Err(rollback_contact_sync_failure(root, &original_catalog, failure));
+        }
+    };
     let mut catalog_store = FileTzapIdentityCatalogStore::new(root);
-    let mut catalog = ensure_catalog(root, runtime)?;
+    let mut catalog = match ensure_catalog(root, runtime) {
+        Ok(catalog) => catalog,
+        Err(error) => return Err(rollback_contact_sync_failure(root, &original_catalog, error)),
+    };
     let (status_base_url, _) = hosted_service_base_urls(environment);
     counts.status_refresh_failed = refresh_contact_statuses(&mut catalog, &status_base_url, &transport, now);
 
     let expected_revision = catalog.revision;
     catalog.revision = catalog.revision.saturating_add(1);
-    catalog_store.save_catalog(ACCOUNT_KEY, Some(expected_revision), catalog).map_err(|error| account_error("account_catalog_save_failed", error))?;
+    if let Err(error) = catalog_store.save_catalog(ACCOUNT_KEY, Some(expected_revision), catalog) {
+        let failure = account_error("account_catalog_save_failed", error);
+        return Err(rollback_contact_sync_failure(root, &original_catalog, failure));
+    }
 
     Ok(counts)
+}
+
+fn rollback_contact_sync_failure(root: &Path, original_catalog: &TzapIdentityCatalog, failure: CommandErrorDto) -> CommandErrorDto {
+    let mut catalog_store = FileTzapIdentityCatalogStore::new(root);
+    let rollback_result = catalog_store.load_catalog(ACCOUNT_KEY).and_then(|current| {
+        let current = current.ok_or_else(|| zmanager_core::identity_catalog::TzapIdentityCatalogError::InvalidCatalog { field: "account_catalog" })?;
+        catalog_store.save_catalog(ACCOUNT_KEY, Some(current.revision), original_catalog.clone())
+    });
+    match rollback_result {
+        Ok(()) => failure,
+        Err(error) => account_error("account_contact_sync_rollback_failed", format!("{}; cached contacts could not be restored: {error}", failure.message)),
+    }
 }
 
 fn apply_contact_snapshot_with_shared_core(
@@ -1358,11 +1488,17 @@ fn record_contact_rejection(counts: &mut AccountContactSyncCountsDto, reason: &s
     }
 }
 
-fn refresh_contact_statuses(catalog: &mut TzapIdentityCatalog, sign_base_url: &str, transport: &crate::hosted_transport::HostedHttpTransport, now: u64) -> u32 {
+fn refresh_contact_statuses<T: TzapAuthHttpTransport>(catalog: &mut TzapIdentityCatalog, sign_base_url: &str, transport: &T, now: u64) -> u32 {
+    for contact in &mut catalog.contacts {
+        if contact.source == "phone_sync" && contact_card_is_expired(contact, now) {
+            contact.verification_state = "status_expired".to_owned();
+            contact.missing_status_caveat = false;
+        }
+    }
     let contacts = catalog
         .contacts
         .iter()
-        .filter(|contact| contact.source == "phone_sync")
+        .filter(|contact| contact.source == "phone_sync" && !contact_card_is_expired(contact, now))
         .map(|contact| (contact.contact_id.clone(), contact.signing_certificate_sha256.clone(), contact.verification_state.clone()))
         .collect::<Vec<_>>();
     let client = TzapStatusClient::new(sign_base_url, transport);
@@ -1386,13 +1522,18 @@ fn refresh_contact_statuses(catalog: &mut TzapIdentityCatalog, sign_base_url: &s
                 continue;
             }
         };
+        let mut seen_contact_ids = std::collections::HashSet::new();
         for response in responses {
             let Some((contact_id, certificate_sha256, offline_state)) =
                 chunk.iter().find(|(_, certificate_sha256, _)| certificate_sha256 == &response.lookup_id)
             else {
                 continue;
             };
+            seen_contact_ids.insert(contact_id.clone());
             let decision = classify_contact_status(offline_state, None, certificate_sha256, Some(&response.response), now as i64);
+            if matches!(decision.verification_state, "cryptographically_intact_offline" | "status_unavailable" | "status_mismatch") {
+                failed = failed.saturating_add(1);
+            }
             if let Some(contact) = catalog.contacts.iter_mut().find(|contact| &contact.contact_id == contact_id) {
                 contact.verification_state = decision.verification_state.to_owned();
                 contact.missing_status_caveat = decision.missing_status_caveat;
@@ -1408,6 +1549,17 @@ fn refresh_contact_statuses(catalog: &mut TzapIdentityCatalog, sign_base_url: &s
                     this_update: this_update.to_string(),
                     next_update: next_update.to_string(),
                 });
+            }
+        }
+        for (contact_id, certificate_sha256, offline_state) in chunk {
+            if seen_contact_ids.contains(contact_id) {
+                continue;
+            }
+            failed = failed.saturating_add(1);
+            if let Some(contact) = catalog.contacts.iter_mut().find(|contact| &contact.contact_id == contact_id) {
+                let decision = classify_contact_status(offline_state, None, certificate_sha256, None, now as i64);
+                contact.verification_state = decision.verification_state.to_owned();
+                contact.missing_status_caveat = decision.missing_status_caveat;
             }
         }
     }
@@ -1442,7 +1594,10 @@ pub fn resolve_tzap_create_inputs(
     };
     let root = account_state_dir(app)?;
     let catalog = ensure_catalog(&root, runtime)?;
+    let now_unix_seconds = current_unix_seconds();
     let secret_store = runtime.1.lock().expect("account secure-store lock poisoned");
+    let intermediate_cache = zmanager_core::trust::TzapIntermediateCache::new(root.join("intermediates"));
+    let intermediate_resolver = TzapOnlineIntermediateResolver::with_reqwest(intermediate_cache, None);
 
     let has_recipient_selection = options.recipient_selection.as_ref().is_some_and(|selection| {
         !selection.recipient_key_ids.is_empty() || !selection.contact_recipient_ids.is_empty() || !selection.one_time_certificate_paths.is_empty()
@@ -1467,10 +1622,12 @@ pub fn resolve_tzap_create_inputs(
                 .iter()
                 .find(|contact| &contact.contact_id == id)
                 .ok_or_else(|| account_error("account_contact_not_found", "Trusted contact was not found"))?;
-            if !matches!(contact.verification_state.as_str(), "valid_now" | "valid_at_trusted_time" | "cryptographically_intact_offline") {
+            let (contact_verification_state, _) = contact_snapshot_verification(contact, &catalog.status_cache, now_unix_seconds);
+            if !matches!(contact_verification_state.as_str(), "valid_now" | "valid_at_trusted_time" | "cryptographically_intact_offline") {
                 return Err(account_error("account_contact_unavailable", "Only verified trusted contacts can receive new archives"));
             }
-            let verified = verify_contact_card(&contact.contact_card_payload)
+            let contact_card = contact_card_for_handoff(contact)?;
+            let verified = verify_contact_card_with_resolver(contact_card, Some(&intermediate_resolver))
                 .map_err(|error| account_error("account_contact_unavailable", format!("Trusted contact verification failed: {error}")))?;
             let verified_recipient_public_key_der = verified
                 .payload
@@ -1503,7 +1660,7 @@ pub fn resolve_tzap_create_inputs(
                 .iter()
                 .find(|identity| &identity.id == signing_identity_id)
                 .ok_or_else(|| account_error("account_signing_identity_not_found", "Signing identity was not found"))?;
-            if identity.lifecycle != "active" || identity.not_after_unix_seconds.is_some_and(|expires| expires <= current_unix_seconds()) {
+            if identity.lifecycle != "active" || identity.not_after_unix_seconds.is_some_and(|expires| expires <= now_unix_seconds) {
                 return Err(account_error("account_signing_identity_unavailable", "Signing identity is not currently usable"));
             }
             if identity.certificate_sha256.as_deref().is_some_and(|certificate_sha256| {
@@ -1585,7 +1742,10 @@ fn account_state_dir(app: &AppHandle) -> Result<PathBuf, CommandErrorDto> {
     app.path().app_data_dir().map(|path| path.join("tzap-state")).map_err(|error| account_error("account_state_path_failed", error))
 }
 
-fn verify_contact_card(card: &Value) -> Result<zmanager_core::contact_card::TzapVerifiedContactCard, zmanager_core::contact_card::TzapContactCardError> {
+fn verify_contact_card_with_resolver(
+    card: &Value,
+    intermediate_resolver: Option<&dyn zmanager_core::trust::TzapIntermediateResolver>,
+) -> Result<zmanager_core::contact_card::TzapVerifiedContactCard, zmanager_core::contact_card::TzapContactCardError> {
     let options = zmanager_core::contact_card::TzapContactCardImportOptions {
         verifier_time_unix_seconds: i64::try_from(current_unix_seconds()).unwrap_or(i64::MAX),
         official_root_pins: &zmanager_core::trust::OFFICIAL_TZAP_ROOT_PINS,
@@ -1593,7 +1753,7 @@ fn verify_contact_card(card: &Value) -> Result<zmanager_core::contact_card::Tzap
         custom_trust_root_sha256: Vec::new(),
         custom_trust_root_certificates_der: Vec::new(),
         certificate_profile_options: zmanager_core::trust::TzapCertificateProfileOptions::default(),
-        intermediate_resolver: None,
+        intermediate_resolver,
     };
     zmanager_core::contact_card::verify_tzap_contact_card(card, &options)
 }
@@ -1626,10 +1786,11 @@ fn with_secret_store<T>(
 fn snapshot_from_catalog(runtime: &AccountRuntime, catalog: TzapIdentityCatalog) -> Result<AccountSnapshotDto, CommandErrorDto> {
     let state = runtime.0.lock().expect("account runtime lock poisoned");
     let session_is_valid = hosted_online_enabled() && state.session.as_ref().is_some_and(|session| session.expires_at_unix_seconds > current_unix_seconds());
+    let sign_session_is_valid = session_is_valid && state.session.as_ref().is_some_and(|session| session.audience == SESSION_AUDIENCE_SIGN_TZAP);
     let (auth_cap, enroll_cap, status_cap) = if !hosted_online_enabled() {
         ("unavailable", "unavailable", "offline_cache_only")
     } else if session_is_valid {
-        ("handoff_exchange", "available", "online")
+        ("handoff_exchange", if sign_session_is_valid { "available" } else { "unavailable" }, "online")
     } else {
         ("launch_only", "unavailable", "offline_cache_only")
     };
@@ -1646,6 +1807,8 @@ fn snapshot_from_catalog(runtime: &AccountRuntime, catalog: TzapIdentityCatalog)
         state.auth_status.clone()
     };
 
+    let now_unix_seconds = current_unix_seconds();
+    let status_cache = &catalog.status_cache;
     Ok(AccountSnapshotDto {
         auth_status,
         pending_state: hosted_online_enabled().then(|| state.pending.as_ref().map(|pending| pending.state.clone())).flatten(),
@@ -1664,10 +1827,10 @@ fn snapshot_from_catalog(runtime: &AccountRuntime, catalog: TzapIdentityCatalog)
             .signing_identities
             .into_iter()
             .filter_map(|identity| {
+                let is_hosted = is_hosted_signing_identity(&identity);
                 let assurance_level = identity.assurance_level.unwrap_or_else(|| "unknown".to_owned());
-                let is_hosted = assurance_level == "enrolled";
                 let not_after_unix_seconds = identity.not_after_unix_seconds.unwrap_or_default();
-                let state = if identity.lifecycle == "active" && not_after_unix_seconds > 0 && not_after_unix_seconds <= current_unix_seconds() {
+                let state = if identity.lifecycle == "active" && not_after_unix_seconds > 0 && not_after_unix_seconds <= now_unix_seconds {
                     "expired".to_owned()
                 } else {
                     identity.lifecycle.clone()
@@ -1682,7 +1845,7 @@ fn snapshot_from_catalog(runtime: &AccountRuntime, catalog: TzapIdentityCatalog)
                         && state == "active"
                         && identity
                             .renewal_recommended_within_days
-                            .is_some_and(|days| current_unix_seconds().saturating_add(days.saturating_mul(24 * 60 * 60)) >= not_after_unix_seconds),
+                            .is_some_and(|days| now_unix_seconds.saturating_add(days.saturating_mul(24 * 60 * 60)) >= not_after_unix_seconds),
                     state,
                     assurance_level,
                     not_after_unix_seconds,
@@ -1704,18 +1867,99 @@ fn snapshot_from_catalog(runtime: &AccountRuntime, catalog: TzapIdentityCatalog)
         contacts: catalog
             .contacts
             .into_iter()
-            .map(|contact| AccountContactDto {
-                contact_id: contact.contact_id,
-                display_name: contact.display_name,
-                public_signer_id: contact.contact_card_payload.get("public_signer_id").and_then(Value::as_str).map(str::to_owned),
-                signing_certificate_sha256: contact.signing_certificate_sha256,
-                recipient_public_key_fingerprint: contact.recipient_public_key_fingerprint,
-                verification_state: contact.verification_state,
-                missing_status_caveat: contact.missing_status_caveat,
-                phone_sourced: contact.source == "phone_sync",
+            .map(|contact| {
+                let (verification_state, missing_status_caveat) = contact_snapshot_verification(&contact, status_cache, now_unix_seconds);
+                AccountContactDto {
+                    contact_id: contact.contact_id,
+                    display_name: contact.display_name,
+                    public_signer_id: contact_public_signer_id(&contact.contact_card_payload),
+                    signing_certificate_sha256: contact.signing_certificate_sha256,
+                    recipient_public_key_fingerprint: contact.recipient_public_key_fingerprint,
+                    verification_state,
+                    missing_status_caveat,
+                    phone_sourced: contact.source == "phone_sync",
+                }
             })
             .collect(),
     })
+}
+
+fn contact_snapshot_verification(contact: &TzapPublicContactRecord, status_cache: &[TzapPublicStatusCacheRecord], now_unix_seconds: u64) -> (String, bool) {
+    if contact_card_is_expired(contact, now_unix_seconds) {
+        return ("status_expired".to_owned(), false);
+    }
+    let Some(cached_status) = status_cache.iter().find(|status| status.lookup_id == contact.signing_certificate_sha256) else {
+        return offline_contact_snapshot_state(contact);
+    };
+    let Ok(status) = cached_status.status.parse::<zmanager_core::trust::TzapCertificateStatus>() else {
+        return ("status_unavailable".to_owned(), false);
+    };
+    let (Ok(this_update_unix_seconds), Ok(next_update_unix_seconds)) = (cached_status.this_update.parse::<i64>(), cached_status.next_update.parse::<i64>())
+    else {
+        return ("status_unavailable".to_owned(), false);
+    };
+    let response = TzapStatusResponse {
+        status,
+        certificate_sha256: Some(contact.signing_certificate_sha256.clone()),
+        issuer_certificate_sha256: None,
+        issuer_key_identifier: None,
+        serial_number: None,
+        not_before_unix_seconds: None,
+        not_after_unix_seconds: None,
+        this_update_unix_seconds: Some(this_update_unix_seconds),
+        next_update_unix_seconds: Some(next_update_unix_seconds),
+        revoked_at_unix_seconds: None,
+        revocation_reason: None,
+        revocation_category: None,
+        query: Default::default(),
+    };
+    let decision = classify_contact_status(
+        &contact.verification_state,
+        None,
+        &contact.signing_certificate_sha256,
+        Some(&response),
+        i64::try_from(now_unix_seconds).unwrap_or(i64::MAX),
+    );
+    (decision.verification_state.to_owned(), decision.missing_status_caveat)
+}
+
+fn offline_contact_snapshot_state(contact: &TzapPublicContactRecord) -> (String, bool) {
+    if matches!(contact.verification_state.as_str(), "status_revoked" | "status_suspended" | "status_expired" | "invalid") {
+        return (contact.verification_state.clone(), false);
+    }
+    ("cryptographically_intact_offline".to_owned(), true)
+}
+
+fn contact_card_is_expired(contact: &TzapPublicContactRecord, now_unix_seconds: u64) -> bool {
+    contact.contact_card_payload.get("expires_at_unix_seconds").and_then(Value::as_u64).is_some_and(|expires_at| now_unix_seconds >= expires_at)
+}
+
+fn contact_public_signer_id(payload: &Value) -> Option<String> {
+    payload
+        .get("public_signer_id")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            payload.get("signing_public_metadata").and_then(Value::as_object).and_then(|metadata| metadata.get("public_signer_id")).and_then(Value::as_str)
+        })
+        .map(str::to_owned)
+}
+
+fn contact_card_for_handoff(contact: &TzapPublicContactRecord) -> Result<&Value, CommandErrorDto> {
+    contact.card.as_ref().ok_or_else(|| account_error("account_contact_unavailable", "Trusted contact signed card is unavailable for final verification"))
+}
+
+fn is_hosted_signing_identity(identity: &TzapPublicSigningIdentityRecord) -> bool {
+    identity.public_device_id.is_some()
+        || identity.sign_device_id.is_some()
+        || identity.sign_device_routing.is_some()
+        || identity.assurance_level.as_deref().is_some_and(is_hosted_assurance_level)
+}
+
+fn is_hosted_assurance_level(value: &str) -> bool {
+    matches!(
+        value,
+        "enrolled" | "oauth_verified_email" | "oauth_verified_provider_account" | "org_admin_approved_device" | "enterprise_sso_verified" | "contract_verified"
+    )
 }
 
 fn expire_session_if_needed(runtime: &AccountRuntime) {
@@ -1729,10 +1973,14 @@ fn expire_session_if_needed(runtime: &AccountRuntime) {
     {
         let mut store = runtime.1.lock().expect("account store lock poisoned");
         let _ = store.clear_session(ACCOUNT_KEY);
+        let _ = store.clear_session_environment(ACCOUNT_KEY);
     }
     let mut state = runtime.0.lock().expect("account runtime lock poisoned");
+    state.pending = None;
+    state.pending_audience = SESSION_AUDIENCE_SIGN_TZAP.to_owned();
     state.session = None;
     state.cached_user = None;
+    state.environment = "prod".to_owned();
     state.auth_status = "expired".to_owned();
 }
 
@@ -1740,10 +1988,15 @@ fn clear_hosted_session(runtime: &AccountRuntime, auth_status: &str) {
     {
         let mut store = runtime.1.lock().expect("account store lock poisoned");
         let _ = store.clear_session(ACCOUNT_KEY);
+        let _ = store.clear_session_environment(ACCOUNT_KEY);
     }
     let mut state = runtime.0.lock().expect("account runtime lock poisoned");
+    state.pending = None;
+    state.pending_audience = SESSION_AUDIENCE_SIGN_TZAP.to_owned();
     state.session = None;
     state.cached_user = None;
+    state.environment = "prod".to_owned();
+    state.pending_environment = None;
     state.auth_status = auth_status.to_owned();
 }
 
@@ -1788,6 +2041,63 @@ fn hex_bytes(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
 
+    struct FakeStatusTransport {
+        body: Vec<u8>,
+    }
+
+    impl TzapAuthHttpTransport for FakeStatusTransport {
+        fn send(
+            &self,
+            _request: &zmanager_tzap_hosted::auth_client::TzapAuthHttpRequest,
+        ) -> Result<zmanager_tzap_hosted::auth_client::TzapAuthHttpResponse, TzapAuthError> {
+            Ok(zmanager_tzap_hosted::auth_client::TzapAuthHttpResponse { status_code: 200, headers: Vec::new(), body: self.body.clone() })
+        }
+    }
+
+    #[test]
+    fn stale_contact_status_falls_back_to_offline_and_counts_refresh_failure() {
+        let certificate_sha256 = zmanager_core::trust::format_certificate_sha256(&[1; 32]);
+        let body = serde_json::json!({
+            "results": [{
+                "lookup_id": certificate_sha256,
+                "status_response": {
+                    "status": "valid",
+                    "certificate_sha256": certificate_sha256,
+                    "issuer_certificate_sha256": "sha256:issuer",
+                    "issuer_key_identifier": "key-id",
+                    "serial_number": "01",
+                    "not_before_unix_seconds": 1,
+                    "not_after_unix_seconds": 2000,
+                    "this_update_unix_seconds": 1,
+                    "next_update_unix_seconds": 2
+                }
+            }]
+        });
+        let transport = FakeStatusTransport { body: serde_json::to_vec(&body).unwrap() };
+        let mut catalog = TzapIdentityCatalog::empty();
+        catalog.contacts.push(TzapPublicContactRecord {
+            contact_id: "contact-1".to_owned(),
+            display_name: "Contact".to_owned(),
+            signing_certificate_sha256: certificate_sha256.clone(),
+            recipient_public_key_fingerprint: zmanager_core::trust::format_certificate_sha256(&[2; 32]),
+            recipient_public_key_der: vec![1, 2, 3],
+            trust_source: "phone_sync".to_owned(),
+            source: "phone_sync".to_owned(),
+            verification_state: "valid_now".to_owned(),
+            missing_status_caveat: false,
+            contact_card_payload: serde_json::json!({}),
+            accepted_at_unix_seconds: 1,
+            local_alias: None,
+            card: None,
+        });
+
+        let failed = refresh_contact_statuses(&mut catalog, "https://status.example", &transport, 1000);
+
+        assert_eq!(failed, 1);
+        assert_eq!(catalog.contacts[0].verification_state, "cryptographically_intact_offline");
+        assert!(catalog.contacts[0].missing_status_caveat);
+    }
+
     #[test]
     fn callback_rejects_unknown_results_and_secret_shaped_state() {
         assert!(
@@ -1808,6 +2118,161 @@ mod tests {
     fn hosted_online_gate_matches_the_explicit_build_feature() {
         assert_eq!(hosted_online_enabled(), cfg!(feature = "hosted-online"));
         assert_eq!(require_hosted_online_enabled().is_ok(), cfg!(feature = "hosted-online"));
+    }
+
+    #[test]
+    fn hosted_session_audience_is_allow_listed() {
+        assert_eq!(hosted_session_audience(None).unwrap(), SESSION_AUDIENCE_SIGN_TZAP);
+        assert_eq!(hosted_session_audience(Some(SESSION_AUDIENCE_LOGIN_TZAP)).unwrap(), SESSION_AUDIENCE_LOGIN_TZAP);
+        assert!(hosted_session_audience(Some("unexpected.example")).is_err());
+    }
+
+    #[test]
+    fn hosted_environment_is_allow_listed_without_falling_back_to_production() {
+        assert_eq!(hosted_environment("local").unwrap(), TzapHostedAuthEnvironment::Local);
+        assert_eq!(hosted_environment("staging").unwrap(), TzapHostedAuthEnvironment::Staging);
+        assert_eq!(hosted_environment("prod").unwrap(), TzapHostedAuthEnvironment::Prod);
+        let error = hosted_environment("production").expect_err("unknown environments must not silently select production");
+        assert_eq!(error.code, "invalid_request");
+    }
+
+    #[test]
+    fn hosted_client_id_requires_registered_non_local_configuration() {
+        assert_eq!(
+            hosted_client_id(TzapHostedAuthEnvironment::Local).unwrap(),
+            option_env!("TZAP_DESKTOP_LOCAL_CLIENT_ID").or(option_env!("TZAP_DESKTOP_CLIENT_ID")).unwrap_or("zmanager-desktop-local")
+        );
+        assert_eq!(
+            hosted_client_id(TzapHostedAuthEnvironment::Staging).is_ok(),
+            option_env!("TZAP_DESKTOP_STAGING_CLIENT_ID").is_some_and(|value| !value.trim().is_empty())
+        );
+        assert_eq!(
+            hosted_client_id(TzapHostedAuthEnvironment::Prod).is_ok(),
+            option_env!("TZAP_DESKTOP_PROD_CLIENT_ID").is_some_and(|value| !value.trim().is_empty())
+        );
+    }
+
+    #[test]
+    fn shared_hosted_assurance_values_are_classified_as_hosted_identities() {
+        for assurance in
+            ["enrolled", "oauth_verified_email", "oauth_verified_provider_account", "org_admin_approved_device", "enterprise_sso_verified", "contract_verified"]
+        {
+            assert!(is_hosted_assurance_level(assurance), "{assurance} should identify a hosted certificate");
+        }
+        assert!(!is_hosted_assurance_level("local_self_signed"));
+        assert!(!is_hosted_assurance_level("imported_p12"));
+
+        let hosted_identity = TzapPublicSigningIdentityRecord {
+            id: "hosted-identity".to_owned(),
+            local_alias: None,
+            certificate_id: Some("hosted-certificate".to_owned()),
+            certificate_sha256: Some("sha256:hosted".to_owned()),
+            issuer_certificate_sha256: None,
+            issuer_key_identifier: None,
+            serial_number: None,
+            certificate_chain_der: vec![vec![1]],
+            not_before_unix_seconds: Some(1),
+            not_after_unix_seconds: Some(u64::MAX),
+            renewal_grace_period_days: None,
+            renewal_recommended_within_days: None,
+            public_signer_id: Some("signer".to_owned()),
+            public_org_id: None,
+            public_device_id: Some("device".to_owned()),
+            assurance_level: Some("oauth_verified_email".to_owned()),
+            sign_device_id: Some("sign-device".to_owned()),
+            sign_device_routing: Some(TzapSignDeviceRouting::Personal),
+            signing_key_created_at_unix_seconds: Some(1),
+            legacy_key_id: None,
+            metadata_version: Some(1),
+            policy_oid: None,
+            signing_key_ref: TzapSecretRef::generate(),
+            lifecycle: "active".to_owned(),
+        };
+        assert!(is_hosted_signing_identity(&hosted_identity));
+
+        let mut catalog = TzapIdentityCatalog::empty();
+        catalog.signing_identities.push(hosted_identity);
+        let snapshot = snapshot_from_catalog(&AccountRuntime::new(), catalog).expect("hosted identity snapshot should serialize");
+        assert_eq!(snapshot.certificates[0].identity_type, "hosted");
+    }
+
+    #[test]
+    fn partial_retirement_marks_only_server_confirmed_devices_non_signing() {
+        let mut store = zmanager_core::local_identity_store::InMemoryTzapLocalIdentityStore::new();
+        let certificate = |suffix: u8, device_id: &str| zmanager_core::local_identity_store::TzapEnrolledCertificateRecord {
+            certificate_id: format!("certificate-{suffix}"),
+            certificate_sha256: zmanager_core::trust::format_certificate_sha256(&[suffix; 32]),
+            issuer_certificate_sha256: zmanager_core::trust::format_certificate_sha256(&[3; 32]),
+            issuer_key_identifier: "AQ".to_owned(),
+            serial_number: "01".to_owned(),
+            leaf_certificate_der: vec![1],
+            intermediate_chain_der: vec![vec![2]],
+            not_before_unix_seconds: 1,
+            not_after_unix_seconds: 100,
+            renewal_grace_period_days: None,
+            renewal_recommended_within_days: None,
+            public_metadata: zmanager_core::trust::TzapCertificatePublicMetadata {
+                version: 1,
+                public_signer_id: "psign_0123456789ABCDEFGH".to_owned(),
+                public_org_id: None,
+                public_device_id: "pdev_0123456789ABCDEFGH".to_owned(),
+                assurance_level: zmanager_core::trust::TzapIdentityAssurance::OauthVerifiedEmail,
+                policy_oid: zmanager_core::trust::TZAP_OID_LEAF_POLICY.to_owned(),
+            },
+            sign_device_id: device_id.to_owned(),
+            sign_device_routing: TzapSignDeviceRouting::Personal,
+            signing_key_id: format!("key-{suffix}"),
+            state: zmanager_core::local_identity_store::TzapLocalCertificateState::Active,
+        };
+        let mut inventory = zmanager_core::local_identity_store::TzapLocalIdentityInventory::empty();
+        inventory.enrolled_certificates.push(certificate(1, "device-complete"));
+        inventory.enrolled_certificates.push(certificate(2, "device-pending"));
+        store.save_inventory(ACCOUNT_KEY, inventory).unwrap();
+
+        mark_completed_retirement_devices(&mut store, &["device-complete".to_owned()]).unwrap();
+
+        let inventory = store.load_inventory(ACCOUNT_KEY).unwrap();
+        assert_eq!(inventory.enrolled_certificates.iter().map(|certificate| certificate.state.as_str()).collect::<Vec<_>>(), vec!["revoked", "active"]);
+        assert_eq!(inventory.active_personal_sign_device_ids(), vec!["device-pending"]);
+    }
+
+    #[test]
+    fn persisted_session_without_environment_is_discarded_instead_of_routed_to_production() {
+        let session = TzapSessionRecord {
+            audience: SESSION_AUDIENCE_SIGN_TZAP.to_owned(),
+            access_token: zmanager_tzap_hosted::auth_client::TzapBearerToken::new("test-token").unwrap(),
+            expires_at_unix_seconds: current_unix_seconds().saturating_add(3600),
+            identity_assurance: zmanager_tzap_hosted::trust::TzapIdentityAssurance::OauthVerifiedEmail,
+            selected_org_id: None,
+            login_session_id: None,
+        };
+
+        let (restored, environment) = restore_session_environment(Some(session), None);
+        assert!(restored.is_none());
+        assert_eq!(environment, "prod");
+    }
+
+    #[test]
+    fn lifecycle_errors_map_to_stable_secret_free_desktop_codes() {
+        let cases = [
+            (TzapCertificateLifecycleError::ActiveCertificateExists, "active_certificate_exists"),
+            (TzapCertificateLifecycleError::DeviceLinkagePending, "device_linkage_pending"),
+            (TzapCertificateLifecycleError::CertificateNotFound, "account_certificate_not_found"),
+            (TzapCertificateLifecycleError::CertificateNotRenewable, "account_certificate_not_renewable"),
+            (TzapCertificateLifecycleError::RenewalTargetMismatch, "account_renewal_target_mismatch"),
+            (TzapCertificateLifecycleError::Auth(TzapAuthError::HttpStatus { status_code: 401 }), "unauthorized"),
+        ];
+
+        for (error, expected_code) in cases {
+            let mapped = map_lifecycle_error(error);
+            assert_eq!(mapped.code, expected_code);
+            assert!(!mapped.message.contains("access_token"));
+            assert!(!mapped.message.contains("certificate_der"));
+        }
+
+        assert_eq!(lifecycle_pending_outcome(&TzapCertificateLifecycleError::RenewalPendingApproval), Some("approval_required"));
+        assert_eq!(lifecycle_pending_outcome(&TzapCertificateLifecycleError::DeviceLinkagePending), Some("device_linkage_pending"));
+        assert_eq!(lifecycle_pending_outcome(&TzapCertificateLifecycleError::DeviceLinkageConflict), Some("device_linkage_conflict"));
     }
 
     #[test]
@@ -1833,6 +2298,48 @@ mod tests {
         assert!(snapshot.recipient_keys.is_empty());
         assert!(snapshot.contacts.is_empty());
         assert!(!serde_json::to_string(&snapshot).unwrap().contains("private"));
+    }
+
+    #[test]
+    fn login_audience_session_cannot_claim_signing_capability() {
+        let root = std::env::temp_dir().join(format!("zmanager-account-audience-test-{}", current_unix_seconds()));
+        let runtime = AccountRuntime::new();
+        runtime.0.lock().unwrap().session = Some(TzapSessionRecord {
+            audience: SESSION_AUDIENCE_LOGIN_TZAP.to_owned(),
+            access_token: zmanager_tzap_hosted::auth_client::TzapBearerToken::new("test-token").unwrap(),
+            expires_at_unix_seconds: current_unix_seconds().saturating_add(3600),
+            identity_assurance: zmanager_tzap_hosted::trust::TzapIdentityAssurance::OauthVerifiedEmail,
+            selected_org_id: Some("public-org-1".to_owned()),
+            login_session_id: Some("login-session-1".to_owned()),
+        });
+
+        let snapshot = snapshot_at(&root, &runtime).unwrap();
+        if hosted_online_enabled() {
+            assert_eq!(snapshot.capabilities.auth, "handoff_exchange");
+            assert_eq!(snapshot.capabilities.enrollment, "unavailable");
+            assert_eq!(snapshot.capabilities.status, "online");
+        } else {
+            assert_eq!(snapshot.capabilities.auth, "unavailable");
+            assert_eq!(snapshot.capabilities.enrollment, "unavailable");
+            assert_eq!(snapshot.capabilities.status, "offline_cache_only");
+        }
+    }
+
+    #[test]
+    fn signing_operations_reject_login_audience_sessions_at_the_rust_boundary() {
+        let runtime = AccountRuntime::new();
+        runtime.0.lock().unwrap().session = Some(TzapSessionRecord {
+            audience: SESSION_AUDIENCE_LOGIN_TZAP.to_owned(),
+            access_token: zmanager_tzap_hosted::auth_client::TzapBearerToken::new("test-token").unwrap(),
+            expires_at_unix_seconds: current_unix_seconds().saturating_add(3600),
+            identity_assurance: zmanager_tzap_hosted::trust::TzapIdentityAssurance::OauthVerifiedEmail,
+            selected_org_id: Some("public-org-1".to_owned()),
+            login_session_id: Some("login-session-1".to_owned()),
+        });
+
+        let error = active_sign_hosted_session(&runtime).expect_err("login audience must not authorize signing operations");
+        assert_eq!(error.code, "sign_session_required");
+        assert!(error.retryable);
     }
 
     #[test]
@@ -1914,6 +2421,141 @@ mod tests {
             lifecycle: "deletion_pending".to_owned(),
         });
         assert!(!catalog.signing_identities.iter().any(|identity| { identity.lifecycle == "active" }));
+    }
+
+    #[test]
+    fn expired_contact_cards_are_unavailable_in_account_snapshots() {
+        let mut contact = TzapPublicContactRecord {
+            contact_id: "contact-expired".to_owned(),
+            display_name: "Expired Contact".to_owned(),
+            signing_certificate_sha256: "sha256:certificate".to_owned(),
+            recipient_public_key_fingerprint: "sha256:recipient".to_owned(),
+            recipient_public_key_der: vec![1, 2, 3],
+            trust_source: "official_pinned_root".to_owned(),
+            source: "phone_sync".to_owned(),
+            verification_state: "valid_now".to_owned(),
+            missing_status_caveat: false,
+            contact_card_payload: serde_json::json!({ "expires_at_unix_seconds": 100 }),
+            accepted_at_unix_seconds: 1,
+            local_alias: None,
+            card: None,
+        };
+
+        let (state, caveat) = contact_snapshot_verification(&contact, &[], 100);
+        assert_eq!(state, "status_expired");
+        assert!(!caveat);
+
+        contact.contact_card_payload = serde_json::json!({ "expires_at_unix_seconds": 101 });
+        let (state, caveat) = contact_snapshot_verification(&contact, &[], 100);
+        assert_eq!(state, "cryptographically_intact_offline");
+        assert!(caveat);
+    }
+
+    #[test]
+    fn stale_cached_contact_status_is_downgraded_to_offline_at_snapshot_time() {
+        let certificate_sha256 = zmanager_core::trust::format_certificate_sha256(&[8; 32]);
+        let contact = TzapPublicContactRecord {
+            contact_id: "contact-stale-status".to_owned(),
+            display_name: "Stale Contact".to_owned(),
+            signing_certificate_sha256: certificate_sha256.clone(),
+            recipient_public_key_fingerprint: zmanager_core::trust::format_certificate_sha256(&[9; 32]),
+            recipient_public_key_der: vec![1, 2, 3],
+            trust_source: "official_pinned_root".to_owned(),
+            source: "phone_sync".to_owned(),
+            verification_state: "valid_now".to_owned(),
+            missing_status_caveat: false,
+            contact_card_payload: serde_json::json!({}),
+            accepted_at_unix_seconds: 1,
+            local_alias: None,
+            card: None,
+        };
+        let status_cache = vec![TzapPublicStatusCacheRecord {
+            lookup_id: certificate_sha256,
+            status: "valid".to_owned(),
+            this_update: "1".to_owned(),
+            next_update: "10".to_owned(),
+        }];
+
+        let (state, caveat) = contact_snapshot_verification(&contact, &status_cache, 1_000);
+
+        assert_eq!(state, "cryptographically_intact_offline");
+        assert!(caveat);
+    }
+
+    #[test]
+    fn expired_contacts_are_not_promoted_by_status_refresh() {
+        let certificate_sha256 = zmanager_core::trust::format_certificate_sha256(&[7; 32]);
+        let body = serde_json::json!({
+            "results": [{
+                "lookup_id": certificate_sha256,
+                "status_response": {
+                    "status": "valid",
+                    "certificate_sha256": certificate_sha256,
+                    "issuer_certificate_sha256": "sha256:issuer",
+                    "issuer_key_identifier": "key-id",
+                    "serial_number": "01",
+                    "not_before_unix_seconds": 1,
+                    "not_after_unix_seconds": 2000,
+                    "this_update_unix_seconds": 90,
+                    "next_update_unix_seconds": 200
+                }
+            }]
+        });
+        let transport = FakeStatusTransport { body: serde_json::to_vec(&body).unwrap() };
+        let mut catalog = TzapIdentityCatalog::empty();
+        catalog.contacts.push(TzapPublicContactRecord {
+            contact_id: "contact-expired-refresh".to_owned(),
+            display_name: "Expired Contact".to_owned(),
+            signing_certificate_sha256: certificate_sha256,
+            recipient_public_key_fingerprint: "sha256:recipient".to_owned(),
+            recipient_public_key_der: vec![1, 2, 3],
+            trust_source: "official_pinned_root".to_owned(),
+            source: "phone_sync".to_owned(),
+            verification_state: "valid_now".to_owned(),
+            missing_status_caveat: false,
+            contact_card_payload: serde_json::json!({ "expires_at_unix_seconds": 100 }),
+            accepted_at_unix_seconds: 1,
+            local_alias: None,
+            card: None,
+        });
+
+        assert_eq!(refresh_contact_statuses(&mut catalog, "https://sign.tzap.org", &transport, 100), 0);
+        assert_eq!(catalog.contacts[0].verification_state, "status_expired");
+        assert!(!catalog.contacts[0].missing_status_caveat);
+        assert!(catalog.status_cache.is_empty());
+    }
+
+    #[test]
+    fn contact_snapshot_reads_person_grouping_metadata_from_the_signed_payload() {
+        let nested = serde_json::json!({
+            "signing_public_metadata": { "public_signer_id": "signer-nested" }
+        });
+        assert_eq!(contact_public_signer_id(&nested).as_deref(), Some("signer-nested"));
+
+        let legacy = serde_json::json!({ "public_signer_id": "signer-legacy" });
+        assert_eq!(contact_public_signer_id(&legacy).as_deref(), Some("signer-legacy"));
+    }
+
+    #[test]
+    fn contact_handoff_requires_the_retained_signed_card_envelope() {
+        let contact = TzapPublicContactRecord {
+            contact_id: "contact-envelope-required".to_owned(),
+            display_name: "Contact".to_owned(),
+            signing_certificate_sha256: "sha256:certificate".to_owned(),
+            recipient_public_key_fingerprint: "sha256:recipient".to_owned(),
+            recipient_public_key_der: vec![1, 2, 3],
+            trust_source: "official_pinned_root".to_owned(),
+            source: String::new(),
+            verification_state: "valid_now".to_owned(),
+            missing_status_caveat: false,
+            contact_card_payload: serde_json::json!({ "recipient_public_key": "AQID" }),
+            accepted_at_unix_seconds: 1,
+            local_alias: None,
+            card: None,
+        };
+
+        let error = contact_card_for_handoff(&contact).expect_err("inner payload must not be trusted as a signed card");
+        assert_eq!(error.code, "account_contact_unavailable");
     }
 
     #[test]
@@ -2078,5 +2720,56 @@ mod tests {
         assert_eq!(counts.removed, 1);
         // contact-local (not phone_sync) should be preserved
         assert!(inventory.contacts.iter().any(|c| c.contact_id == "contact-local"));
+    }
+
+    #[test]
+    fn contact_sync_failure_restores_the_previous_catalog() {
+        let root =
+            std::env::temp_dir().join(format!("zmanager-contact-sync-rollback-test-{}", SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos()));
+        let mut catalog_store = FileTzapIdentityCatalogStore::new(&root);
+        let mut original = TzapIdentityCatalog::empty();
+        original.contacts.push(TzapPublicContactRecord {
+            contact_id: "contact-before".to_owned(),
+            display_name: "Before".to_owned(),
+            signing_certificate_sha256: zmanager_core::trust::format_certificate_sha256(&[1; 32]),
+            recipient_public_key_fingerprint: zmanager_core::trust::format_certificate_sha256(&[2; 32]),
+            recipient_public_key_der: vec![1, 2, 3],
+            trust_source: "phone_sync".to_owned(),
+            source: "phone_sync".to_owned(),
+            verification_state: "cryptographically_intact_offline".to_owned(),
+            missing_status_caveat: true,
+            contact_card_payload: serde_json::json!({"display_name": "Before"}),
+            accepted_at_unix_seconds: 100,
+            local_alias: None,
+            card: None,
+        });
+        catalog_store.save_catalog(ACCOUNT_KEY, None, original.clone()).unwrap();
+
+        let mut mutated = original.clone();
+        mutated.contacts.push(TzapPublicContactRecord {
+            contact_id: "contact-after".to_owned(),
+            display_name: "After".to_owned(),
+            signing_certificate_sha256: zmanager_core::trust::format_certificate_sha256(&[3; 32]),
+            recipient_public_key_fingerprint: zmanager_core::trust::format_certificate_sha256(&[4; 32]),
+            recipient_public_key_der: vec![4, 5, 6],
+            trust_source: "phone_sync".to_owned(),
+            source: "phone_sync".to_owned(),
+            verification_state: "cryptographically_intact_offline".to_owned(),
+            missing_status_caveat: true,
+            contact_card_payload: serde_json::json!({"display_name": "After"}),
+            accepted_at_unix_seconds: 200,
+            local_alias: None,
+            card: None,
+        });
+        let expected_revision = mutated.revision;
+        mutated.revision += 1;
+        catalog_store.save_catalog(ACCOUNT_KEY, Some(expected_revision), mutated).unwrap();
+
+        let failure = CommandErrorDto::operation_failed("contact sync failed");
+        let returned = rollback_contact_sync_failure(&root, &original, failure);
+        assert_eq!(returned.code, crate::constants::COMMAND_ERROR_OPERATION_FAILED);
+        assert_eq!(catalog_store.load_catalog(ACCOUNT_KEY).unwrap().unwrap(), original);
+
+        let _ = std::fs::remove_dir_all(root);
     }
 }

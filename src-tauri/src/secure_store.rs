@@ -13,6 +13,7 @@ use zmanager_core::trust::TzapIdentityAssurance;
 use zmanager_tzap_hosted::auth_client::{TzapAuthError, TzapBearerToken, TzapSessionRecord, TzapSessionStore};
 
 const SERVICE_NAME: &str = "org.tzap.zmanager.identity";
+const SESSION_ENVIRONMENT_KEY: &str = "session-environment";
 
 #[derive(Debug, Clone)]
 pub struct NativeTzapSecretStore {
@@ -96,6 +97,35 @@ impl NativeTzapSecretStore {
         TzapSecretRef::parse(reference.as_str().to_owned())?;
         Entry::new(SERVICE_NAME, &format!("{}:{}:{}", self.account_scope, purpose.as_str(), reference.as_str()))
             .map_err(|error| map_keyring_error(error, reference))
+    }
+
+    fn session_environment_entry(&self, account_key: &str) -> Result<Entry, TzapAuthError> {
+        Entry::new(SERVICE_NAME, &format!("{}:{}:{}", self.account_scope, SESSION_ENVIRONMENT_KEY, account_key))
+            .map_err(|_| TzapAuthError::Storage { message: "Session environment keyring entry failed".to_owned() })
+    }
+
+    pub fn save_session_environment(&self, account_key: &str, environment: &str) -> Result<(), TzapAuthError> {
+        if !matches!(environment, "local" | "staging" | "prod") {
+            return Err(TzapAuthError::Storage { message: "Unsupported hosted environment".to_owned() });
+        }
+        self.session_environment_entry(account_key)?
+            .set_secret(environment.as_bytes())
+            .map_err(|_| TzapAuthError::Storage { message: "Session environment could not be stored".to_owned() })
+    }
+
+    pub fn load_session_environment(&self, account_key: &str) -> Option<String> {
+        let entry = self.session_environment_entry(account_key).ok()?;
+        let bytes = entry.get_secret().ok()?;
+        let environment = std::str::from_utf8(&bytes).ok()?;
+        matches!(environment, "local" | "staging" | "prod").then(|| environment.to_owned())
+    }
+
+    pub fn clear_session_environment(&self, account_key: &str) -> Result<(), TzapAuthError> {
+        let entry = self.session_environment_entry(account_key)?;
+        match entry.delete_credential() {
+            Ok(_) | Err(KeyringError::NoEntry) => Ok(()),
+            Err(_) => Err(TzapAuthError::Storage { message: "Session environment could not be cleared".to_owned() }),
+        }
     }
 }
 

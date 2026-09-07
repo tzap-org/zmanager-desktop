@@ -1231,8 +1231,6 @@ const accountController = createAccountController({
   fetchCurrentUser: fetchAccountCurrentUser,
   enrollDeviceCertificate: enrollAccountCertificate,
   renewCertificate: renewAccountCertificate,
-  revokeCertificate: () => Promise.reject(new Error("Not implemented yet")),
-  exportContactCard: () => Promise.reject(new Error("Not implemented yet")),
   retireDevice: retireAccountDevice,
   forget: forgetAccount,
   generateRecipientKey: generateAccountRecipientKey,
@@ -2187,7 +2185,7 @@ function handleReactAccountIntent(intent: ZManagerAccountIntent) {
     case "open": void accountController.open(); break;
     case "close": accountController.close(); break;
     case "refresh": void accountController.open(); break;
-    case "beginHostedAuth": void accountController.beginHostedAuth(intent.environment ?? "prod"); break;
+    case "beginHostedAuth": void accountController.beginHostedAuth(intent.environment ?? "prod", intent.audience); break;
     case "forget": void accountController.forget(); break;
     case "generateRecipientKey": void accountController.generateRecipientKey(intent.label); break;
     case "generateSigningIdentity": void accountController.generateSigningIdentity(intent.commonName, intent.label); break;
@@ -2215,7 +2213,6 @@ function handleReactAccountIntent(intent: ZManagerAccountIntent) {
       }
       break;
     }
-    case "exportContactCard": void accountController.handleExportContactCard(); break;
     case "enrollCertificate": void accountController.handleEnroll(); break;
     case "renewCertificate": void accountController.handleRenew(intent.certificateId); break;
     case "retireDevice": void accountController.handleDeviceRetire(); break;
@@ -4403,6 +4400,7 @@ async function verifyCurrentTzapCertificate() {
       trustedSystemRoots: verification.trustedSystemRoots,
       includeOfficialTzapRoot: verification.includeOfficialTzapRoot,
       checkCurrentStatus: verification.checkCurrentStatus,
+      environment: appPreferences.tzapEnvironment,
     });
     extractWorkspace.acceptTzapVerification(result);
   } catch (error) {

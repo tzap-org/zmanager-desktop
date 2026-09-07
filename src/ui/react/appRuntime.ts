@@ -392,7 +392,7 @@ export type ZManagerAccountIntent =
   | Readonly<{ type: "open" }>
   | Readonly<{ type: "close" }>
   | Readonly<{ type: "refresh" }>
-  | Readonly<{ type: "beginHostedAuth"; environment?: string }>
+  | Readonly<{ type: "beginHostedAuth"; environment?: string; audience?: "sign.tzap.org" | "login.tzap.org" }>
   | Readonly<{ type: "forget" }>
   | Readonly<{ type: "generateRecipientKey"; label?: string }>
   | Readonly<{ type: "generateSigningIdentity"; commonName: string; label?: string }>
@@ -404,7 +404,6 @@ export type ZManagerAccountIntent =
   | Readonly<{ type: "removeContact"; id: string }>
   | Readonly<{ type: "inspectContactCard"; contactCard: string }>
   | Readonly<{ type: "acceptContactCard"; contactCard: string }>
-  | Readonly<{ type: "exportContactCard" }>
   | Readonly<{ type: "enrollCertificate" }>
   | Readonly<{ type: "renewCertificate"; certificateId: string }>
   | Readonly<{ type: "retireDevice" }>

@@ -10,12 +10,13 @@ export function CertificatesTab() {
   const snapshot = fullSnapshot.account;
   const preferences = fullSnapshot.preferences;
   const actions = useZManagerActions();
+  const hostedEnvironment = preferences.tzapEnvironment;
 
   const [identityName, setIdentityName] = useState("TZAP Signing Identity");
   const [identityImportLabel, setIdentityImportLabel] = useState("");
   const [identityImportPassword, setIdentityImportPassword] = useState("");
   const [identityPendingRemoval, setIdentityPendingRemoval] = useState<string | null>(null);
-  const hostedCertificates = snapshot.certificates.filter((certificate) => certificate.identityType === "hosted");
+  const hostedCertificates = snapshot.certificates.filter((certificate) => certificate.identityType === "hosted" && certificate.state === "active");
   const canManageHostedCertificates = snapshot.authStatus === "signedIn" && snapshot.capabilities.enrollment === "available";
   const canLaunchHostedAuth = snapshot.capabilities.auth === "launch_only" || snapshot.capabilities.auth === "handoff_exchange";
   const formatExpiry = (unixSeconds: number) => unixSeconds > 0
@@ -45,7 +46,7 @@ export function CertificatesTab() {
                 disabled={snapshot.busy || (!canManageHostedCertificates && !canLaunchHostedAuth)}
                 onClick={() => canManageHostedCertificates
                   ? actions.handleAccountIntent({ type: "enrollCertificate" })
-                  : actions.handleAccountIntent({ type: "beginHostedAuth", environment: "prod" })}
+                  : actions.handleAccountIntent({ type: "beginHostedAuth", environment: hostedEnvironment })}
               >
                 {canManageHostedCertificates ? <Award className="mr-1.5 size-3.5" /> : <ExternalLink className="mr-1.5 size-3.5" />}
                 {canManageHostedCertificates ? "Enroll this device" : canLaunchHostedAuth ? "Sign in to enroll" : "Hosted enrollment unavailable"}
@@ -55,7 +56,7 @@ export function CertificatesTab() {
           {hostedCertificates.length === 0 ? (
             <p className="text-[11px] font-medium text-blue-800 dark:text-blue-200">
               {canManageHostedCertificates
-                ? "No hosted identity is enrolled on this device."
+                ? "No active hosted identity is enrolled on this device."
                 : canLaunchHostedAuth
                   ? "Enrollment is unavailable until the hosted session is active."
                   : "Hosted enrollment is unavailable until the hosted-auth security and OAuth registration gates are approved."}
@@ -254,8 +255,10 @@ export function CertificatesTab() {
                       variant="secondary"
                       size="sm"
                       className="h-7 text-[11px]"
-                      disabled={snapshot.busy || !canManageHostedCertificates || certificate.state !== "active"}
-                      onClick={() => actions.handleAccountIntent({ type: "renewCertificate", certificateId: certificate.certificateId })}
+                      disabled={snapshot.busy || certificate.state !== "active" || (!canManageHostedCertificates && !canLaunchHostedAuth)}
+                      onClick={() => canManageHostedCertificates
+                        ? actions.handleAccountIntent({ type: "renewCertificate", certificateId: certificate.certificateId })
+                        : actions.handleAccountIntent({ type: "beginHostedAuth", environment: hostedEnvironment })}
                     >
                       <RefreshCw className="mr-1 size-3" />
                       {canManageHostedCertificates ? "Renew certificate" : "Sign in to renew"}

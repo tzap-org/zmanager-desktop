@@ -2,6 +2,7 @@ import type { NativeInboundHostedAuthEvent } from "../../api/generated/nativeInb
 import type {
   AccountContactCardPreviewDto,
   AccountHostedAuthLaunchDto,
+  AccountHostedAuthAudience,
   AccountContactSyncResultDto,
   AccountInstallSigningCertificateRequest,
   AccountLifecycleResultDto,
@@ -15,14 +16,12 @@ import type { DiagnosticRecorder } from "../diagnostics";
 export type AccountControllerOptions = Readonly<{
   workspace: AccountWorkspace;
   fetchSnapshot(): Promise<AccountSnapshotDto>;
-  beginHostedAuth(environment: string): Promise<AccountHostedAuthLaunchDto>;
+  beginHostedAuth(environment: string, audience?: AccountHostedAuthAudience): Promise<AccountHostedAuthLaunchDto>;
   applyHostedCallback(payload: NativeInboundHostedAuthEvent["payload"]): Promise<void>;
   completeHostedAuth(state: string, handoffCode: string, callbackUrl?: string): Promise<AccountSnapshotDto>;
   fetchCurrentUser(): Promise<AccountCurrentUserDto>;
   enrollDeviceCertificate(): Promise<AccountSnapshotDto | AccountLifecycleResultDto>;
   renewCertificate(certificateId: string): Promise<AccountSnapshotDto | AccountLifecycleResultDto>;
-  revokeCertificate(certificateId: string): Promise<AccountSnapshotDto>;
-  exportContactCard(): Promise<void>;
   retireDevice(): Promise<AccountSnapshotDto | AccountLifecycleResultDto>;
   forget(): Promise<AccountSnapshotDto>;
   generateRecipientKey(label?: string): Promise<AccountSnapshotDto>;
@@ -74,6 +73,10 @@ function resultNotice(result: AccountLifecycleResultDto | AccountContactSyncResu
   }
 }
 
+function isUnauthorizedError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "unauthorized";
+}
+
 export function createAccountController(options: AccountControllerOptions) {
   async function run(operation: () => Promise<AccountMutationResult>, actionName = "operation"): Promise<void> {
     const startMs = Date.now();
@@ -95,7 +98,16 @@ export function createAccountController(options: AccountControllerOptions) {
         fields: { elapsedMs: Date.now() - startMs },
       });
     } catch (error) {
-      options.workspace.setNotice(options.errorMessage(error));
+      if (isUnauthorizedError(error)) {
+        try {
+          options.workspace.replace(await options.fetchSnapshot());
+        } catch {
+          // Keep the existing snapshot if refreshing after expiry is unavailable.
+        }
+        options.workspace.setNotice("Session expired. Please sign in again.");
+      } else {
+        options.workspace.setNotice(options.errorMessage(error));
+      }
       options.diagnostics?.record({
         scope: "account",
         name: `${actionName}Failed`,
@@ -122,10 +134,10 @@ export function createAccountController(options: AccountControllerOptions) {
       });
     },
     close() { options.workspace.close(); options.publish(); },
-    async beginHostedAuth(environment = "prod") {
+    async beginHostedAuth(environment = "prod", audience: AccountHostedAuthAudience = "sign.tzap.org") {
       options.workspace.setBusy(true); options.publish();
       try {
-        const launch = await options.beginHostedAuth(environment);
+        const launch = await options.beginHostedAuth(environment, audience);
         await options.openUrl(launch.launchUrl);
         options.workspace.setNotice("Hosted sign-in is pending.");
         options.workspace.replace(await options.fetchSnapshot());
@@ -155,8 +167,8 @@ export function createAccountController(options: AccountControllerOptions) {
       try {
         await options.fetchCurrentUser();
         options.workspace.replace(await options.fetchSnapshot());
-      } catch (error: any) {
-        if (error?.code === "unauthorized") {
+      } catch (error) {
+        if (isUnauthorizedError(error)) {
           options.workspace.replace(await options.fetchSnapshot());
           options.workspace.setNotice("Session expired. Please sign in again.");
         } else {
@@ -166,11 +178,6 @@ export function createAccountController(options: AccountControllerOptions) {
     },
     handleEnroll: () => run(options.enrollDeviceCertificate, "enrollCertificate"),
     handleRenew: (certificateId: string) => run(() => options.renewCertificate(certificateId), "renewCertificate"),
-    handleRevoke: (certificateId: string) => run(() => options.revokeCertificate(certificateId)),
-    async handleExportContactCard() {
-      options.workspace.setBusy(true); options.publish();
-      try { await options.exportContactCard(); } catch (error) { options.workspace.setNotice(options.errorMessage(error)); } finally { options.workspace.setBusy(false); options.publish(); }
-    },
     handleDeviceRetire: () => run(options.retireDevice, "retireDevice"),
     forget: () => run(options.forget),
     generateRecipientKey: (label?: string) => run(() => options.generateRecipientKey(label)),

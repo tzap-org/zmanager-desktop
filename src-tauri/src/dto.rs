@@ -658,6 +658,10 @@ pub struct VerifyTzapCertificateRequest {
     #[serde(default)]
     #[serde(alias = "onlineStatus")]
     pub check_current_status: bool,
+    /// Selects the public status service for an explicit online check. Omitted
+    /// requests retain the production default for backwards compatibility.
+    #[serde(default)]
+    pub environment: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

@@ -29,8 +29,6 @@ describe("account controller", () => {
       fetchCurrentUser: async () => ({ displayName: "Test", assuranceLevel: "basic" }),
       enrollDeviceCertificate,
       renewCertificate,
-      revokeCertificate: async () => empty,
-      exportContactCard: async () => {},
       retireDevice: async () => empty,
       forget: async () => empty,
       generateRecipientKey: async () => empty,
@@ -75,8 +73,6 @@ describe("account controller", () => {
       fetchCurrentUser: async () => ({ displayName: "Test User", assuranceLevel: "basic" }),
       enrollDeviceCertificate: async () => empty,
       renewCertificate: async () => empty,
-      revokeCertificate: async () => empty,
-      exportContactCard: async () => {},
       retireDevice: async () => empty,
       forget: async () => empty,
       generateRecipientKey: async () => empty,
@@ -114,8 +110,6 @@ describe("account controller", () => {
       fetchCurrentUser: async () => ({ displayName: "Test User", assuranceLevel: "basic" }),
       enrollDeviceCertificate: async () => empty,
       renewCertificate: async () => empty,
-      revokeCertificate: async () => empty,
-      exportContactCard: async () => {},
       retireDevice: async () => empty,
       forget: async () => empty,
       generateRecipientKey: async () => empty,
@@ -139,6 +133,46 @@ describe("account controller", () => {
     expect(workspace.getSnapshot().busy).toBe(false);
   });
 
+  it("refreshes the account snapshot when a lifecycle operation expires the session", async () => {
+    const workspace = createAccountWorkspace();
+    const expiredSnapshot = { ...empty, authStatus: "expired" as const };
+    const fetchSnapshot = vi.fn(async () => expiredSnapshot);
+    const controller = createAccountController({
+      workspace,
+      fetchSnapshot,
+      beginHostedAuth: async () => ({ launchUrl: "", state: "", expiresAtUnixSeconds: 0 }),
+      applyHostedCallback: async () => {},
+      completeHostedAuth: async () => empty,
+      fetchCurrentUser: async () => ({ displayName: "Test User", assuranceLevel: "basic" }),
+      enrollDeviceCertificate: async () => { throw { code: "unauthorized" }; },
+      renewCertificate: async () => empty,
+      retireDevice: async () => empty,
+      forget: async () => empty,
+      generateRecipientKey: async () => empty,
+      generateSigningIdentity: async () => empty,
+      importSigningIdentity: async () => empty,
+      installSigningCertificate: async () => empty,
+      createSelfSignedCertificateStore: async () => empty,
+      removeSigningIdentity: async () => empty,
+      removeRecipientKey: async () => empty,
+      setDefaultSigningIdentity: async () => empty,
+      removeContact: async () => empty,
+      inspectContactCard: async () => ({ displayName: "Test", signingCertificateSha256: "", recipientPublicKeyFingerprint: "", trustSource: "official_pinned_root", verificationState: "verified", missingStatusCaveat: false }),
+      acceptContactCard: async () => empty,
+      syncContacts: async () => empty,
+      openUrl: async () => {},
+      publish: () => {},
+      errorMessage: String,
+    });
+
+    await controller.handleEnroll();
+
+    expect(fetchSnapshot).toHaveBeenCalledOnce();
+    expect(workspace.getSnapshot().authStatus).toBe("expired");
+    expect(workspace.getSnapshot().notice).toBe("Session expired. Please sign in again.");
+    expect(workspace.getSnapshot().busy).toBe(false);
+  });
+
   it("refreshes the hidden account snapshot without opening the Account page", async () => {
     const workspace = createAccountWorkspace();
     const controller = createAccountController({
@@ -150,8 +184,6 @@ describe("account controller", () => {
       fetchCurrentUser: async () => ({ displayName: "Test User", assuranceLevel: "basic" }),
       enrollDeviceCertificate: async () => empty,
       renewCertificate: async () => empty,
-      revokeCertificate: async () => empty,
-      exportContactCard: async () => {},
       retireDevice: async () => empty,
       forget: async () => empty,
       generateRecipientKey: async () => empty,
@@ -189,8 +221,6 @@ describe("account controller", () => {
       fetchCurrentUser: async () => ({ displayName: "Test User", assuranceLevel: "basic" }),
       enrollDeviceCertificate: async () => empty,
       renewCertificate: async () => empty,
-      revokeCertificate: async () => empty,
-      exportContactCard: async () => {},
       retireDevice: async () => empty,
       forget: async () => empty,
       generateRecipientKey: async () => empty,
@@ -216,9 +246,8 @@ describe("account controller", () => {
     expect(workspace.getSnapshot().busy).toBe(false);
   });
 
-  it("handles export contact card and device retirement intent handlers", async () => {
+  it("handles device retirement intent handler", async () => {
     const workspace = createAccountWorkspace();
-    const exportCard = vi.fn(async () => {});
     const retire = vi.fn(async () => empty);
 
     const controller = createAccountController({
@@ -230,8 +259,6 @@ describe("account controller", () => {
       fetchCurrentUser: async () => ({ displayName: "Test", assuranceLevel: "basic" }),
       enrollDeviceCertificate: async () => empty,
       renewCertificate: async () => empty,
-      revokeCertificate: async () => empty,
-      exportContactCard: exportCard,
       retireDevice: retire,
       forget: async () => empty,
       generateRecipientKey: async () => empty,
@@ -250,9 +277,6 @@ describe("account controller", () => {
       publish: () => {},
       errorMessage: (error) => error instanceof Error ? error.message : String(error),
     });
-
-    await controller.handleExportContactCard();
-    expect(exportCard).toHaveBeenCalled();
 
     await controller.handleDeviceRetire();
     expect(retire).toHaveBeenCalled();
@@ -289,8 +313,6 @@ describe("account controller", () => {
       fetchCurrentUser: async () => ({ displayName: "Test", assuranceLevel: "basic" }),
       enrollDeviceCertificate: async () => empty,
       renewCertificate: async () => empty,
-      revokeCertificate: async () => empty,
-      exportContactCard: async () => {},
       retireDevice: async () => empty,
       forget: async () => empty,
       generateRecipientKey: async () => empty,

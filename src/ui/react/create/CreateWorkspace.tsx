@@ -1789,7 +1789,10 @@ function CreateOptions() {
                               })
                             }
                           />
-                          <span className="truncate">{group[0]?.publicSignerId ? `Device · ${contact.displayName}` : contact.displayName}{contact.verificationState !== "valid_now" ? " · offline/status caveat" : ""}</span>
+                          <span className="truncate">
+                            {group[0]?.publicSignerId ? `Device · ${contact.displayName}` : contact.displayName}
+                            {` · ${tzapContactTrustLabel(contact.verificationState)}`}
+                          </span>
                         </label>
                       ))}
                     </div>
@@ -1992,6 +1995,18 @@ function isSelectableTzapContact(verificationState: string): boolean {
   return verificationState === "valid_now"
     || verificationState === "valid_at_trusted_time"
     || verificationState === "cryptographically_intact_offline";
+}
+
+function tzapContactTrustLabel(verificationState: string): string {
+  switch (verificationState) {
+    case "valid_now": return "Verified now";
+    case "valid_at_trusted_time": return "Verified with trusted-time caveat";
+    case "cryptographically_intact_offline": return "Verified offline";
+    case "status_expired": return "Expired";
+    case "status_mismatch": return "Status unavailable";
+    case "invalid": return "Invalid contact card";
+    default: return "Verification unavailable";
+  }
 }
 
 function includeAllState(snapshot: ReturnType<typeof useZManagerSnapshot>) {

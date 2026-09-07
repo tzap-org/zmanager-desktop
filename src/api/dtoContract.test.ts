@@ -5,7 +5,7 @@ import rustDtoSource from "../../src-tauri/src/dto.rs?raw";
 import rustLocalsendSource from "../../src-tauri/src/localsend.rs?raw";
 import typeScriptApiTypesSource from "./types.ts?raw";
 
-const rustSource = `${rustDtoSource}\n${rustLocalsendSource}`;
+const rustSource = `${rustDtoSource}\n${rustLocalsendSource}\n${rustAccountSource}`;
 const responseRustSource = `${rustDtoSource}\n${rustAccountSource}`;
 
 // Most Rust request structs and their TypeScript counterparts share one
@@ -32,6 +32,9 @@ const REQUEST_DTO_TYPES: readonly (string | Readonly<{ typeScriptName: string; r
   { typeScriptName: "LocalSendDiscoverRequest", rustName: "LocalSendDiscoverRequestDto" },
   { typeScriptName: "LocalSendStartReceiverRequest", rustName: "LocalSendStartReceiverRequestDto" },
   { typeScriptName: "LocalSendRespondToTransferRequest", rustName: "LocalSendRespondToTransferRequestDto" },
+  "AccountBeginHostedAuthRequest",
+  "AccountCompleteHostedAuthRequest",
+  "AccountRenewCertificateRequest",
 ] as const;
 
 describe("Rust and TypeScript request DTO contracts", () => {

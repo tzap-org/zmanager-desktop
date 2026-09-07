@@ -69,6 +69,10 @@ pub struct HostedAuthCallbackPayload {
     pub state: String,
     pub result: HostedAuthResult,
     pub error_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub handoff_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callback_url: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -324,9 +328,19 @@ fn validate_event(event: &NativeInboundEvent) -> Result<(), NativeLaunchInboxErr
             return Err(NativeLaunchInboxError::InvalidEvent("shell action tokens must be consumed before inbox ingestion".to_string()));
         }
         (NativeInboundEventKind::HostedAuthCallback, NativeInboundPayload::HostedAuthCallback(payload)) => {
+            let callback_url_is_sanitized =
+                payload.callback_url.as_deref().is_some_and(|url| matches!(url, "tzap://auth/callback" | "zmanager://auth-callback"));
             if !(16..=256).contains(&payload.state.len())
                 || !payload.state.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
                 || payload.error_code.as_ref().is_some_and(|code| code.len() > 128)
+                || (matches!(payload.result, HostedAuthResult::Completed)
+                    && (!callback_url_is_sanitized
+                        || payload.handoff_code.as_deref().is_none_or(|code| {
+                            !(16..=2048).contains(&code.len())
+                                || !code.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'~'))
+                        })))
+                || (!matches!(payload.result, HostedAuthResult::Completed) && payload.handoff_code.is_some())
+                || (payload.callback_url.is_some() && !callback_url_is_sanitized)
             {
                 return Err(NativeLaunchInboxError::InvalidEvent("hosted authentication callback is invalid".to_string()));
             }
@@ -486,6 +500,82 @@ mod tests {
             NativeLaunchInbox::from_quick_action(QuickActionRequestDto { kind: QuickActionKindDto::CompressZip, paths: vec!["/tmp/source".to_string()] });
         assert!(matches!(event.payload, NativeInboundPayload::ShellActionRequest(ShellActionRequestPayload { .. })));
         assert!(!serde_json::to_string(&event).unwrap().contains("password"));
+    }
+
+    #[test]
+    fn hosted_auth_callback_preserves_native_handoff_fields() {
+        let value = serde_json::json!({
+            "version": 1,
+            "eventId": "event-hosted-auth-1234567890",
+            "kind": "hostedAuthCallback",
+            "timestampUnixMs": 1,
+            "idempotencyKey": "state-1234567890",
+            "payload": {
+                "state": "state-1234567890",
+                "result": "completed",
+                "handoffCode": "handoff-code-1234567890",
+                "callbackUrl": "tzap://auth/callback"
+            }
+        });
+        let event: NativeInboundEvent = serde_json::from_value(value).expect("native callback contract should deserialize");
+        let NativeInboundPayload::HostedAuthCallback(payload) = &event.payload else {
+            panic!("expected hosted auth callback payload");
+        };
+        assert_eq!(payload.handoff_code.as_deref(), Some("handoff-code-1234567890"));
+        assert_eq!(payload.callback_url.as_deref(), Some("tzap://auth/callback"));
+        assert_eq!(serde_json::to_value(&event).unwrap()["payload"]["handoffCode"], "handoff-code-1234567890");
+        assert_eq!(serde_json::to_value(&event).unwrap()["payload"]["callbackUrl"], "tzap://auth/callback");
+        NativeLaunchInbox::new().ingest(event).expect("valid hosted callback should enter the inbox");
+
+        let cancelled: NativeInboundEvent = serde_json::from_value(serde_json::json!({
+            "version": 1,
+            "eventId": "event-hosted-cancelled-1234567890",
+            "kind": "hostedAuthCallback",
+            "timestampUnixMs": 1,
+            "payload": {
+                "state": "state-1234567890",
+                "result": "cancelled",
+                "callbackUrl": "tzap://auth/callback"
+            }
+        }))
+        .expect("cancelled callback should deserialize");
+        let cancelled_payload = serde_json::to_value(cancelled).unwrap()["payload"].clone();
+        assert!(cancelled_payload.get("handoffCode").is_none());
+    }
+
+    #[test]
+    fn hosted_auth_callback_rejects_missing_handoff_or_unsanitized_callback_url() {
+        let base = serde_json::json!({
+            "version": 1,
+            "eventId": "event-hosted-auth-1234567890",
+            "kind": "hostedAuthCallback",
+            "timestampUnixMs": 1,
+            "payload": {
+                "state": "state-1234567890",
+                "result": "completed",
+                "callbackUrl": "tzap://auth/callback"
+            }
+        });
+        let missing_handoff: NativeInboundEvent = serde_json::from_value(base.clone()).expect("payload should deserialize");
+        assert!(matches!(NativeLaunchInbox::new().ingest(missing_handoff), Err(NativeLaunchInboxError::InvalidEvent(_))));
+
+        let mut missing_callback_url = base.clone();
+        missing_callback_url["payload"]["handoffCode"] = serde_json::Value::String("handoff-code-1234567890".to_owned());
+        missing_callback_url["payload"].as_object_mut().unwrap().remove("callbackUrl");
+        let missing_callback_url: NativeInboundEvent = serde_json::from_value(missing_callback_url).expect("payload should deserialize");
+        assert!(matches!(NativeLaunchInbox::new().ingest(missing_callback_url), Err(NativeLaunchInboxError::InvalidEvent(_))));
+
+        let mut unexpected_handoff = base.clone();
+        unexpected_handoff["payload"]["result"] = serde_json::Value::String("cancelled".to_owned());
+        unexpected_handoff["payload"]["handoffCode"] = serde_json::Value::String("handoff-code-1234567890".to_owned());
+        let unexpected_handoff: NativeInboundEvent = serde_json::from_value(unexpected_handoff).expect("payload should deserialize");
+        assert!(matches!(NativeLaunchInbox::new().ingest(unexpected_handoff), Err(NativeLaunchInboxError::InvalidEvent(_))));
+
+        let mut unsanitized = base;
+        unsanitized["payload"]["handoffCode"] = serde_json::Value::String("handoff-code-1234567890".to_owned());
+        unsanitized["payload"]["callbackUrl"] = serde_json::Value::String("tzap://auth/callback?handoff_code=secret".to_owned());
+        let unsanitized: NativeInboundEvent = serde_json::from_value(unsanitized).expect("payload should deserialize");
+        assert!(matches!(NativeLaunchInbox::new().ingest(unsanitized), Err(NativeLaunchInboxError::InvalidEvent(_))));
     }
 
     #[test]

@@ -83,6 +83,71 @@ describe("AccountWorkspace", () => {
     expect(html).toContain("Expires");
   });
 
+  it("offers re-enrollment when only historical hosted certificates remain", () => {
+    const initial = createInitialZManagerReactSnapshot();
+    const store = createZManagerAppStore(
+      {
+        ...initial,
+        account: {
+          ...initial.account,
+          visible: true,
+          authStatus: "signedIn",
+          capabilities: { ...initial.account.capabilities, auth: "handoff_exchange", enrollment: "available", status: "online" },
+          certificates: [{
+            identityId: "hosted-identity-revoked",
+            certificateId: "hosted-cert-revoked",
+            certificateSha256: "sha256:revoked",
+            label: "Historical hosted identity",
+            identityType: "hosted",
+            state: "revoked",
+            assuranceLevel: "enrolled",
+            notAfterUnixSeconds: 2_000_000_000,
+            renewalRecommended: false,
+          }],
+        },
+      },
+      noopZManagerReactActions,
+    );
+    const html = renderToStaticMarkup(
+      createElement(
+        ZManagerAppRuntimeProvider,
+        { store },
+        createElement<AccountWorkspaceProps>(AccountWorkspace, { defaultTab: "certificates" }),
+      ),
+    );
+
+    expect(html).toContain("Historical hosted identity");
+    expect(html).toContain("No active hosted identity is enrolled on this device.");
+    expect(html).toContain("Enroll this device");
+  });
+
+  it("does not offer server retirement while signed out", () => {
+    const initial = createInitialZManagerReactSnapshot();
+    const store = createZManagerAppStore(
+      {
+        ...initial,
+        account: {
+          ...initial.account,
+          visible: true,
+          authStatus: "signedIn",
+          capabilities: { ...initial.account.capabilities, auth: "launch_only" },
+        },
+      },
+      noopZManagerReactActions,
+    );
+    const html = renderToStaticMarkup(
+      createElement(
+        ZManagerAppRuntimeProvider,
+        { store },
+        createElement<AccountWorkspaceProps>(AccountWorkspace, { defaultTab: "device" }),
+      ),
+    );
+
+    expect(html).toContain("Sign in to retire device");
+    expect(html).toContain("Hosted sign-in is required before the server can retire this device.");
+    expect(html).toContain('disabled=""');
+  });
+
   it("keeps a notice and long Contacts content inside the shared bounded surface", () => {
     const initial = createInitialZManagerReactSnapshot();
     const store = createZManagerAppStore(
@@ -98,7 +163,7 @@ describe("AccountWorkspace", () => {
               displayName: "A contact with a deliberately long display name for compact windows",
               signingCertificateSha256: "sha256:certificate",
               recipientPublicKeyFingerprint: "sha256:recipient",
-              verificationState: "verified",
+              verificationState: "status_mismatch",
               missingStatusCaveat: false,
             },
           ],
@@ -117,6 +182,8 @@ describe("AccountWorkspace", () => {
     expect(html).toContain('role="status"');
     expect(html).toContain("Identity data is available from the local cache.");
     expect(html).toContain("A contact with a deliberately long display name");
+    expect(html).toContain("Status unavailable");
+    expect(html).toContain("Sign in to sync contacts");
     expect(html).toContain('data-dialog-content="true"');
     expect(html).not.toContain('class="fixed h-[620px]');
   });

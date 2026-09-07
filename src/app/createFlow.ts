@@ -38,7 +38,7 @@ export const TZAP_RECOVERY_PERCENTAGE_MIN = 0;
 export const TZAP_RECOVERY_PERCENTAGE_MAX = 100;
 export const TZAP_VOLUME_LOSS_TOLERANCE_MIN = 0;
 export const TZAP_VOLUME_LOSS_TOLERANCE_MAX = 16;
-export const TZAP_SPLIT_DEFAULT_VOLUME_LOSS_TOLERANCE = 1;
+export const TZAP_SPLIT_DEFAULT_VOLUME_LOSS_TOLERANCE = 0;
 export const TZAP_VOLUME_COUNT_MIN = 2;
 export const TZAP_VOLUME_COUNT_MAX = 0xffff_ffff;
 
@@ -50,6 +50,7 @@ export type CreateArchiveUnavailableReason =
   | "needsDestination"
   | "planning"
   | "needsPlan"
+  | "invalidSplitConfiguration"
   | "starting";
 
 export type CreateArchiveAvailabilityInput = {
@@ -59,6 +60,12 @@ export type CreateArchiveAvailabilityInput = {
   planState: CreateState;
   hasPlan: boolean;
   submissionInFlight: boolean;
+  format?: CreateArchiveFormat;
+  splitMode?: TzapSplitMode;
+  volumeSize?: number | null;
+  volumeCount?: number | null;
+  tzapVolumeLossTolerance?: number | null;
+  recipientEncryptionSelected?: boolean;
 };
 
 export type CreatePathHelpers = {
@@ -501,7 +508,40 @@ export function createArchiveUnavailableReason(
   if (input.planState !== "ready" || !input.hasPlan) {
     return "needsPlan";
   }
+  if (!isCreateSplitConfigurationValid(input)) {
+    return "invalidSplitConfiguration";
+  }
   return null;
+}
+
+export function isCreateSplitConfigurationValid(
+  input: Pick<
+    CreateArchiveAvailabilityInput,
+    "format" | "splitMode" | "volumeSize" | "volumeCount" | "tzapVolumeLossTolerance" | "recipientEncryptionSelected"
+  >,
+): boolean {
+  if (
+    input.recipientEncryptionSelected
+    && (
+      input.volumeSize != null
+      || input.volumeCount != null
+      || (input.tzapVolumeLossTolerance ?? 0) > 0
+    )
+  ) {
+    return false;
+  }
+  if (input.splitMode === undefined || input.splitMode === "none") {
+    return input.volumeSize == null && input.volumeCount == null && (input.tzapVolumeLossTolerance ?? 0) === 0;
+  }
+  if (input.splitMode === "volumeSize") {
+    return input.format !== "tzap" || (input.volumeSize != null && Number.isFinite(input.volumeSize) && input.volumeSize > 0);
+  }
+  return input.format === "tzap"
+    && input.volumeSize == null
+    && input.volumeCount != null
+    && Number.isSafeInteger(input.volumeCount)
+    && input.volumeCount >= TZAP_VOLUME_COUNT_MIN
+    && input.volumeCount <= TZAP_VOLUME_COUNT_MAX;
 }
 
 export type BuildStartCreateRequestInput = {
