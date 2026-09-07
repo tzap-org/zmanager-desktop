@@ -6,6 +6,62 @@ import { createAccountController } from "./accountController";
 const empty = { authStatus: "signedOut" as const, pendingState: null, defaultSigningIdentityId: null, capabilities: { auth: "launch_only", enrollment: "unavailable", status: "offline_cache_only", accountManagement: "external_browser" }, certificates: [], recipientKeys: [], contacts: [], displayName: null, publicSignerId: null, assuranceLevel: null, sessionExpiresAtUnixSeconds: null };
 
 describe("account controller", () => {
+  it("keeps typed lifecycle outcomes visible for enrollment and renewal", async () => {
+    const workspace = createAccountWorkspace();
+    const enrollDeviceCertificate = vi.fn(async () => ({
+      snapshot: { ...empty, authStatus: "signedIn" as const },
+      outcome: "approval_required",
+      attemptedDeviceIds: ["device-1"],
+      incompleteReasons: ["device_approval_required"],
+    }));
+    const renewCertificate = vi.fn(async () => ({
+      snapshot: { ...empty, authStatus: "signedIn" as const },
+      outcome: "incomplete",
+      attemptedDeviceIds: ["device-1"],
+      incompleteReasons: ["catalog_write_failed"],
+    }));
+    const controller = createAccountController({
+      workspace,
+      fetchSnapshot: async () => empty,
+      beginHostedAuth: async () => ({ launchUrl: "", state: "", expiresAtUnixSeconds: 0 }),
+      applyHostedCallback: async () => {},
+      completeHostedAuth: async () => empty,
+      fetchCurrentUser: async () => ({ displayName: "Test", assuranceLevel: "basic" }),
+      enrollDeviceCertificate,
+      renewCertificate,
+      revokeCertificate: async () => empty,
+      exportContactCard: async () => {},
+      retireDevice: async () => empty,
+      forget: async () => empty,
+      generateRecipientKey: async () => empty,
+      generateSigningIdentity: async () => empty,
+      importSigningIdentity: async () => empty,
+      installSigningCertificate: async () => empty,
+      createSelfSignedCertificateStore: async () => empty,
+      removeSigningIdentity: async () => empty,
+      removeRecipientKey: async () => empty,
+      setDefaultSigningIdentity: async () => empty,
+      removeContact: async () => empty,
+      inspectContactCard: async () => ({ displayName: "Test", signingCertificateSha256: "", recipientPublicKeyFingerprint: "", trustSource: "official_pinned_root", verificationState: "verified", missingStatusCaveat: false }),
+      acceptContactCard: async () => empty,
+      syncContacts: async () => empty,
+      openUrl: async () => {},
+      publish: () => {},
+      errorMessage: String,
+    });
+
+    await controller.handleEnroll();
+    expect(enrollDeviceCertificate).toHaveBeenCalledOnce();
+    expect(workspace.getSnapshot().lifecycleOperation).toBe("enrollCertificate");
+    expect(workspace.getSnapshot().lifecycleOutcome).toBe("approval_required");
+    expect(workspace.getSnapshot().lifecycleIncompleteReasons).toEqual(["device_approval_required"]);
+
+    await controller.handleRenew("certificate-1");
+    expect(renewCertificate).toHaveBeenCalledWith("certificate-1");
+    expect(workspace.getSnapshot().lifecycleOperation).toBe("renewCertificate");
+    expect(workspace.getSnapshot().lifecycleOutcome).toBe("incomplete");
+  });
+
   it("loads through injected APIs and never persists callback material", async () => {
     const workspace = createAccountWorkspace();
     const publish = vi.fn();
@@ -219,7 +275,11 @@ describe("account controller", () => {
         },
       ],
     };
-    const syncContacts = vi.fn(async () => syncedSnapshot);
+    const syncContacts = vi.fn(async () => ({
+      snapshot: syncedSnapshot,
+      lastSuccessfulSyncAt: 1_700_000_000,
+      counts: { imported: 1, updated: 2, removed: 3, rejected: 4, rejectedReasons: ["invalid_card"], statusRefreshFailed: 5 },
+    }));
     const controller = createAccountController({
       workspace,
       fetchSnapshot: async () => empty,
@@ -254,5 +314,7 @@ describe("account controller", () => {
     expect(syncContacts).toHaveBeenCalled();
     expect(workspace.getSnapshot().contacts).toHaveLength(1);
     expect(workspace.getSnapshot().contacts[0]?.phoneSourced).toBe(true);
+    expect(workspace.getSnapshot().lastContactSyncAt).toBe(1_700_000_000);
+    expect(workspace.getSnapshot().contactSyncCounts).toEqual({ imported: 1, updated: 2, removed: 3, rejected: 4, rejectedReasons: ["invalid_card"], statusRefreshFailed: 5 });
   });
 });

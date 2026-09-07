@@ -2,7 +2,12 @@
 
 use keyring::{Entry, Error as KeyringError};
 use serde_json::{Value, json};
-use zmanager_core::identity_catalog::{TzapSecretMaterialStore, TzapSecretPurpose, TzapSecretRef, TzapSecretStoreError};
+use std::path::PathBuf;
+use zmanager_core::identity_catalog::{
+    FileTzapIdentityCatalogStore, TzapIdentityCatalogStore, TzapSecretMaterialStore, TzapSecretPurpose, TzapSecretRef, TzapSecretStoreError,
+    load_inventory_from_catalog, store_inventory_as_catalog,
+};
+use zmanager_core::local_identity_store::{TzapLocalIdentityInventory, TzapLocalIdentityStore, TzapLocalIdentityStoreError};
 use zmanager_core::secrets::SecretBytes;
 use zmanager_core::trust::TzapIdentityAssurance;
 use zmanager_tzap_hosted::auth_client::{TzapAuthError, TzapBearerToken, TzapSessionRecord, TzapSessionStore};
@@ -12,6 +17,70 @@ const SERVICE_NAME: &str = "org.tzap.zmanager.identity";
 #[derive(Debug, Clone)]
 pub struct NativeTzapSecretStore {
     account_scope: String,
+}
+
+/// Desktop adapter for the shared lifecycle client. Public catalog metadata is
+/// persisted on disk, while all private key material is resolved through the
+/// native secure store.
+pub struct NativeTzapLocalIdentityStore {
+    root: PathBuf,
+    account_key: String,
+}
+
+impl NativeTzapLocalIdentityStore {
+    pub fn new(root: impl Into<PathBuf>, account_key: impl Into<String>) -> Result<Self, TzapLocalIdentityStoreError> {
+        let account_key = account_key.into();
+        NativeTzapSecretStore::new(account_key.clone())
+            .map_err(|error| TzapLocalIdentityStoreError::Catalog(Box::new(zmanager_core::identity_catalog::TzapIdentityCatalogError::Secret(error))))?;
+        Ok(Self { root: root.into(), account_key })
+    }
+
+    fn check_account_key(&self, account_key: &str) -> Result<(), TzapLocalIdentityStoreError> {
+        if account_key == self.account_key { Ok(()) } else { Err(TzapLocalIdentityStoreError::InvalidField { field: "account_key" }) }
+    }
+
+    fn secret_store(&self) -> Result<NativeTzapSecretStore, TzapLocalIdentityStoreError> {
+        NativeTzapSecretStore::new(self.account_key.clone())
+            .map_err(|error| TzapLocalIdentityStoreError::Catalog(Box::new(zmanager_core::identity_catalog::TzapIdentityCatalogError::Secret(error))))
+    }
+}
+
+impl TzapLocalIdentityStore for NativeTzapLocalIdentityStore {
+    fn load_inventory(&self, account_key: &str) -> Result<TzapLocalIdentityInventory, TzapLocalIdentityStoreError> {
+        self.check_account_key(account_key)?;
+        let catalog_store = FileTzapIdentityCatalogStore::new(&self.root);
+        let secret_store = self.secret_store()?;
+        Ok(load_inventory_from_catalog(&catalog_store, &secret_store, account_key)?.unwrap_or_else(TzapLocalIdentityInventory::empty))
+    }
+
+    fn save_inventory(&mut self, account_key: &str, inventory: TzapLocalIdentityInventory) -> Result<(), TzapLocalIdentityStoreError> {
+        self.check_account_key(account_key)?;
+        inventory.validate()?;
+        let mut catalog_store = FileTzapIdentityCatalogStore::new(&self.root);
+        let mut secret_store = self.secret_store()?;
+        store_inventory_as_catalog(&mut catalog_store, &mut secret_store, account_key, &inventory, current_unix_seconds())?;
+        Ok(())
+    }
+
+    fn clear_inventory(&mut self, account_key: &str) -> Result<(), TzapLocalIdentityStoreError> {
+        self.check_account_key(account_key)?;
+        let mut catalog_store = FileTzapIdentityCatalogStore::new(&self.root);
+        if let Some(catalog) = catalog_store.load_catalog(account_key)? {
+            let mut secret_store = self.secret_store()?;
+            for identity in &catalog.signing_identities {
+                secret_store.delete(TzapSecretPurpose::SigningKey, &identity.signing_key_ref).map_err(|error| {
+                    TzapLocalIdentityStoreError::Catalog(Box::new(zmanager_core::identity_catalog::TzapIdentityCatalogError::Secret(error)))
+                })?;
+            }
+            for key in &catalog.recipient_keys {
+                secret_store.delete(TzapSecretPurpose::RecipientKey, &key.private_key_ref).map_err(|error| {
+                    TzapLocalIdentityStoreError::Catalog(Box::new(zmanager_core::identity_catalog::TzapIdentityCatalogError::Secret(error)))
+                })?;
+            }
+        }
+        catalog_store.clear_catalog(account_key)?;
+        Ok(())
+    }
 }
 
 impl NativeTzapSecretStore {
@@ -115,6 +184,10 @@ fn map_keyring_error(error: KeyringError, reference: &TzapSecretRef) -> TzapSecr
         KeyringError::Invalid(_, _) | KeyringError::TooLong(_, _) => TzapSecretStoreError::Denied,
         _ => TzapSecretStoreError::Unavailable,
     }
+}
+
+fn current_unix_seconds() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |duration| duration.as_secs())
 }
 
 #[cfg(test)]

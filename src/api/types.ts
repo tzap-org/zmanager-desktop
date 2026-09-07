@@ -98,9 +98,11 @@ export type AccountCertificateDto = {
   certificateId: string;
   certificateSha256: string;
   label?: string | null;
+  identityType: "hosted" | "offline" | string;
   state: string;
   assuranceLevel: string;
   notAfterUnixSeconds: number;
+  renewalRecommended: boolean;
 };
 
 export type AccountRecipientKeyDto = {
@@ -115,6 +117,7 @@ export type AccountRecipientKeyDto = {
 export type AccountContactDto = {
   contactId: string;
   displayName: string;
+  publicSignerId?: string | null;
   signingCertificateSha256: string;
   recipientPublicKeyFingerprint: string;
   verificationState: string;
@@ -141,9 +144,29 @@ export type AccountSnapshotDto = {
   sessionExpiresAtUnixSeconds: number | null;
 };
 
+export type AccountLifecycleResultDto = {
+  snapshot: AccountSnapshotDto;
+  outcome: "complete" | "approval_required" | "device_linkage_pending" | "device_linkage_conflict" | "incomplete" | string;
+  attemptedDeviceIds: string[];
+  incompleteReasons: string[];
+};
+
+export type AccountContactSyncResultDto = {
+  snapshot: AccountSnapshotDto;
+  lastSuccessfulSyncAt: number;
+  counts: {
+    imported: number;
+    updated: number;
+    removed: number;
+    rejected: number;
+    rejectedReasons: string[];
+    statusRefreshFailed: number;
+  };
+};
+
 export type AccountCompleteHostedAuthRequest = {
   state: string;
-  relayBody: string;
+  handoffCode: string;
   callbackUrl?: string;
 };
 
@@ -419,6 +442,7 @@ export type StartCreateRequest = {
   password?: string;
   compressionLevel?: number;
   volumeSize?: number;
+  volumeCount?: number;
   tzapRecoveryPercentage?: number;
   tzapVolumeLossTolerance?: number;
   zipCompression?: "store" | "deflate";
@@ -589,10 +613,11 @@ export type VerifyTzapCertificateRequest = {
   trustedCaCertificatePaths: string[];
   trustedSystemRoots: boolean;
   includeOfficialTzapRoot: boolean;
+  checkCurrentStatus?: boolean;
 };
 
 export type VerifyTzapCertificateResponse = {
-  outcome: "signatureValid" | "trusted";
+  outcome: "signatureValid" | "trusted" | string;
   subject: string;
   issuer: string;
   serialNumberHex: string;
@@ -601,6 +626,17 @@ export type VerifyTzapCertificateResponse = {
   trustAnchorSubject?: string | null;
   verifiedChainSubjects: string[];
   diagnostics: string[];
+  verificationState?: string;
+  signatureCheck?: string;
+  trustCheck?: string;
+  certificateTime?: string;
+  statusCheck?: string;
+  statusReason?: string | null;
+  statusThisUpdateUnixSeconds?: number | null;
+  statusNextUpdateUnixSeconds?: number | null;
+  statusRevokedAtUnixSeconds?: number | null;
+  statusRevocationReason?: string | null;
+  statusRevocationCategory?: string | null;
 };
 
 export type CancelJobRequest = {

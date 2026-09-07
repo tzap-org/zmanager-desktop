@@ -35,14 +35,19 @@ use crate::{
     quick_action::QuickActionLaunchCoordinator,
 };
 use zmanager_core::archive_browser::{self, BrowserExtractOptions, BrowserListOptions};
+use zmanager_core::engine::tzap::{
+    TzapArchiveSignatureCheck, TzapArchiveStatusCheck, TzapArchiveTimeCheck, TzapArchiveTrustCheck, TzapArchiveVerification, TzapArchiveVerificationOutcome,
+};
 use zmanager_core::engine::{
     AppleArchiveCreateOptions, CreateOptions, SevenZCreateOptions, TarGzCreateOptions, TarZstdCreateOptions, TzapCreateOptions, TzapKeySource,
-    TzapRestoreOptions, TzapRestorePolicy, TzapX509TrustOptions, ZipCompression, ZipCreateOptions, is_tzap_archive_path,
+    TzapRestoreOptions, TzapRestorePolicy, ZipCompression, ZipCreateOptions, is_tzap_archive_path,
 };
 use zmanager_core::jobs::{CancellationToken, JobEvent, JobEventSink};
 use zmanager_core::manifest::{ManifestFileType, PlanError, PlanOptions, plan_archives};
 use zmanager_core::safety::{ExtractionPolicy, OverwritePolicy, UnsafeFilePolicy};
 use zmanager_core::secrets::SecretString;
+use zmanager_tzap_hosted::auth_client::SIGN_TZAP_BASE_URL;
+use zmanager_tzap_hosted::status_client::{TzapArchiveStatusTarget, TzapStatusClient, TzapStatusResponse, compose_tzap_archive_verification_with_status};
 
 #[tauri::command]
 pub fn healthcheck() -> crate::dto::HealthcheckResponse {
@@ -433,6 +438,8 @@ fn start_create_internal_with_resolver(
     };
 
     let password = request.password.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned);
+    let requested_volume_size = request.volume_size.filter(|value| *value > 0);
+    let requested_volume_count = request.volume_count.filter(|value| *value > 1);
     if let Some(certificates) = request.tzap_certificates.as_ref() {
         let has_recipient_selection = certificates.recipient_selection.as_ref().is_some_and(|selection| {
             !selection.recipient_key_ids.is_empty() || !selection.contact_recipient_ids.is_empty() || !selection.one_time_certificate_paths.is_empty()
@@ -440,11 +447,27 @@ fn start_create_internal_with_resolver(
         if has_recipient_selection && password.is_some() {
             return Err(CommandErrorDto::invalid_request("TZAP recipient encryption cannot be combined with a password"));
         }
+        if has_recipient_selection
+            && (requested_volume_size.is_some() || requested_volume_count.is_some() || request.tzap_volume_loss_tolerance.unwrap_or(0) > 0)
+        {
+            return Err(CommandErrorDto::invalid_request("TZAP recipient encryption cannot be split or use volume-loss tolerance"));
+        }
         if let Some(crate::dto::TzapSigningSelectionDto::OneTimeCertificateAndKey { certificate_path, private_key_path, .. }) =
             certificates.signing_selection.as_ref()
             && (certificate_path.trim().is_empty() || private_key_path.trim().is_empty())
         {
             return Err(CommandErrorDto::invalid_request("TZAP signing requires both a certificate and a matching private key"));
+        }
+    }
+    if request.format != crate::dto::ArchiveFormatDto::Tzap && requested_volume_count.is_some() {
+        return Err(CommandErrorDto::invalid_request("volumeCount is supported only for TZAP archives"));
+    }
+    if requested_volume_size.is_some() && requested_volume_count.is_some() {
+        return Err(CommandErrorDto::invalid_request("volumeSize and volumeCount are mutually exclusive"));
+    }
+    if let Some(count) = requested_volume_count {
+        if u32::from(request.tzap_volume_loss_tolerance.unwrap_or(0)) >= count {
+            return Err(CommandErrorDto::invalid_request("volume-loss tolerance must be less than volumeCount"));
         }
     }
 
@@ -497,9 +520,10 @@ fn start_create_internal_with_resolver(
     let replace_existing = request.replace_existing;
     let preserve_metadata = request.preserve_metadata;
     let compression_level = request.compression_level;
-    let volume_size = request.volume_size.filter(|value| *value > 0);
+    let volume_size = requested_volume_size;
+    let volume_count = requested_volume_count;
     let tzap_recovery_percentage = request.tzap_recovery_percentage.unwrap_or(5).min(100);
-    let tzap_volume_loss_tolerance = if volume_size.is_some() { request.tzap_volume_loss_tolerance.unwrap_or(0).min(16) } else { 0 };
+    let tzap_volume_loss_tolerance = if volume_size.is_some() || volume_count.is_some() { request.tzap_volume_loss_tolerance.unwrap_or(0).min(16) } else { 0 };
     let zip_compression = request.zip_compression;
     let seven_z_solid = request.seven_z_solid.unwrap_or(true);
     let seven_z_threads = request.seven_z_threads.filter(|value| *value > 0);
@@ -592,7 +616,7 @@ fn start_create_internal_with_resolver(
                         preserve_metadata,
                         replace_existing,
                         volume_size,
-                        volume_count: None,
+                        volume_count,
                         recovery_percentage: tzap_recovery_percentage,
                         volume_loss_tolerance: tzap_volume_loss_tolerance,
                         x509_signing,
@@ -727,6 +751,89 @@ fn map_identity_error(error: openssl::error::ErrorStack) -> CommandErrorDto {
     CommandErrorDto::new("certificate_error", format!("Unable to create signing identity: {error}"), None::<String>, ErrorSeverityDto::Error, false)
 }
 
+fn archive_signature_check_label(check: TzapArchiveSignatureCheck) -> &'static str {
+    match check {
+        TzapArchiveSignatureCheck::Ok => "ok",
+        TzapArchiveSignatureCheck::Absent => "absent",
+        TzapArchiveSignatureCheck::Invalid => "invalid",
+        TzapArchiveSignatureCheck::UnsupportedProfile => "unsupported_profile",
+        TzapArchiveSignatureCheck::VolumesIncomplete => "volumes_incomplete",
+    }
+}
+
+fn archive_trust_check_label(check: TzapArchiveTrustCheck) -> &'static str {
+    match check {
+        TzapArchiveTrustCheck::ProductionRoot => "production_root",
+        TzapArchiveTrustCheck::StagingRoot => "staging_root",
+        TzapArchiveTrustCheck::Untrusted => "untrusted",
+    }
+}
+
+fn archive_time_check_label(check: TzapArchiveTimeCheck) -> &'static str {
+    match check {
+        TzapArchiveTimeCheck::ValidAtSigning => "valid_at_signing",
+        TzapArchiveTimeCheck::ExpiredSinceSigning => "expired_since_signing",
+        TzapArchiveTimeCheck::ExpiredAtSigning => "expired_at_signing",
+    }
+}
+
+fn archive_status_check_label(check: &TzapArchiveStatusCheck) -> (&'static str, Option<String>) {
+    match check {
+        TzapArchiveStatusCheck::FreshValid => ("fresh_valid", None),
+        TzapArchiveStatusCheck::BeforeRevocation { revoked_at_unix_seconds, reason } => {
+            ("signed_before_renewal", reason.clone().or_else(|| Some(revoked_at_unix_seconds.to_string())))
+        }
+        TzapArchiveStatusCheck::Revoked { reason, .. } => ("revoked", reason.clone()),
+        TzapArchiveStatusCheck::Suspended => ("suspended", None),
+        TzapArchiveStatusCheck::Unavailable { reason } => ("status_unavailable", reason.clone()),
+    }
+}
+
+fn archive_verification_state(verification: &TzapArchiveVerification) -> &'static str {
+    match (&verification.outcome, &verification.status) {
+        (TzapArchiveVerificationOutcome::Verified, _) => "fresh_valid",
+        (TzapArchiveVerificationOutcome::VerifiedWithCaveat, TzapArchiveStatusCheck::BeforeRevocation { .. }) => "signed_before_renewal",
+        (TzapArchiveVerificationOutcome::VerifiedWithCaveat, TzapArchiveStatusCheck::Unavailable { reason: None }) => "cryptographically_intact_offline",
+        (TzapArchiveVerificationOutcome::VerifiedWithCaveat, TzapArchiveStatusCheck::Unavailable { reason: Some(_) }) => "status_unavailable",
+        (TzapArchiveVerificationOutcome::VerifiedWithCaveat, _) => "verified_with_caveat",
+        (TzapArchiveVerificationOutcome::NotSigned, _) => "not_signed",
+        (TzapArchiveVerificationOutcome::Unverifiable, _) => "unverifiable",
+        (TzapArchiveVerificationOutcome::Failed, _) => "invalid",
+    }
+}
+
+fn archive_verification_response(
+    verification: TzapArchiveVerification,
+    status_response: Option<&TzapStatusResponse>,
+) -> crate::dto::VerifyTzapCertificateResponse {
+    let verification_state = archive_verification_state(&verification).to_owned();
+    let headline = verification.headline_label().to_owned();
+    let (status_check, status_reason) = archive_status_check_label(&verification.status);
+    let signer = verification.signer;
+    crate::dto::VerifyTzapCertificateResponse {
+        outcome: verification_state.clone(),
+        subject: signer.as_ref().map_or_else(String::new, |signer| signer.subject.clone()),
+        issuer: signer.as_ref().map_or_else(String::new, |signer| signer.issuer.clone()),
+        serial_number_hex: signer.as_ref().map_or_else(String::new, |signer| signer.serial_number_hex.clone()),
+        certificate_sha256: signer.as_ref().map_or_else(String::new, |signer| signer.certificate_sha256_hex.clone()),
+        signed_at_unix_seconds: signer.as_ref().map_or(0, |signer| signer.signed_at_unix_seconds),
+        trust_anchor_subject: None,
+        verified_chain_subjects: Vec::new(),
+        diagnostics: vec![headline],
+        verification_state,
+        signature_check: archive_signature_check_label(verification.signature).to_owned(),
+        trust_check: archive_trust_check_label(verification.trust).to_owned(),
+        certificate_time: archive_time_check_label(verification.certificate_time).to_owned(),
+        status_check: status_check.to_owned(),
+        status_reason,
+        status_this_update_unix_seconds: status_response.and_then(|status| status.this_update_unix_seconds),
+        status_next_update_unix_seconds: status_response.and_then(|status| status.next_update_unix_seconds),
+        status_revoked_at_unix_seconds: status_response.and_then(|status| status.revoked_at_unix_seconds),
+        status_revocation_reason: status_response.and_then(|status| status.revocation_reason.clone()),
+        status_revocation_category: status_response.and_then(|status| status.revocation_category.clone()),
+    }
+}
+
 #[tauri::command]
 pub fn verify_tzap_certificate(request: crate::dto::VerifyTzapCertificateRequest) -> Result<crate::dto::VerifyTzapCertificateResponse, CommandErrorDto> {
     let archive_path = ensure_non_empty_path(request.archive_path, "archivePath")?;
@@ -734,41 +841,62 @@ pub fn verify_tzap_certificate(request: crate::dto::VerifyTzapCertificateRequest
         return Err(CommandErrorDto::invalid_request("certificate verification is available only for TZAP archives"));
     }
 
-    if request.validate_trust {
-        let trust = TzapX509TrustOptions {
+    if request.check_current_status {
+        let trust = zmanager_core::engine::tzap::TzapX509TrustOptions {
             trusted_ca_certificates: request.trusted_ca_certificate_paths.iter().map(PathBuf::from).collect(),
             trusted_system_roots: request.trusted_system_roots,
-            include_official_tzap_root: request.include_official_tzap_root,
+            // Current status is an explicit online enhancement, but it must
+            // remain usable from the default offline verification surface.
+            // The bundled official root is the fallback when the user has not
+            // selected a custom/system trust source.
+            include_official_tzap_root: request.include_official_tzap_root || !request.validate_trust,
         };
-        if !trust.has_trust_source() {
-            return Err(CommandErrorDto::invalid_request("trust validation requires the official TZAP root, a custom CA, or system roots"));
-        }
-        let report = zmanager_core::engine::verify_tzap_x509_public_no_key(&archive_path, &trust).map_err(crate::platform::archive_error::map_engine_error)?;
-        return Ok(crate::dto::VerifyTzapCertificateResponse {
-            outcome: "trusted",
-            subject: report.subject,
-            issuer: report.issuer,
-            serial_number_hex: report.serial_number_hex,
-            certificate_sha256: hex_bytes(&report.certificate_sha256),
-            signed_at_unix_seconds: report.signed_at_unix_seconds,
-            trust_anchor_subject: report.trust_anchor_subject,
-            verified_chain_subjects: report.verified_chain_subjects,
-            diagnostics: report.diagnostics,
-        });
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+        let offline = zmanager_core::engine::tzap::verify_tzap_archive_public_no_key(&archive_path, &trust, now)
+            .map_err(|error| CommandErrorDto::operation_failed(error.to_string()))?;
+        let mut status_response = None;
+        let verification = if let Some(signer) = &offline.signer {
+            let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|error| CommandErrorDto::operation_failed(error))?;
+            let status_client = TzapStatusClient::new(SIGN_TZAP_BASE_URL, &transport);
+            match status_client.status_by_fingerprint(&signer.certificate_sha256_hex) {
+                Ok(status) => {
+                    let composed = TzapArchiveStatusTarget::from_leaf_certificate_der(&signer.leaf_certificate_der, None)
+                        .map(|target| compose_tzap_archive_verification_with_status(offline.clone(), &target, &status, now))
+                        .unwrap_or_else(|_| offline.clone());
+                    status_response = Some(status);
+                    composed
+                }
+                Err(_) => TzapArchiveVerification::new(
+                    offline.signature,
+                    offline.trust,
+                    offline.certificate_time,
+                    TzapArchiveStatusCheck::Unavailable { reason: Some("status request unavailable".to_owned()) },
+                    offline.signer,
+                    offline.signer_is_this_device,
+                ),
+            }
+        } else {
+            offline
+        };
+        return Ok(archive_verification_response(verification, status_response.as_ref()));
     }
 
-    let inspection = zmanager_core::engine::inspect_tzap_x509_public_no_key_signer(&archive_path).map_err(crate::platform::archive_error::map_engine_error)?;
-    Ok(crate::dto::VerifyTzapCertificateResponse {
-        outcome: "signatureValid",
-        subject: inspection.subject,
-        issuer: inspection.issuer,
-        serial_number_hex: inspection.serial_number_hex,
-        certificate_sha256: hex_bytes(&inspection.certificate_sha256),
-        signed_at_unix_seconds: inspection.signed_at_unix_seconds,
-        trust_anchor_subject: None,
-        verified_chain_subjects: Vec::new(),
-        diagnostics: inspection.diagnostics,
-    })
+    let trust = zmanager_core::engine::tzap::TzapX509TrustOptions {
+        trusted_ca_certificates: request.trusted_ca_certificate_paths.iter().map(PathBuf::from).collect(),
+        trusted_system_roots: request.trusted_system_roots,
+        // The default verification action is an offline TZAP verification, so
+        // it must still validate archive integrity, certificate time, chain,
+        // and the embedded official roots. Custom/system trust remains an
+        // explicit opt-in through the existing request fields.
+        include_official_tzap_root: request.include_official_tzap_root || !request.validate_trust,
+    };
+    if request.validate_trust && !trust.has_trust_source() {
+        return Err(CommandErrorDto::invalid_request("trust validation requires the official TZAP root, a custom CA, or system roots"));
+    }
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+    let offline = zmanager_core::engine::tzap::verify_tzap_archive_public_no_key(&archive_path, &trust, now)
+        .map_err(|error| CommandErrorDto::operation_failed(error.to_string()))?;
+    Ok(archive_verification_response(offline, None))
 }
 
 fn hex_bytes(bytes: &[u8]) -> String {
@@ -1913,6 +2041,102 @@ mod tests {
         assert_eq!(ensure_task_job_owner("main", "42").expect_err("Main Window must not control a Job").code, constants::COMMAND_ERROR_INVALID_REQUEST,);
         assert!(ensure_task_job_owner("task-41", "42").is_err());
     }
+
+    #[test]
+    fn archive_verification_response_preserves_online_status_outcomes() {
+        let before_renewal = archive_verification_response(
+            TzapArchiveVerification::new(
+                TzapArchiveSignatureCheck::Ok,
+                TzapArchiveTrustCheck::ProductionRoot,
+                TzapArchiveTimeCheck::ValidAtSigning,
+                TzapArchiveStatusCheck::BeforeRevocation { revoked_at_unix_seconds: 123, reason: Some("supersession".to_owned()) },
+                None,
+                false,
+            ),
+            None,
+        );
+        assert_eq!(before_renewal.outcome, "signed_before_renewal");
+        assert_eq!(before_renewal.status_check, "signed_before_renewal");
+        assert_eq!(before_renewal.status_reason.as_deref(), Some("supersession"));
+
+        let status = TzapStatusResponse {
+            status: zmanager_core::trust::TzapCertificateStatus::Revoked,
+            certificate_sha256: Some("sha256:certificate".to_owned()),
+            issuer_certificate_sha256: Some("sha256:issuer".to_owned()),
+            issuer_key_identifier: Some("key-id".to_owned()),
+            serial_number: Some("01".to_owned()),
+            not_before_unix_seconds: Some(1),
+            not_after_unix_seconds: Some(2),
+            this_update_unix_seconds: Some(100),
+            next_update_unix_seconds: Some(200),
+            revoked_at_unix_seconds: Some(150),
+            revocation_reason: Some("renewed".to_owned()),
+            revocation_category: Some("supersession".to_owned()),
+            query: Default::default(),
+        };
+        let enriched = archive_verification_response(
+            TzapArchiveVerification::new(
+                TzapArchiveSignatureCheck::Ok,
+                TzapArchiveTrustCheck::ProductionRoot,
+                TzapArchiveTimeCheck::ValidAtSigning,
+                TzapArchiveStatusCheck::FreshValid,
+                None,
+                false,
+            ),
+            Some(&status),
+        );
+        assert_eq!(enriched.status_this_update_unix_seconds, Some(100));
+        assert_eq!(enriched.status_next_update_unix_seconds, Some(200));
+        assert_eq!(enriched.status_revoked_at_unix_seconds, Some(150));
+        assert_eq!(enriched.status_revocation_reason.as_deref(), Some("renewed"));
+        assert_eq!(enriched.status_revocation_category.as_deref(), Some("supersession"));
+
+        let unavailable = archive_verification_response(
+            TzapArchiveVerification::new(
+                TzapArchiveSignatureCheck::Ok,
+                TzapArchiveTrustCheck::ProductionRoot,
+                TzapArchiveTimeCheck::ValidAtSigning,
+                TzapArchiveStatusCheck::Unavailable { reason: Some("network".to_owned()) },
+                None,
+                false,
+            ),
+            None,
+        );
+        assert_eq!(unavailable.outcome, "status_unavailable");
+        assert_eq!(unavailable.status_reason.as_deref(), Some("network"));
+
+        let offline = archive_verification_response(
+            TzapArchiveVerification::new(
+                TzapArchiveSignatureCheck::Ok,
+                TzapArchiveTrustCheck::ProductionRoot,
+                TzapArchiveTimeCheck::ValidAtSigning,
+                TzapArchiveStatusCheck::Unavailable { reason: None },
+                None,
+                false,
+            ),
+            None,
+        );
+        assert_eq!(offline.outcome, "cryptographically_intact_offline");
+        assert_eq!(offline.status_check, "status_unavailable");
+    }
+
+    #[test]
+    fn verify_tzap_certificate_defaults_to_offline_without_account_session() {
+        let archive_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../zmanager/fixtures/archives/basic.tzap");
+        assert!(archive_path.exists(), "shared TZAP fixture is required for the offline verification contract test");
+        let result = verify_tzap_certificate(crate::dto::VerifyTzapCertificateRequest {
+            archive_path: archive_path.to_string_lossy().into_owned(),
+            validate_trust: false,
+            trusted_ca_certificate_paths: Vec::new(),
+            trusted_system_roots: false,
+            include_official_tzap_root: false,
+            check_current_status: false,
+        })
+        .unwrap();
+        assert_eq!(result.status_check, "status_unavailable");
+        assert_ne!(result.status_reason.as_deref(), Some("network"));
+    }
+
     use std::env;
     use std::ffi::OsString;
     use std::fs;
@@ -2477,6 +2701,7 @@ mod tests {
                 password: None,
                 compression_level: None,
                 volume_size: None,
+                volume_count: None,
                 tzap_recovery_percentage: None,
                 tzap_volume_loss_tolerance: None,
                 zip_compression: None,
@@ -2564,6 +2789,7 @@ mod tests {
                 password: None,
                 compression_level: None,
                 volume_size: None,
+                volume_count: None,
                 tzap_recovery_percentage: None,
                 tzap_volume_loss_tolerance: None,
                 zip_compression: None,
@@ -2633,6 +2859,7 @@ mod tests {
                 password: Some("smoke-secret".to_string()),
                 compression_level: None,
                 volume_size: None,
+                volume_count: None,
                 tzap_recovery_percentage: None,
                 tzap_volume_loss_tolerance: None,
                 zip_compression: None,
@@ -2772,6 +2999,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -2820,6 +3048,7 @@ mod tests {
                 password: None,
                 compression_level: None,
                 volume_size: None,
+                volume_count: None,
                 tzap_recovery_percentage: None,
                 tzap_volume_loss_tolerance: None,
                 zip_compression: None,
@@ -2869,6 +3098,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -2925,6 +3155,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -2974,6 +3205,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -3037,6 +3269,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: Some(0),
+            volume_count: None,
             tzap_recovery_percentage: Some(0),
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -3054,6 +3287,53 @@ mod tests {
 
         assert_eq!(create_poll.status, JobStatusDto::Completed);
         assert!(destination.is_file());
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn command_boundary_start_tzap_create_passes_exact_volume_count() {
+        let workspace = create_temp_workspace("start-create-tzap-volume-count");
+        let sources = workspace.join("sources");
+        let destination = workspace.join("created.tzap");
+        fs::create_dir_all(&sources).expect("source directory should exist");
+        fs::write(sources.join("one.bin"), vec![b'a'; 512 * 1024]).expect("fixture should write");
+
+        let registry = crate::job_registry::JobRegistry::new();
+        let create_request = StartCreateRequest {
+            sources: vec![sources.to_string_lossy().to_string()],
+            destination_path: destination.to_string_lossy().to_string(),
+            format: crate::dto::ArchiveFormatDto::Tzap,
+            clean_source: false,
+            exclude_names: None,
+            exclude_archive_paths: None,
+            include_archive_paths: None,
+            respect_gitignore: false,
+            follow_symlinks: false,
+            replace_existing: true,
+            destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
+            password: None,
+            compression_level: Some(1),
+            volume_size: None,
+            volume_count: Some(3),
+            tzap_recovery_percentage: Some(0),
+            tzap_volume_loss_tolerance: Some(0),
+            zip_compression: None,
+            seven_z_solid: None,
+            seven_z_threads: None,
+            seven_z_chunk_size: None,
+            seven_z_encrypt_file_names: None,
+            tzap_certificates: None,
+            tzap_bootstrap_sidecar: None,
+            preserve_metadata: false,
+        };
+
+        let create_job = start_create_internal(create_request, &registry).expect("exact-count create should start a job");
+        let (create_poll, _) = wait_for_job_terminal(&registry, &create_job.job_id);
+
+        assert_eq!(create_poll.status, JobStatusDto::Completed);
+        for index in 0..3 {
+            assert!(workspace.join(format!("created.vol{index:03}.tzap")).is_file(), "volume {index} should exist");
+        }
         let _ = fs::remove_dir_all(&workspace);
     }
 
@@ -3081,6 +3361,7 @@ mod tests {
                 password: None,
                 compression_level: None,
                 volume_size: None,
+                volume_count: None,
                 tzap_recovery_percentage: None,
                 tzap_volume_loss_tolerance: None,
                 zip_compression: None,
@@ -3133,6 +3414,7 @@ mod tests {
                 password: Some("must-not-be-used-with-recipients".to_owned()),
                 compression_level: None,
                 volume_size: None,
+                volume_count: None,
                 tzap_recovery_percentage: None,
                 tzap_volume_loss_tolerance: None,
                 zip_compression: None,
@@ -3186,6 +3468,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -3257,6 +3540,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -3326,6 +3610,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -3413,6 +3698,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -3501,6 +3787,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -3551,6 +3838,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -3733,6 +4021,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -3779,6 +4068,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -3825,6 +4115,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -3880,6 +4171,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -3927,6 +4219,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -3991,6 +4284,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -4062,6 +4356,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -4145,6 +4440,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -4185,6 +4481,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -4257,6 +4554,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,
@@ -4550,6 +4848,7 @@ mod tests {
             password: None,
             compression_level: None,
             volume_size: None,
+            volume_count: None,
             tzap_recovery_percentage: None,
             tzap_volume_loss_tolerance: None,
             zip_compression: None,

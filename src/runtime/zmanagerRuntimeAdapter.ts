@@ -298,6 +298,9 @@ import {
   inspectAccountContactCard,
   acceptAccountContactCard,
   syncAccountContacts,
+  enrollAccountCertificate,
+  renewAccountCertificate,
+  retireAccountDevice,
   removeAccountRecipientKey,
   setDefaultAccountSigningIdentity,
   runLocalSendRespondToTransfer,
@@ -1224,13 +1227,13 @@ const accountController = createAccountController({
   fetchSnapshot: fetchAccountSnapshot,
   beginHostedAuth: beginAccountHostedAuth,
   applyHostedCallback: applyAccountHostedCallback,
-  completeHostedAuth: (state, relayBody, callbackUrl) => completeAccountHostedAuth({ state, relayBody, callbackUrl }),
+  completeHostedAuth: (state, handoffCode, callbackUrl) => completeAccountHostedAuth({ state, handoffCode, callbackUrl }),
   fetchCurrentUser: fetchAccountCurrentUser,
-  enrollDeviceCertificate: () => Promise.reject(new Error("Not implemented yet")),
-  renewCertificate: () => Promise.reject(new Error("Not implemented yet")),
+  enrollDeviceCertificate: enrollAccountCertificate,
+  renewCertificate: renewAccountCertificate,
   revokeCertificate: () => Promise.reject(new Error("Not implemented yet")),
   exportContactCard: () => Promise.reject(new Error("Not implemented yet")),
-  retireDevice: () => Promise.reject(new Error("Not implemented yet")),
+  retireDevice: retireAccountDevice,
   forget: forgetAccount,
   generateRecipientKey: generateAccountRecipientKey,
   generateSigningIdentity: (commonName, label) => generateAccountSigningIdentity({ commonName, label }),
@@ -2213,6 +2216,8 @@ function handleReactAccountIntent(intent: ZManagerAccountIntent) {
       break;
     }
     case "exportContactCard": void accountController.handleExportContactCard(); break;
+    case "enrollCertificate": void accountController.handleEnroll(); break;
+    case "renewCertificate": void accountController.handleRenew(intent.certificateId); break;
     case "retireDevice": void accountController.handleDeviceRetire(); break;
     case "syncContacts": void accountController.syncContacts(); break;
   }
@@ -4397,6 +4402,7 @@ async function verifyCurrentTzapCertificate() {
       trustedCaCertificatePaths: [...verification.trustedCaCertificatePaths],
       trustedSystemRoots: verification.trustedSystemRoots,
       includeOfficialTzapRoot: verification.includeOfficialTzapRoot,
+      checkCurrentStatus: verification.checkCurrentStatus,
     });
     extractWorkspace.acceptTzapVerification(result);
   } catch (error) {

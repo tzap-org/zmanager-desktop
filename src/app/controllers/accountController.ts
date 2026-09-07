@@ -2,7 +2,9 @@ import type { NativeInboundHostedAuthEvent } from "../../api/generated/nativeInb
 import type {
   AccountContactCardPreviewDto,
   AccountHostedAuthLaunchDto,
+  AccountContactSyncResultDto,
   AccountInstallSigningCertificateRequest,
+  AccountLifecycleResultDto,
   AccountSnapshotDto,
   AccountCurrentUserDto,
 } from "../../api/types";
@@ -15,13 +17,13 @@ export type AccountControllerOptions = Readonly<{
   fetchSnapshot(): Promise<AccountSnapshotDto>;
   beginHostedAuth(environment: string): Promise<AccountHostedAuthLaunchDto>;
   applyHostedCallback(payload: NativeInboundHostedAuthEvent["payload"]): Promise<void>;
-  completeHostedAuth(state: string, relayBody: string, callbackUrl?: string): Promise<AccountSnapshotDto>;
+  completeHostedAuth(state: string, handoffCode: string, callbackUrl?: string): Promise<AccountSnapshotDto>;
   fetchCurrentUser(): Promise<AccountCurrentUserDto>;
-  enrollDeviceCertificate(): Promise<AccountSnapshotDto>;
-  renewCertificate(certificateId: string): Promise<AccountSnapshotDto>;
+  enrollDeviceCertificate(): Promise<AccountSnapshotDto | AccountLifecycleResultDto>;
+  renewCertificate(certificateId: string): Promise<AccountSnapshotDto | AccountLifecycleResultDto>;
   revokeCertificate(certificateId: string): Promise<AccountSnapshotDto>;
   exportContactCard(): Promise<void>;
-  retireDevice(): Promise<AccountSnapshotDto>;
+  retireDevice(): Promise<AccountSnapshotDto | AccountLifecycleResultDto>;
   forget(): Promise<AccountSnapshotDto>;
   generateRecipientKey(label?: string): Promise<AccountSnapshotDto>;
   generateSigningIdentity(commonName: string, label?: string): Promise<AccountSnapshotDto>;
@@ -34,7 +36,7 @@ export type AccountControllerOptions = Readonly<{
   removeContact(id: string): Promise<AccountSnapshotDto>;
   inspectContactCard(contactCard: Record<string, unknown>): Promise<AccountContactCardPreviewDto>;
   acceptContactCard(contactCard: Record<string, unknown>): Promise<AccountSnapshotDto>;
-  syncContacts(): Promise<AccountSnapshotDto>;
+  syncContacts(): Promise<AccountSnapshotDto | AccountContactSyncResultDto>;
   openUrl(url: string): Promise<void>;
   publish(): void;
   errorMessage(error: unknown): string;
@@ -43,14 +45,50 @@ export type AccountControllerOptions = Readonly<{
 
 export type AccountController = ReturnType<typeof createAccountController>;
 
+type AccountMutationResult = AccountSnapshotDto | AccountLifecycleResultDto | AccountContactSyncResultDto;
+
+function isResultWithSnapshot(result: AccountMutationResult): result is AccountLifecycleResultDto | AccountContactSyncResultDto {
+  return "snapshot" in result;
+}
+
+function isLifecycleResult(result: AccountMutationResult): result is AccountLifecycleResultDto {
+  return "snapshot" in result && "outcome" in result;
+}
+
+function isContactSyncResult(result: AccountMutationResult): result is AccountContactSyncResultDto {
+  return "snapshot" in result && "counts" in result;
+}
+
+function resultNotice(result: AccountLifecycleResultDto | AccountContactSyncResultDto): string {
+  if ("counts" in result) {
+    const { imported, updated, removed, rejected, statusRefreshFailed } = result.counts;
+    return `Contacts synced: ${imported} imported, ${updated} updated, ${removed} removed, ${rejected} rejected${statusRefreshFailed ? `, ${statusRefreshFailed} status checks unavailable` : ""}.`;
+  }
+  switch (result.outcome) {
+    case "complete": return "Account operation completed.";
+    case "approval_required": return "The operation is waiting for device approval.";
+    case "device_linkage_pending": return "Device linkage is pending.";
+    case "device_linkage_conflict": return "Device linkage needs account attention.";
+    case "incomplete": return "The operation is incomplete; review the affected devices.";
+    default: return `Account operation: ${result.outcome}.`;
+  }
+}
+
 export function createAccountController(options: AccountControllerOptions) {
-  async function run(operation: () => Promise<AccountSnapshotDto>, actionName = "operation"): Promise<void> {
+  async function run(operation: () => Promise<AccountMutationResult>, actionName = "operation"): Promise<void> {
     const startMs = Date.now();
     options.workspace.setBusy(true);
     options.publish();
     try {
-      options.workspace.replace(await operation());
-      options.workspace.setNotice("");
+      const result = await operation();
+      options.workspace.replace(isResultWithSnapshot(result) ? result.snapshot : result);
+      options.workspace.setNotice(isResultWithSnapshot(result) ? resultNotice(result) : "");
+      if (isLifecycleResult(result)) {
+        options.workspace.setLifecycleResult(actionName, result.outcome, result.incompleteReasons);
+      } else {
+        options.workspace.clearLifecycleResult();
+      }
+      if (isContactSyncResult(result)) options.workspace.setContactSyncResult(result);
       options.diagnostics?.record({
         scope: "account",
         name: `${actionName}Completed`,
@@ -98,9 +136,9 @@ export function createAccountController(options: AccountControllerOptions) {
     async handleHostedCallback(payload: NativeInboundHostedAuthEvent["payload"]) {
       options.workspace.setBusy(true); options.publish();
       try {
-        if (payload.result === "completed" && payload.relayBody) {
+        if (payload.result === "completed" && payload.handoffCode) {
           options.workspace.replace(
-            await options.completeHostedAuth(payload.state, payload.relayBody, payload.callbackUrl)
+            await options.completeHostedAuth(payload.state, payload.handoffCode, payload.callbackUrl)
           );
           options.workspace.setNotice("Hosted sign-in completed.");
         } else {
@@ -126,14 +164,14 @@ export function createAccountController(options: AccountControllerOptions) {
         }
       } finally { options.workspace.setBusy(false); options.publish(); }
     },
-    handleEnroll: () => run(options.enrollDeviceCertificate),
-    handleRenew: (certificateId: string) => run(() => options.renewCertificate(certificateId)),
+    handleEnroll: () => run(options.enrollDeviceCertificate, "enrollCertificate"),
+    handleRenew: (certificateId: string) => run(() => options.renewCertificate(certificateId), "renewCertificate"),
     handleRevoke: (certificateId: string) => run(() => options.revokeCertificate(certificateId)),
     async handleExportContactCard() {
       options.workspace.setBusy(true); options.publish();
       try { await options.exportContactCard(); } catch (error) { options.workspace.setNotice(options.errorMessage(error)); } finally { options.workspace.setBusy(false); options.publish(); }
     },
-    handleDeviceRetire: () => run(options.retireDevice),
+    handleDeviceRetire: () => run(options.retireDevice, "retireDevice"),
     forget: () => run(options.forget),
     generateRecipientKey: (label?: string) => run(() => options.generateRecipientKey(label)),
     generateSigningIdentity: (commonName: string, label?: string) => run(() => options.generateSigningIdentity(commonName, label)),

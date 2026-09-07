@@ -182,7 +182,9 @@ describe("create workspace source state", () => {
         replaceExisting: false,
         preserveMetadata: true,
         compressionLevel: null,
+        splitMode: "none",
         volumeSize: null,
+        volumeCount: null,
         tzapRecoveryPercentage: 5,
         tzapVolumeLossTolerance: 0,
         zipCompression: "deflate",
@@ -1408,6 +1410,34 @@ describe("create workspace option and readiness state", () => {
       volumeSize: null,
       tzapVolumeLossTolerance: 0,
     });
+  });
+
+  it("keeps exact-count TZAP splitting mutually exclusive with size splitting", () => {
+    const workspace = readyWorkspace(createPlan());
+    workspace.changeFormat("tzap", formatDefaults());
+    workspace.setDestinationPath("C:/out/project.tzap");
+
+    workspace.setOptions({ splitMode: "volumeCount" });
+    expect(workspace.getSnapshot().options).toMatchObject({
+      splitMode: "volumeCount",
+      volumeSize: null,
+      volumeCount: null,
+    });
+
+    workspace.setOptions({ volumeCount: "4", tzapVolumeLossTolerance: 2 });
+    expect(workspace.getSnapshot().options).toMatchObject({
+      splitMode: "volumeCount",
+      volumeSize: null,
+      volumeCount: 4,
+      tzapVolumeLossTolerance: 2,
+    });
+
+    const result = workspace.buildStartCreateRequest();
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.request.volumeCount).toBe(4);
+      expect(result.request).not.toHaveProperty("volumeSize");
+    }
   });
 
   it("derives readiness reasons through plan, inclusion, destination, and submission states", () => {

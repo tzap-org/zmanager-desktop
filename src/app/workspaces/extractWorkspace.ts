@@ -1,16 +1,40 @@
 import type { ExtractMode, ExtractOverwritePolicy, ExtractPathMode, ExtractStartInput, TzapRestorePolicy } from "../extractFlow";
 import type { VerifyTzapCertificateResponse } from "../../api/types";
 
-export type TzapVerificationState = "idle" | "checking" | "signatureValid" | "trusted" | "error";
+export type TzapVerificationState = "idle" | "checking" | "signatureValid" | "trusted" | "verifiedOffline" | "verifiedWithCaveat" | "error";
 export type TzapVerificationSnapshot = Readonly<{
   validateTrust: boolean;
   trustedCaCertificatePaths: readonly string[];
   trustedSystemRoots: boolean;
   includeOfficialTzapRoot: boolean;
+  checkCurrentStatus: boolean;
   state: TzapVerificationState;
   result: VerifyTzapCertificateResponse | null;
   error: string;
 }>;
+
+function verificationStateForResult(result: VerifyTzapCertificateResponse): TzapVerificationState {
+  if (["invalid", "revoked", "suspended", "unverifiable"].includes(result.outcome) || result.verificationState === "invalid") {
+    return "error";
+  }
+  if (["signed_before_renewal", "verified_with_caveat", "status_unavailable"].includes(result.outcome)
+    || ["signed_before_renewal", "verified_with_caveat", "status_unavailable"].includes(result.verificationState ?? "")) {
+    return "verifiedWithCaveat";
+  }
+  if (["cryptographically_intact_offline"].includes(result.outcome) || result.verificationState === "cryptographically_intact_offline") {
+    return "verifiedOffline";
+  }
+  if (["trusted", "fresh_valid"].includes(result.outcome) || ["trusted", "fresh_valid"].includes(result.verificationState ?? "")) {
+    return "trusted";
+  }
+  if (result.outcome === "signatureValid" || result.verificationState === "signature_valid") {
+    return "signatureValid";
+  }
+  if (result.signatureCheck === "ok") {
+    return result.trustCheck && result.trustCheck !== "untrusted" ? "trusted" : "signatureValid";
+  }
+  return "error";
+}
 
 export type ExtractWorkspaceOptionPatch = Partial<Pick<
   ExtractWorkspaceSnapshot,
@@ -50,7 +74,7 @@ export type ExtractWorkspace = Readonly<{
   applyDefaults(defaults: ExtractWorkspaceDefaults): ExtractWorkspaceSnapshot;
   setOptions(patch: ExtractWorkspaceOptionPatch): ExtractWorkspaceSnapshot;
   resetToDefaults(): ExtractWorkspaceSnapshot;
-  setTzapVerificationOptions(patch: Partial<Pick<TzapVerificationSnapshot, "validateTrust" | "trustedCaCertificatePaths" | "trustedSystemRoots" | "includeOfficialTzapRoot">>): ExtractWorkspaceSnapshot;
+  setTzapVerificationOptions(patch: Partial<Pick<TzapVerificationSnapshot, "validateTrust" | "trustedCaCertificatePaths" | "trustedSystemRoots" | "includeOfficialTzapRoot" | "checkCurrentStatus">>): ExtractWorkspaceSnapshot;
   beginTzapVerification(): ExtractWorkspaceSnapshot;
   acceptTzapVerification(result: VerifyTzapCertificateResponse): ExtractWorkspaceSnapshot;
   rejectTzapVerification(error: string): ExtractWorkspaceSnapshot;
@@ -130,7 +154,7 @@ export function createExtractWorkspace(initialDefaults: ExtractWorkspaceDefaults
     },
 
     acceptTzapVerification(result) {
-      state = { ...state, tzapVerification: freezeVerification({ ...state.tzapVerification, state: result.outcome, result: { ...result }, error: "" }) };
+      state = { ...state, tzapVerification: freezeVerification({ ...state.tzapVerification, state: verificationStateForResult(result), result: { ...result }, error: "" }) };
       return cloneSnapshot(state);
     },
 
@@ -182,6 +206,7 @@ function snapshotFromDefaults(defaults: ExtractWorkspaceDefaults): ExtractWorksp
       trustedCaCertificatePaths: [],
       trustedSystemRoots: false,
       includeOfficialTzapRoot: true,
+      checkCurrentStatus: false,
       state: "idle",
       result: null,
       error: "",

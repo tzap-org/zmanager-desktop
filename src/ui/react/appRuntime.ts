@@ -181,7 +181,7 @@ export type ZManagerArchiveIntent =
       patch: Partial<
         Pick<
           ExtractWorkspaceSnapshot["tzapVerification"],
-          "validateTrust" | "trustedSystemRoots" | "includeOfficialTzapRoot"
+          "validateTrust" | "trustedSystemRoots" | "includeOfficialTzapRoot" | "checkCurrentStatus"
         >
       >;
     }>
@@ -405,6 +405,8 @@ export type ZManagerAccountIntent =
   | Readonly<{ type: "inspectContactCard"; contactCard: string }>
   | Readonly<{ type: "acceptContactCard"; contactCard: string }>
   | Readonly<{ type: "exportContactCard" }>
+  | Readonly<{ type: "enrollCertificate" }>
+  | Readonly<{ type: "renewCertificate"; certificateId: string }>
   | Readonly<{ type: "retireDevice" }>
   | Readonly<{ type: "syncContacts" }>;
 

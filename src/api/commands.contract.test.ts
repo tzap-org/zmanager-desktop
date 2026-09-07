@@ -64,9 +64,16 @@ const COMMAND_WRAPPERS = [
   },
   {
     command: "account_complete_hosted_auth",
-    request: { state: "state-1234567890", relayBody: "relay-body-1234567890" },
-    call: () => api.completeAccountHostedAuth({ state: "state-1234567890", relayBody: "relay-body-1234567890" }),
+    request: { state: "state-1234567890", handoffCode: "handoff-code-1234567890" },
+    call: () => api.completeAccountHostedAuth({ state: "state-1234567890", handoffCode: "handoff-code-1234567890" }),
   },
+  { command: "account_enroll_certificate", call: () => api.enrollAccountCertificate() },
+  {
+    command: "account_renew_certificate",
+    request: { certificateId: "certificate-online-1" },
+    call: () => api.renewAccountCertificate("certificate-online-1"),
+  },
+  { command: "account_retire_device", call: () => api.retireAccountDevice() },
   { command: "account_fetch_current_user", call: () => api.fetchAccountCurrentUser() },
   { command: "account_forget", call: () => api.forgetAccount() },
   {
@@ -209,6 +216,7 @@ const COMMAND_WRAPPERS = [
       cleanSource: false,
       replaceExisting: false,
       preserveMetadata: true,
+      volumeCount: 3,
     },
     call: () => api.runStartCreate({
       sources: ["C:/source"],
@@ -217,6 +225,7 @@ const COMMAND_WRAPPERS = [
       cleanSource: false,
       replaceExisting: false,
       preserveMetadata: true,
+      volumeCount: 3,
     }),
   },
   {
@@ -250,6 +259,7 @@ const COMMAND_WRAPPERS = [
       trustedCaCertificatePaths: ["C:/certs/root.pem"],
       trustedSystemRoots: false,
       includeOfficialTzapRoot: true,
+      checkCurrentStatus: false,
     },
     call: () => api.verifyTzapCertificate({
       archivePath: "C:/archives/demo.tzap",
@@ -257,6 +267,7 @@ const COMMAND_WRAPPERS = [
       trustedCaCertificatePaths: ["C:/certs/root.pem"],
       trustedSystemRoots: false,
       includeOfficialTzapRoot: true,
+      checkCurrentStatus: false,
     }),
   },
   {

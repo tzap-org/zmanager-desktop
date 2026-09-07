@@ -43,6 +43,46 @@ describe("AccountWorkspace", () => {
     expect(html).not.toContain("access_token");
   });
 
+  it("makes hosted enrollment and renewal state explicit in Certificates", () => {
+    const initial = createInitialZManagerReactSnapshot();
+    const store = createZManagerAppStore(
+      {
+        ...initial,
+        account: {
+          ...initial.account,
+          visible: true,
+          authStatus: "signedIn",
+          capabilities: { ...initial.account.capabilities, auth: "handoff_exchange", enrollment: "available", status: "online" },
+          certificates: [{
+            identityId: "hosted-identity-1",
+            certificateId: "hosted-cert-1",
+            certificateSha256: "sha256:hosted",
+            label: "Hosted identity",
+            identityType: "hosted",
+            state: "active",
+            assuranceLevel: "enrolled",
+            notAfterUnixSeconds: 2_000_000_000,
+            renewalRecommended: true,
+          }],
+        },
+      },
+      noopZManagerReactActions,
+    );
+    const html = renderToStaticMarkup(
+      createElement(
+        ZManagerAppRuntimeProvider,
+        { store },
+        createElement<AccountWorkspaceProps>(AccountWorkspace, { defaultTab: "certificates" }),
+      ),
+    );
+
+    expect(html).toContain("Hosted certificate");
+    expect(html).toContain("Hosted identity");
+    expect(html).toContain("Renewal recommended before this certificate expires.");
+    expect(html).toContain("Renew certificate");
+    expect(html).toContain("Expires");
+  });
+
   it("keeps a notice and long Contacts content inside the shared bounded surface", () => {
     const initial = createInitialZManagerReactSnapshot();
     const store = createZManagerAppStore(
@@ -141,9 +181,11 @@ describe("AccountWorkspace", () => {
               certificateId: "cert-global-default",
               label: "Global Default Cert",
               certificateSha256: "sha256:global",
+              identityType: "offline",
               state: "active",
               assuranceLevel: "self_signed",
               notAfterUnixSeconds: 0,
+              renewalRecommended: false,
             },
           ],
         },

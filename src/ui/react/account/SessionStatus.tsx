@@ -8,6 +8,7 @@ export function SessionStatus() {
   const actions = useZManagerActions();
 
   const isSignedIn = snapshot.authStatus === "signedIn";
+  const canLaunchHostedAuth = snapshot.capabilities.auth === "launch_only" || snapshot.capabilities.auth === "handoff_exchange";
 
   return (
     <div className="grid gap-5">
@@ -46,13 +47,13 @@ export function SessionStatus() {
           <div className="flex flex-wrap items-center gap-2">
             <Button
               className="bg-blue-600 text-white shadow hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-500"
-              disabled={snapshot.busy || snapshot.capabilities.auth !== "handoff_exchange"}
+              disabled={snapshot.busy || !canLaunchHostedAuth}
               onClick={() =>
                 actions.handleAccountIntent({ type: "beginHostedAuth", environment: "prod" })
               }
             >
               <ExternalLink className="mr-1.5 size-3.5" />
-              {snapshot.capabilities.auth === "handoff_exchange" ? "Sign In to Hosted Account" : "Sign In Unavailable"}
+              {canLaunchHostedAuth ? "Sign In to Hosted Account" : "Sign In Unavailable"}
             </Button>
 
             <Button

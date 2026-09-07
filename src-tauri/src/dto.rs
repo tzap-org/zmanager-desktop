@@ -540,6 +540,8 @@ pub struct StartCreateRequest {
     pub password: Option<String>,
     pub compression_level: Option<u32>,
     pub volume_size: Option<u64>,
+    #[serde(default)]
+    pub volume_count: Option<u32>,
     pub tzap_recovery_percentage: Option<u8>,
     #[serde(default)]
     pub tzap_volume_loss_tolerance: Option<u8>,
@@ -653,12 +655,15 @@ pub struct VerifyTzapCertificateRequest {
     pub trusted_system_roots: bool,
     #[serde(default)]
     pub include_official_tzap_root: bool,
+    #[serde(default)]
+    #[serde(alias = "onlineStatus")]
+    pub check_current_status: bool,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VerifyTzapCertificateResponse {
-    pub outcome: &'static str,
+    pub outcome: String,
     pub subject: String,
     pub issuer: String,
     pub serial_number_hex: String,
@@ -667,6 +672,17 @@ pub struct VerifyTzapCertificateResponse {
     pub trust_anchor_subject: Option<String>,
     pub verified_chain_subjects: Vec<String>,
     pub diagnostics: Vec<String>,
+    pub verification_state: String,
+    pub signature_check: String,
+    pub trust_check: String,
+    pub certificate_time: String,
+    pub status_check: String,
+    pub status_reason: Option<String>,
+    pub status_this_update_unix_seconds: Option<i64>,
+    pub status_next_update_unix_seconds: Option<i64>,
+    pub status_revoked_at_unix_seconds: Option<i64>,
+    pub status_revocation_reason: Option<String>,
+    pub status_revocation_category: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

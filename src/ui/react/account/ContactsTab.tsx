@@ -17,6 +17,13 @@ export function ContactsTab() {
 
   const activeRecipientKeys = snapshot.recipientKeys.filter((key) => key.lifecycle === "active");
   const retiredRecipientKeys = snapshot.recipientKeys.filter((key) => key.lifecycle === "retired");
+  const syncCounts = snapshot.contactSyncCounts;
+  const syncStatus = syncCounts?.statusRefreshFailed
+    ? `${syncCounts.statusRefreshFailed} status checks unavailable`
+    : "Current certificate status available when online";
+  const lastSync = snapshot.lastContactSyncAt
+    ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(snapshot.lastContactSyncAt * 1000))
+    : "Not synced yet";
 
   return (
     <div className="grid gap-6">
@@ -43,6 +50,29 @@ export function ContactsTab() {
             <Plus className="mr-1.5 size-3.5" />
             Generate Key
           </Button>
+        </div>
+
+        <div className="grid gap-2 rounded-lg border border-slate-200/80 bg-slate-50/70 p-3 text-[11px] dark:border-slate-800/80 dark:bg-slate-900/30">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-medium text-slate-700 dark:text-slate-300">Last successful sync</span>
+            <span className="text-slate-500 dark:text-slate-400">{lastSync}</span>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-medium text-slate-700 dark:text-slate-300">Status refresh</span>
+            <span className={syncCounts?.statusRefreshFailed ? "text-amber-700 dark:text-amber-300" : "text-emerald-700 dark:text-emerald-300"}>{syncStatus}</span>
+          </div>
+          {syncCounts ? (
+            <div className="flex flex-wrap gap-x-3 gap-y-1 text-slate-500 dark:text-slate-400">
+              <span>{syncCounts.imported} imported</span>
+              <span>{syncCounts.updated} updated</span>
+              <span>{syncCounts.removed} removed locally</span>
+              <span>{syncCounts.rejected} rejected</span>
+              {syncCounts.rejectedReasons.length ? <span>({syncCounts.rejectedReasons.join(", ")})</span> : null}
+            </div>
+          ) : null}
+          <p className="leading-relaxed text-slate-500 dark:text-slate-400">
+            Removing a contact here only removes this desktop copy. Remove it on the phone to change the source snapshot globally.
+          </p>
         </div>
 
         {/* Active Keys List */}

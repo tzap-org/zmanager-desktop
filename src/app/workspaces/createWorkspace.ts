@@ -20,6 +20,7 @@ import {
   getArchiveName,
   isCreatePlanPathIncluded,
   normalizeCreateVolumeSize,
+  normalizeTzapVolumeCount,
   normalizeTzapRecoveryPercentage,
   normalizeTzapVolumeLossTolerance,
   suggestedCreateArchiveName,
@@ -31,6 +32,7 @@ import {
   type CreatePlanInclusionState,
   type CreatePlanRow,
   type CreatePathHelpers,
+  type TzapSplitMode,
 } from "../createFlow";
 import {
   applyHierarchicalRowSelectionIntent,
@@ -136,7 +138,9 @@ export type CreateWorkspaceOptionsSnapshot = Readonly<{
   replaceExisting: boolean;
   preserveMetadata: boolean;
   compressionLevel: number | null;
+  splitMode: TzapSplitMode;
   volumeSize: number | null;
+  volumeCount: number | null;
   tzapRecoveryPercentage: number;
   tzapVolumeLossTolerance: number;
   zipCompression: "store" | "deflate";
@@ -201,7 +205,9 @@ export type CreateWorkspaceOptionPatch = Readonly<{
   replaceExisting?: boolean;
   preserveMetadata?: boolean;
   compressionLevel?: number | string | null;
+  splitMode?: TzapSplitMode;
   volumeSize?: number | string | null;
+  volumeCount?: number | string | null;
   tzapRecoveryPercentage?: number | string | null;
   tzapVolumeLossTolerance?: number | string | null;
   zipCompression?: "store" | "deflate";
@@ -433,7 +439,9 @@ type MutableCreateWorkspaceOptions = {
   replaceExisting: boolean;
   preserveMetadata: boolean;
   compressionLevel: number | null;
+  splitMode: TzapSplitMode;
   volumeSize: number | null;
+  volumeCount: number | null;
   tzapRecoveryPercentage: number;
   tzapVolumeLossTolerance: number;
   zipCompression: "store" | "deflate";
@@ -464,7 +472,9 @@ const DEFAULT_CREATE_OPTIONS: MutableCreateWorkspaceOptions = {
   replaceExisting: false,
   preserveMetadata: true,
   compressionLevel: null,
+  splitMode: "none",
   volumeSize: null,
+  volumeCount: null,
   tzapRecoveryPercentage: TZAP_RECOVERY_PERCENTAGE_DEFAULT,
   tzapVolumeLossTolerance: 0,
   zipCompression: "deflate",
@@ -832,8 +842,12 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
         ...(patch.compressionLevel !== undefined
           ? { compressionLevel: normalizeOptionalNonNegativeInteger(patch.compressionLevel) }
           : {}),
+        ...(patch.splitMode !== undefined ? { splitMode: patch.splitMode } : {}),
         ...(patch.volumeSize !== undefined
           ? { volumeSize: normalizeCreateVolumeSize(normalizeOptionalNumber(patch.volumeSize)) ?? null }
+          : {}),
+        ...(patch.volumeCount !== undefined
+          ? { volumeCount: normalizeTzapVolumeCount(normalizeOptionalNumber(patch.volumeCount)) ?? null }
           : {}),
         ...(patch.tzapRecoveryPercentage !== undefined
           ? { tzapRecoveryPercentage: normalizeTzapRecoveryOption(patch.tzapRecoveryPercentage) }
@@ -863,15 +877,33 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
         ...(patch.tzapSigningChainPaths !== undefined ? { tzapSigningChainPaths: patch.tzapSigningChainPaths } : {}),
         ...(patch.tzapBootstrapSidecar !== undefined ? { tzapBootstrapSidecar: patch.tzapBootstrapSidecar } : {}),
       };
-      if (state.options.format === "tzap" && patch.volumeSize !== undefined) {
-        if (nextOptions.volumeSize === null) {
-          nextOptions.tzapVolumeLossTolerance = 0;
-        } else if (state.options.volumeSize === null && patch.tzapVolumeLossTolerance === undefined) {
-          nextOptions.tzapVolumeLossTolerance = TZAP_SPLIT_DEFAULT_VOLUME_LOSS_TOLERANCE;
+      if (patch.splitMode !== undefined) {
+        if (nextOptions.splitMode === "none") {
+          nextOptions.volumeSize = null;
+          nextOptions.volumeCount = null;
+        } else if (nextOptions.splitMode === "volumeSize") {
+          nextOptions.volumeCount = null;
+        } else {
+          nextOptions.volumeSize = null;
         }
       }
-      if (state.options.format === "tzap" && nextOptions.volumeSize === null) {
+      if (patch.volumeSize !== undefined) {
+        nextOptions.splitMode = nextOptions.volumeSize === null ? "none" : "volumeSize";
+        nextOptions.volumeCount = null;
+      }
+      if (patch.volumeCount !== undefined) {
+        nextOptions.splitMode = nextOptions.volumeCount === null ? "none" : "volumeCount";
+        nextOptions.volumeSize = null;
+      }
+      if (state.options.format === "tzap" && nextOptions.splitMode === "none") {
         nextOptions.tzapVolumeLossTolerance = 0;
+      } else if (
+        state.options.format === "tzap" &&
+        (patch.volumeSize !== undefined || patch.volumeCount !== undefined) &&
+        state.options.splitMode === "none" &&
+        patch.tzapVolumeLossTolerance === undefined
+      ) {
+        nextOptions.tzapVolumeLossTolerance = TZAP_SPLIT_DEFAULT_VOLUME_LOSS_TOLERANCE;
       }
       const optionsChanged = !sameOptions(state.options, nextOptions);
       const planWillRefresh = state.planState === "error" && state.currentPlan !== null;
@@ -1415,7 +1447,9 @@ function applyDefaultsToOptions(
     replaceExisting: defaults.replaceExisting,
     preserveMetadata: defaults.preserveMetadata,
     compressionLevel: normalizeOptionalNonNegativeInteger(defaults.compressionLevel),
+    splitMode: normalizeCreateVolumeSize(defaults.volumeSize ?? undefined) === undefined ? "none" : "volumeSize",
     volumeSize: normalizeCreateVolumeSize(defaults.volumeSize ?? undefined) ?? null,
+    volumeCount: null,
     tzapRecoveryPercentage: format === "tzap"
       ? normalizeTzapRecoveryOption(defaults.tzapRecoveryPercentage)
       : TZAP_RECOVERY_PERCENTAGE_DEFAULT,
@@ -1472,7 +1506,9 @@ function buildStartCreateRequestFromState(
     preserveMetadata: state.options.preserveMetadata,
     password: input.password || undefined,
     compressionLevel: state.options.compressionLevel ?? undefined,
+    splitMode: state.options.splitMode,
     volumeSize: state.options.volumeSize ?? undefined,
+    volumeCount: state.options.volumeCount ?? undefined,
     tzapRecoveryPercentage: state.options.format === "tzap"
       ? state.options.tzapRecoveryPercentage
       : undefined,
@@ -1647,7 +1683,9 @@ function sameOptions(left: MutableCreateWorkspaceOptions, right: MutableCreateWo
     left.replaceExisting === right.replaceExisting &&
     left.preserveMetadata === right.preserveMetadata &&
     left.compressionLevel === right.compressionLevel &&
+    left.splitMode === right.splitMode &&
     left.volumeSize === right.volumeSize &&
+    left.volumeCount === right.volumeCount &&
     left.tzapRecoveryPercentage === right.tzapRecoveryPercentage &&
     left.tzapVolumeLossTolerance === right.tzapVolumeLossTolerance &&
     left.zipCompression === right.zipCompression &&
@@ -2359,7 +2397,9 @@ function createOptionsSnapshot(
     replaceExisting: state.options.replaceExisting,
     preserveMetadata: state.options.preserveMetadata,
     compressionLevel: state.options.compressionLevel,
+    splitMode: state.options.splitMode,
     volumeSize: state.options.volumeSize,
+    volumeCount: state.options.volumeCount,
     tzapRecoveryPercentage: supportsTzapRecovery
       ? state.options.tzapRecoveryPercentage
       : TZAP_RECOVERY_PERCENTAGE_DEFAULT,

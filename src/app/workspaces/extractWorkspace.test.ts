@@ -91,11 +91,13 @@ describe("extract workspace", () => {
     const workspace = createExtractWorkspace(defaults);
     workspace.setTzapVerificationOptions({
       validateTrust: true,
+      checkCurrentStatus: true,
       trustedCaCertificatePaths: [" C:/certs/root.pem ", "C:/certs/root.pem"],
       trustedSystemRoots: true,
     });
     expect(workspace.beginTzapVerification().tzapVerification).toMatchObject({
       state: "checking",
+      checkCurrentStatus: true,
       trustedCaCertificatePaths: ["C:/certs/root.pem"],
     });
     expect(workspace.acceptTzapVerification({
@@ -109,6 +111,62 @@ describe("extract workspace", () => {
       verifiedChainSubjects: ["CN=Signer", "CN=Root"],
       diagnostics: [],
     }).tzapVerification).toMatchObject({ state: "trusted", result: { subject: "CN=Signer" } });
+    expect(workspace.acceptTzapVerification({
+      outcome: "fresh_valid",
+      subject: "CN=Signer",
+      issuer: "CN=Root",
+      serialNumberHex: "01",
+      certificateSha256: "ab",
+      signedAtUnixSeconds: 1,
+      verifiedChainSubjects: ["CN=Signer", "CN=Root"],
+      diagnostics: [],
+      verificationState: "fresh_valid",
+      signatureCheck: "ok",
+      trustCheck: "production_root",
+      certificateTime: "valid_at_signing",
+      statusCheck: "status_unavailable",
+    }).tzapVerification.state).toBe("trusted");
+    expect(workspace.acceptTzapVerification({
+      outcome: "cryptographically_intact_offline",
+      subject: "CN=Signer",
+      issuer: "CN=Root",
+      serialNumberHex: "01",
+      certificateSha256: "ab",
+      signedAtUnixSeconds: 1,
+      verifiedChainSubjects: ["CN=Signer", "CN=Root"],
+      diagnostics: [],
+      verificationState: "cryptographically_intact_offline",
+      signatureCheck: "ok",
+      trustCheck: "production_root",
+      certificateTime: "valid_at_signing",
+      statusCheck: "status_unavailable",
+    }).tzapVerification.state).toBe("verifiedOffline");
+    expect(workspace.acceptTzapVerification({
+      outcome: "signed_before_renewal",
+      subject: "CN=Signer",
+      issuer: "CN=Root",
+      serialNumberHex: "01",
+      certificateSha256: "ab",
+      signedAtUnixSeconds: 1,
+      verifiedChainSubjects: [],
+      diagnostics: [],
+      verificationState: "signed_before_renewal",
+      signatureCheck: "ok",
+      trustCheck: "production_root",
+    }).tzapVerification.state).toBe("verifiedWithCaveat");
+    expect(workspace.acceptTzapVerification({
+      outcome: "invalid",
+      subject: "",
+      issuer: "",
+      serialNumberHex: "",
+      certificateSha256: "",
+      signedAtUnixSeconds: 0,
+      verifiedChainSubjects: [],
+      diagnostics: ["invalid"],
+      verificationState: "invalid",
+      signatureCheck: "invalid",
+      trustCheck: "untrusted",
+    }).tzapVerification.state).toBe("error");
     expect(JSON.stringify(workspace.getSnapshot())).not.toContain("privateKey");
   });
 });

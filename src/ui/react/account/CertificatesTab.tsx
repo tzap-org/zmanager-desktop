@@ -1,4 +1,4 @@
-import { ShieldCheck, Plus, FileUp, Key, Trash2, CheckCircle, Award } from "lucide-react";
+import { ShieldCheck, Plus, FileUp, Key, Trash2, CheckCircle, Award, RefreshCw, ExternalLink } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { useZManagerActions, useZManagerSnapshot } from "../AppProviders";
@@ -15,6 +15,12 @@ export function CertificatesTab() {
   const [identityImportLabel, setIdentityImportLabel] = useState("");
   const [identityImportPassword, setIdentityImportPassword] = useState("");
   const [identityPendingRemoval, setIdentityPendingRemoval] = useState<string | null>(null);
+  const hostedCertificates = snapshot.certificates.filter((certificate) => certificate.identityType === "hosted");
+  const canManageHostedCertificates = snapshot.authStatus === "signedIn" && snapshot.capabilities.enrollment === "available";
+  const canLaunchHostedAuth = snapshot.capabilities.auth === "launch_only" || snapshot.capabilities.auth === "handoff_exchange";
+  const formatExpiry = (unixSeconds: number) => unixSeconds > 0
+    ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(unixSeconds * 1000))
+    : "Unknown";
 
   return (
     <div className="grid gap-6">
@@ -23,6 +29,40 @@ export function CertificatesTab() {
         icon={<ShieldCheck className="size-4 text-blue-600 dark:text-blue-400" />}
         empty="No local signing certificates found."
       >
+        <section className="grid gap-3 rounded-xl border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-900/60 dark:bg-blue-950/30">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="space-y-1">
+              <strong className="text-xs font-semibold text-blue-950 dark:text-blue-100">
+                Hosted certificate
+              </strong>
+              <p className="text-[11px] leading-relaxed text-blue-900/80 dark:text-blue-200/80">
+                Hosted certificates are account-backed and remain usable offline while their cached certificate is valid. A fresh sign-in is required for enrollment and renewal.
+              </p>
+            </div>
+            {hostedCertificates.length === 0 ? (
+              <Button
+                className="shrink-0 bg-blue-600 text-xs text-white shadow hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-500"
+                disabled={snapshot.busy || (!canManageHostedCertificates && !canLaunchHostedAuth)}
+                onClick={() => canManageHostedCertificates
+                  ? actions.handleAccountIntent({ type: "enrollCertificate" })
+                  : actions.handleAccountIntent({ type: "beginHostedAuth", environment: "prod" })}
+              >
+                {canManageHostedCertificates ? <Award className="mr-1.5 size-3.5" /> : <ExternalLink className="mr-1.5 size-3.5" />}
+                {canManageHostedCertificates ? "Enroll this device" : canLaunchHostedAuth ? "Sign in to enroll" : "Hosted enrollment unavailable"}
+              </Button>
+            ) : null}
+          </div>
+          {hostedCertificates.length === 0 ? (
+            <p className="text-[11px] font-medium text-blue-800 dark:text-blue-200">
+              {canManageHostedCertificates
+                ? "No hosted identity is enrolled on this device."
+                : canLaunchHostedAuth
+                  ? "Enrollment is unavailable until the hosted session is active."
+                  : "Hosted enrollment is unavailable until the hosted-auth security and OAuth registration gates are approved."}
+            </p>
+          ) : null}
+        </section>
+
         {/* Creation & Import Panel */}
         <div className="grid gap-4 sm:grid-cols-2">
           {/* Create Self-Signed Identity Card */}
@@ -154,7 +194,7 @@ export function CertificatesTab() {
                           </span>
                         ) : null}
                         <span className="rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600 dark:bg-slate-900 dark:text-slate-400">
-                          {certificate.assuranceLevel}
+                          {certificate.identityType}
                         </span>
                       </div>
                       <span className="text-[11px] text-slate-500 dark:text-slate-400">
@@ -201,7 +241,27 @@ export function CertificatesTab() {
                   <code className="mt-1 block truncate font-mono text-[11px] text-slate-700 dark:text-slate-300">
                     {certificate.certificateSha256}
                   </code>
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500 dark:text-slate-400">
+                    <span>Expires {formatExpiry(certificate.notAfterUnixSeconds)}</span>
+                    <span>{certificate.assuranceLevel}</span>
+                  </div>
                 </div>
+
+                {certificate.identityType === "hosted" && certificate.renewalRecommended ? (
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50/80 p-3 text-xs text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-100">
+                    <span className="text-[11px] font-medium">Renewal recommended before this certificate expires.</span>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="h-7 text-[11px]"
+                      disabled={snapshot.busy || !canManageHostedCertificates || certificate.state !== "active"}
+                      onClick={() => actions.handleAccountIntent({ type: "renewCertificate", certificateId: certificate.certificateId })}
+                    >
+                      <RefreshCw className="mr-1 size-3" />
+                      {canManageHostedCertificates ? "Renew certificate" : "Sign in to renew"}
+                    </Button>
+                  </div>
+                ) : null}
 
                 {/* Delete Confirmation Card */}
                 {identityPendingRemoval === certificate.identityId ? (

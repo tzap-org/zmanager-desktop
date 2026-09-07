@@ -36,7 +36,7 @@
         }
       }
     },
-    "hostedAuthCallback": {"type":"object","additionalProperties":false,"required":["state","result"],"properties":{"state":{"type":"string","minLength":16,"maxLength":256,"pattern":"^[A-Za-z0-9_-]+$"},"result":{"enum":["completed","cancelled","failed"]},"errorCode":{"type":["string","null"],"maxLength":128},"relayBody":{"type":["string"],"maxLength":16384},"callbackUrl":{"type":["string"],"maxLength":2048}}},
+    "hostedAuthCallback": {"type":"object","additionalProperties":false,"required":["state","result"],"properties":{"state":{"type":"string","minLength":16,"maxLength":256,"pattern":"^[A-Za-z0-9_-]+$"},"result":{"enum":["completed","cancelled","failed"]},"errorCode":{"type":["string","null"],"maxLength":128},"handoffCode":{"type":"string","minLength":16,"maxLength":2048,"pattern":"^[A-Za-z0-9._~-]+$"},"callbackUrl":{"type":["string"],"maxLength":256}}},
     "reopenApplication": {"type":"object","additionalProperties":false,"properties":{}}
   }
 }

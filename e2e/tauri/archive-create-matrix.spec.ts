@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 import {
@@ -197,6 +198,74 @@ if (!hasFixtureCorpus()) {
             }
           } finally {
             temp.cleanup(false);
+          }
+        },
+        CREATE_TIMEOUT_MS,
+      );
+
+      it(
+        "creates exact TZAP volumes, discovers their names, and recovers after one volume is missing",
+        async () => {
+          const temp = makeTempDir("create-tzap-volume-count");
+          let failed = true;
+          try {
+            const source = path.join(temp.dir, "source");
+            const payload = writePayloadSourceTree(source, { withSymlink: false });
+            // Use incompressible content so the round-robin writer exercises
+            // every requested volume instead of collapsing a tiny fixture into
+            // a trivial payload distribution.
+            writeFileSync(path.join(payload, "payload.bin"), randomBytes(3 * 1024 * 1024));
+            const destination = path.join(temp.dir, "exact-count.tzap");
+
+            await runJobExpectingSuccess("start_create", {
+              ...CREATE_DEFAULTS,
+              sources: [payload],
+              destinationPath: destination,
+              format: "tzap",
+              volumeCount: 4,
+              tzapVolumeLossTolerance: 1,
+            });
+
+            const expectedVolumes = [
+              "exact-count.vol000.tzap",
+              "exact-count.vol001.tzap",
+              "exact-count.vol002.tzap",
+              "exact-count.vol003.tzap",
+            ];
+            assert.deepEqual(
+              readdirSync(temp.dir).filter((name) => name.startsWith("exact-count.vol") && name.endsWith(".tzap")).sort(),
+              expectedVolumes,
+              "exact-count mode must commit exactly four numbered TZAP volumes",
+            );
+            assert.equal(existsSync(destination), false, "multi-volume TZAP must use the numbered volume path set");
+
+            const firstVolume = path.join(temp.dir, expectedVolumes[0]);
+            const missingVolume = path.join(temp.dir, "exact-count.vol002.tzap");
+            unlinkSync(missingVolume);
+            const opened = await openArchiveIndex(firstVolume);
+            try {
+              assert.ok(["ready", "empty"].includes(opened.snapshot.status), "one missing volume should remain openable within the declared tolerance");
+              const entries = await collectAllEntries(opened.sessionId);
+              assert.ok(entries.has("payload/payload.bin"), "recovered listing must retain the large payload");
+            } finally {
+              await closeArchiveIndex(opened.sessionId);
+            }
+
+            const extracted = path.join(temp.dir, "extracted");
+            await runJobExpectingSuccess("start_extract", {
+              archivePath: firstVolume,
+              destinationPath: extracted,
+              overwrite: "replace",
+              stripComponents: 0,
+              tzapRestorePolicy: "portable",
+              tzapAllowDegraded: false,
+              tzapAllowAbsoluteSymlinks: false,
+              ignoreSymlinks: false,
+            });
+            assert.ok(existsSync(path.join(extracted, "payload", "payload.bin")), "recovered extraction must write the payload");
+            failed = false;
+          } finally {
+            temp.cleanup(failed);
           }
         },
         CREATE_TIMEOUT_MS,

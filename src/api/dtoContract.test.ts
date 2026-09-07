@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import rustAccountSource from "../../src-tauri/src/account.rs?raw";
 import rustDtoSource from "../../src-tauri/src/dto.rs?raw";
 import rustLocalsendSource from "../../src-tauri/src/localsend.rs?raw";
 import typeScriptApiTypesSource from "./types.ts?raw";
 
 const rustSource = `${rustDtoSource}\n${rustLocalsendSource}`;
+const responseRustSource = `${rustDtoSource}\n${rustAccountSource}`;
 
 // Most Rust request structs and their TypeScript counterparts share one
 // name; a bare string checks that. `localsend.rs` DTOs are suffixed `Dto`
@@ -44,22 +46,67 @@ describe("Rust and TypeScript request DTO contracts", () => {
   });
 });
 
+const RESPONSE_DTO_TYPES = [
+  "AccountSnapshotDto",
+  "AccountLifecycleResultDto",
+  "AccountContactSyncResultDto",
+  "AccountCertificateDto",
+  "AccountRecipientKeyDto",
+  "AccountContactDto",
+  "AccountHostedAuthLaunchDto",
+  "AccountCurrentUserDto",
+  "AccountContactCardPreviewDto",
+  "VerifyTzapCertificateResponse",
+] as const;
+
+describe("Rust and TypeScript response DTO contracts", () => {
+  it("keeps response DTO field names aligned", () => {
+    for (const typeName of RESPONSE_DTO_TYPES) {
+      expect(typeScriptTypeFields(typeScriptApiTypesSource, typeName), typeName).toEqual(
+        rustStructFields(responseRustSource, typeName),
+      );
+    }
+  });
+});
+
 function typeScriptTypeFields(source: string, typeName: string): string[] {
-  const body = source.match(new RegExp(`export type ${typeName} = \\{([\\s\\S]*?)\\n\\};`))?.[1];
+  const body = bracedBody(source, `export type ${typeName} =`);
   if (!body) {
     throw new Error(`Unable to find TypeScript type ${typeName}`);
   }
 
-  return [...body.matchAll(/^\s*([A-Za-z0-9_]+)\??:/gm)].map((match) => match[1]);
+  return body.split("\n").flatMap((line) => {
+    const match = line.match(/^  ([A-Za-z0-9_]+)\??:/);
+    return match ? [match[1]] : [];
+  });
 }
 
 function rustStructFields(source: string, typeName: string): string[] {
-  const body = source.match(new RegExp(`pub struct ${typeName} \\{([\\s\\S]*?)\\n\\}`))?.[1];
+  const body = bracedBody(source, `pub struct ${typeName}`);
   if (!body) {
     throw new Error(`Unable to find Rust struct ${typeName}`);
   }
 
-  return [...body.matchAll(/^\s*pub ([a-zA-Z0-9_]+):/gm)].map((match) => snakeToCamel(match[1]));
+  return body.split("\n").flatMap((line) => {
+    const match = line.match(/^    pub ([a-zA-Z0-9_]+):/);
+    return match ? [snakeToCamel(match[1])] : [];
+  });
+}
+
+function bracedBody(source: string, marker: string): string | null {
+  const markerStart = source.indexOf(marker);
+  if (markerStart < 0) return null;
+  const openingBrace = source.indexOf("{", markerStart + marker.length);
+  if (openingBrace < 0) return null;
+  let depth = 0;
+  for (let index = openingBrace; index < source.length; index += 1) {
+    if (source[index] === "{") depth += 1;
+    if (source[index] === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(openingBrace + 1, index);
+    }
+  }
+  return null;
 }
 
 function snakeToCamel(value: string): string {

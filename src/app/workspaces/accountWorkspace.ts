@@ -1,4 +1,4 @@
-import type { AccountContactCardPreviewDto, AccountSnapshotDto } from "../../api/types";
+import type { AccountContactCardPreviewDto, AccountContactSyncResultDto, AccountSnapshotDto } from "../../api/types";
 
 export type AccountWorkspaceSnapshot = Readonly<AccountSnapshotDto & {
   visible: boolean;
@@ -7,6 +7,11 @@ export type AccountWorkspaceSnapshot = Readonly<AccountSnapshotDto & {
   contactCardPreview: AccountContactCardPreviewDto | null;
   pendingEnrollment: boolean;
   enrollmentResult: string | null;
+  lifecycleOperation: string | null;
+  lifecycleOutcome: string | null;
+  lifecycleIncompleteReasons: readonly string[];
+  lastContactSyncAt: number | null;
+  contactSyncCounts: AccountContactSyncResultDto["counts"] | null;
 }>;
 
 export type AccountWorkspace = Readonly<{
@@ -18,6 +23,9 @@ export type AccountWorkspace = Readonly<{
   setContactCardPreview(value: AccountContactCardPreviewDto | null): AccountWorkspaceSnapshot;
   setPendingEnrollment(value: boolean): AccountWorkspaceSnapshot;
   setEnrollmentResult(value: string | null): AccountWorkspaceSnapshot;
+  setLifecycleResult(operation: string, outcome: string, incompleteReasons: readonly string[]): AccountWorkspaceSnapshot;
+  clearLifecycleResult(): AccountWorkspaceSnapshot;
+  setContactSyncResult(result: AccountContactSyncResultDto): AccountWorkspaceSnapshot;
   replace(value: AccountSnapshotDto): AccountWorkspaceSnapshot;
 }>;
 
@@ -47,6 +55,11 @@ export function createAccountWorkspace(): AccountWorkspace {
   let contactCardPreview: AccountContactCardPreviewDto | null = null;
   let pendingEnrollment = false;
   let enrollmentResult: string | null = null;
+  let lifecycleOperation: string | null = null;
+  let lifecycleOutcome: string | null = null;
+  let lifecycleIncompleteReasons: readonly string[] = [];
+  let lastContactSyncAt: number | null = null;
+  let contactSyncCounts: AccountContactSyncResultDto["counts"] | null = null;
   let value = EMPTY;
 
   function getSnapshot(): AccountWorkspaceSnapshot {
@@ -61,6 +74,11 @@ export function createAccountWorkspace(): AccountWorkspace {
       notice,
       pendingEnrollment,
       enrollmentResult,
+      lifecycleOperation,
+      lifecycleOutcome,
+      lifecycleIncompleteReasons: Object.freeze([...lifecycleIncompleteReasons]),
+      lastContactSyncAt,
+      contactSyncCounts: contactSyncCounts ? Object.freeze({ ...contactSyncCounts }) : null,
     });
   }
 
@@ -73,6 +91,23 @@ export function createAccountWorkspace(): AccountWorkspace {
     setContactCardPreview(next) { contactCardPreview = next; return getSnapshot(); },
     setPendingEnrollment(next) { pendingEnrollment = next; return getSnapshot(); },
     setEnrollmentResult(next) { enrollmentResult = next; return getSnapshot(); },
+    setLifecycleResult(operation, outcome, incompleteReasons) {
+      lifecycleOperation = operation;
+      lifecycleOutcome = outcome;
+      lifecycleIncompleteReasons = [...incompleteReasons];
+      return getSnapshot();
+    },
+    clearLifecycleResult() {
+      lifecycleOperation = null;
+      lifecycleOutcome = null;
+      lifecycleIncompleteReasons = [];
+      return getSnapshot();
+    },
+    setContactSyncResult(result) {
+      lastContactSyncAt = result.lastSuccessfulSyncAt;
+      contactSyncCounts = { ...result.counts };
+      return getSnapshot();
+    },
     replace(next) { value = next; return getSnapshot(); },
   };
 }

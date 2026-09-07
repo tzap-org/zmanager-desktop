@@ -23,25 +23,39 @@ struct NativeHostEventEncoder {
     }
 
     static func hostedAuthPayload(from url: URL) -> [String: Any]? {
-        guard url.scheme?.lowercased() == "zmanager",
-              url.host?.lowercased() == "auth-callback",
+        let scheme = url.scheme?.lowercased()
+        let isCurrentCallback = scheme == "tzap" && url.host?.lowercased() == "auth" && url.path == "/callback"
+        let isLegacyCallback = scheme == "zmanager" && url.host?.lowercased() == "auth-callback" && url.path.isEmpty
+        guard isCurrentCallback || isLegacyCallback,
               let components = URLComponents(url: url, resolvingAgainstBaseURL: false)
         else { return nil }
         let values = Dictionary(uniqueKeysWithValues: (components.queryItems ?? []).compactMap {
             item in item.value.map { (item.name, $0) }
         })
-        let forbidden = ["code", "token", "access_token", "authorization_code", "password"]
+        let forbidden = ["code", "token", "access_token", "authorization_code", "password", "relay_body", "session_token", "refresh_token", "id_token"]
         guard forbidden.allSatisfy({ values[$0] == nil }),
               let state = values["state"], (16 ... 256).contains(state.count),
               state.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }),
               let result = values["result"], ["completed", "cancelled", "failed"].contains(result)
         else { return nil }
-        var payload: [String: Any] = ["state": state, "result": result, "callbackUrl": url.absoluteString]
+        if result == "completed" {
+            guard let handoffCode = values["handoff_code"], (16 ... 2048).contains(handoffCode.count),
+                  handoffCode.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "." || $0 == "_" || $0 == "-" || $0 == "~" })
+            else { return nil }
+        }
+        var payload: [String: Any] = ["state": state, "result": result]
+        if result == "completed", let handoffCode = values["handoff_code"] {
+            payload["handoffCode"] = handoffCode
+        }
+        var sanitized = URLComponents()
+        sanitized.scheme = scheme
+        sanitized.host = url.host
+        sanitized.path = url.path
+        let fallbackScheme = scheme ?? "tzap"
+        let fallbackHost = url.host ?? "auth"
+        payload["callbackUrl"] = sanitized.string ?? "\(fallbackScheme)://\(fallbackHost)\(url.path)"
         if let errorCode = values["error_code"], errorCode.count <= 128 {
             payload["errorCode"] = errorCode
-        }
-        if let relayBody = values["relay_body"] {
-            payload["relayBody"] = relayBody
         }
         return payload
     }

@@ -14,6 +14,7 @@ import {
   getCreateFormatExtension,
   isCreatePlanRevisionCurrent,
   normalizeCreateVolumeSize,
+  normalizeTzapVolumeCount,
   normalizeTzapRecoveryPercentage,
   normalizeTzapVolumeLossTolerance,
   sourcePathForCreatePlanRow,
@@ -260,6 +261,29 @@ describe("create flow helpers", () => {
     expect(split.volumeSize).toBe(10 * 1024 * 1024);
     expect(split.tzapVolumeLossTolerance).toBe(16);
     expect(single.tzapVolumeLossTolerance).toBe(0);
+  });
+
+  it("builds exact TZAP volume counts as an alternate split mode", () => {
+    expect(normalizeTzapVolumeCount(1)).toBeUndefined();
+    expect(normalizeTzapVolumeCount(2)).toBe(2);
+    expect(normalizeTzapVolumeCount(2.5)).toBeUndefined();
+
+    const request = buildStartCreateRequest({
+      sources: ["C:/work/source"],
+      destinationPath: "C:/tmp/output",
+      format: "tzap",
+      cleanSource: false,
+      replaceExisting: true,
+      preserveMetadata: false,
+      splitMode: "volumeCount",
+      volumeSize: 10 * 1024 * 1024,
+      volumeCount: 4,
+      tzapVolumeLossTolerance: 2,
+    });
+
+    expect(request).not.toHaveProperty("volumeSize");
+    expect(request.volumeCount).toBe(4);
+    expect(request.tzapVolumeLossTolerance).toBe(2);
   });
 
   it("passes tzapBootstrapSidecar toggle only for TZAP requests", () => {

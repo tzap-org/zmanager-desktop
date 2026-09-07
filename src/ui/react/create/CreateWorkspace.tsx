@@ -1142,6 +1142,17 @@ function CreateOptions() {
   } = useCreatePasswordState();
   const i18n = translatorForSnapshot(snapshot);
   const options = snapshot.create.options;
+  const selectableContacts = snapshot.account.contacts.filter((contact) => isSelectableTzapContact(contact.verificationState));
+  const contactGroups = useMemo(() => {
+    const groups = new Map<string, typeof selectableContacts>();
+    for (const contact of selectableContacts) {
+      const groupId = contact.publicSignerId ? `person:${contact.publicSignerId}` : `device:${contact.contactId}`;
+      const group = groups.get(groupId) ?? [];
+      group.push(contact);
+      groups.set(groupId, group);
+    }
+    return [...groups.values()];
+  }, [selectableContacts]);
 
   useEffect(() => {
     if (options.format !== "tzap") return;
@@ -1475,34 +1486,73 @@ function CreateOptions() {
                 className={ADVANCED_FIELD_CLASS}
                 hidden={!capabilities.splitVolumes}
               >
-                <span>{i18n.t("create.splitSize")}</span>
-                <Select
-                  value={
-                    options.volumeSize !== null &&
-                    options.volumeSize !== undefined
-                      ? String(options.volumeSize)
-                      : "noSplit"
-                  }
-                  onValueChange={(value) =>
-                    actions.handleCreateIntent({
-                      type: "setOptions",
-                      patch: { volumeSize: value === "noSplit" ? "" : value },
-                    })
-                  }
-                >
-                  <SelectTrigger id="create-volume">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="noSplit">{i18n.t("create.noSplit")}</SelectItem>
-                    {volumeSizeChoices.map((bytes) => (
-                      <SelectItem value={String(bytes)} key={bytes}>
-                        {formatVolumeSize(bytes)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <span>{options.format === "tzap" ? i18n.t("create.splitMode") : i18n.t("create.splitSize")}</span>
+                {options.format === "tzap" ? (
+                  <Select
+                    value={options.splitMode}
+                    onValueChange={(value) =>
+                      actions.handleCreateIntent({
+                        type: "setOptions",
+                        patch: { splitMode: value as typeof options.splitMode },
+                      })
+                    }
+                  >
+                    <SelectTrigger id="create-volume">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">{i18n.t("create.noSplit")}</SelectItem>
+                      <SelectItem value="volumeSize">{i18n.t("create.splitBySize")}</SelectItem>
+                      <SelectItem value="volumeCount">{i18n.t("create.splitByCount")}</SelectItem>
+                    </SelectContent>
+                  </Select>
+                ) : (
+                  <Select
+                    value={
+                      options.volumeSize !== null &&
+                      options.volumeSize !== undefined
+                        ? String(options.volumeSize)
+                        : "noSplit"
+                    }
+                    onValueChange={(value) =>
+                      actions.handleCreateIntent({
+                        type: "setOptions",
+                        patch: { volumeSize: value === "noSplit" ? "" : value },
+                      })
+                    }
+                  >
+                    <SelectTrigger id="create-volume">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="noSplit">{i18n.t("create.noSplit")}</SelectItem>
+                      {volumeSizeChoices.map((bytes) => (
+                        <SelectItem value={String(bytes)} key={bytes}>
+                          {formatVolumeSize(bytes)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </label>
+              {options.format === "tzap" && options.splitMode === "volumeCount" ? (
+                <label className={ADVANCED_FIELD_CLASS}>
+                  <span>{i18n.t("create.volumeCount")}</span>
+                  <input
+                    id="create-volume-count"
+                    type="number"
+                    min="2"
+                    step="1"
+                    value={options.volumeCount ?? ""}
+                    onChange={(event) =>
+                      actions.handleCreateIntent({
+                        type: "setOptions",
+                        patch: { volumeCount: event.currentTarget.value },
+                      })
+                    }
+                  />
+                </label>
+              ) : null}
               <label
                 className={ADVANCED_FIELD_CLASS}
                 hidden={!capabilities.zipCompression}
@@ -1561,7 +1611,7 @@ function CreateOptions() {
                   type="number"
                   min="0"
                   max="16"
-                  disabled={options.volumeSize === null}
+                  disabled={options.splitMode === "none"}
                   value={options.tzapVolumeLossTolerance}
                   onChange={(event) =>
                     actions.handleCreateIntent({
@@ -1719,21 +1769,30 @@ function CreateOptions() {
                       <span className="truncate">{key.label?.trim() || key.publicKeyFingerprint}</span>
                     </label>
                   ))}
-                  {snapshot.account.contacts.filter((contact) => isSelectableTzapContact(contact.verificationState)).map((contact) => (
-                    <label key={contact.contactId} className="flex items-center gap-2 text-[11px] font-normal">
-                      <Checkbox
-                        checked={options.tzapContactRecipientIds.split(/[;,\\r\\n]+/).map((id) => id.trim()).includes(contact.contactId)}
-                        onCheckedChange={(checked) =>
-                          actions.handleCreateIntent({
-                            type: "setOptions",
-                            patch: {
-                              tzapContactRecipientIds: toggleDelimitedSelection(options.tzapContactRecipientIds, contact.contactId, checked === true),
-                            },
-                          })
-                        }
-                      />
-                      <span className="truncate">{contact.displayName}{contact.verificationState !== "valid_now" ? " · offline/status caveat" : ""}</span>
-                    </label>
+                  {contactGroups.map((group) => (
+                    <div key={group[0]?.publicSignerId ? `person:${group[0].publicSignerId}` : `device:${group[0]?.contactId}`} className="grid gap-1">
+                      {group[0]?.publicSignerId ? (
+                        <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                          Person · {group[0].displayName}
+                        </span>
+                      ) : null}
+                      {group.map((contact) => (
+                        <label key={contact.contactId} className="flex items-center gap-2 pl-1 text-[11px] font-normal">
+                          <Checkbox
+                            checked={options.tzapContactRecipientIds.split(/[;,\\r\\n]+/).map((id) => id.trim()).includes(contact.contactId)}
+                            onCheckedChange={(checked) =>
+                              actions.handleCreateIntent({
+                                type: "setOptions",
+                                patch: {
+                                  tzapContactRecipientIds: toggleDelimitedSelection(options.tzapContactRecipientIds, contact.contactId, checked === true),
+                                },
+                              })
+                            }
+                          />
+                          <span className="truncate">{group[0]?.publicSignerId ? `Device · ${contact.displayName}` : contact.displayName}{contact.verificationState !== "valid_now" ? " · offline/status caveat" : ""}</span>
+                        </label>
+                      ))}
+                    </div>
                   ))}
                   {!snapshot.account.recipientKeys.some((key) => key.lifecycle === "active") && !snapshot.account.contacts.some((contact) => isSelectableTzapContact(contact.verificationState)) ? (
                     <span className="text-[10px] leading-4 opacity-65">Open TZAP Account &amp; Identity to enroll or trust a recipient.</span>
@@ -1790,7 +1849,7 @@ function CreateOptions() {
                             <SelectItem value="none">No signing identity</SelectItem>
                             {snapshot.account.certificates.filter((certificate) => certificate.state === "active").map((certificate) => (
                               <SelectItem key={certificate.identityId} value={certificate.identityId}>
-                                {certificate.label || certificate.certificateSha256}
+                                {certificate.identityType === "hosted" ? i18n.t("create.tzapHostedIdentity") : i18n.t("create.tzapOfflineIdentity")} · {certificate.label || certificate.certificateSha256}{certificate.renewalRecommended ? ` · ${i18n.t("create.tzapRenewalRecommended")}` : ""}
                               </SelectItem>
                             ))}
                           </SelectContent>

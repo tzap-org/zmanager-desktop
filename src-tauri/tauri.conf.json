@@ -31,7 +31,8 @@
     "deep-link": {
       "desktop": {
         "schemes": [
-          "zmanager"
+          "zmanager",
+          "tzap"
         ]
       }
     }

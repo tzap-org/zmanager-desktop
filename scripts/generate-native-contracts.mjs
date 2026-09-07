@@ -472,7 +472,7 @@ export type NativeInboundHostedAuthEvent = Readonly<{
     state: string;
     result: "completed" | "cancelled" | "failed";
     errorCode?: string | null;
-    relayBody?: string;
+    handoffCode?: string;
     callbackUrl?: string;
   }>;
 }>;

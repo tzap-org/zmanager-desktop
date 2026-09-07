@@ -39,6 +39,10 @@ export const TZAP_RECOVERY_PERCENTAGE_MAX = 100;
 export const TZAP_VOLUME_LOSS_TOLERANCE_MIN = 0;
 export const TZAP_VOLUME_LOSS_TOLERANCE_MAX = 16;
 export const TZAP_SPLIT_DEFAULT_VOLUME_LOSS_TOLERANCE = 1;
+export const TZAP_VOLUME_COUNT_MIN = 2;
+export const TZAP_VOLUME_COUNT_MAX = 0xffff_ffff;
+
+export type TzapSplitMode = "none" | "volumeSize" | "volumeCount";
 
 export type CreateArchiveUnavailableReason =
   | "needsSources"
@@ -179,6 +183,13 @@ export function normalizeCreateVolumeSize(value?: number): number | undefined {
     return undefined;
   }
   return Math.floor(value);
+}
+
+export function normalizeTzapVolumeCount(value?: number): number | undefined {
+  if (value === undefined || !Number.isSafeInteger(value) || value < TZAP_VOLUME_COUNT_MIN || value > TZAP_VOLUME_COUNT_MAX) {
+    return undefined;
+  }
+  return value;
 }
 
 function parseDirectoryPath(directory: string): ParsedDirectoryPath | null {
@@ -508,7 +519,9 @@ export type BuildStartCreateRequestInput = {
   preserveMetadata: boolean;
   password?: string;
   compressionLevel?: number;
+  splitMode?: TzapSplitMode;
   volumeSize?: number;
+  volumeCount?: number;
   tzapRecoveryPercentage?: number;
   tzapVolumeLossTolerance?: number;
   zipCompression?: "store" | "deflate";
@@ -521,7 +534,20 @@ export type BuildStartCreateRequestInput = {
 };
 
 export function buildStartCreateRequest(input: BuildStartCreateRequestInput): StartCreateRequest {
-  const volumeSize = normalizeCreateVolumeSize(input.volumeSize);
+  const requestedSplitMode = input.splitMode ?? (
+    input.volumeCount !== undefined
+      ? "volumeCount"
+      : input.volumeSize !== undefined
+        ? "volumeSize"
+        : "none"
+  );
+  const splitMode: TzapSplitMode = input.format === "tzap"
+    ? requestedSplitMode
+    : input.volumeSize !== undefined
+      ? "volumeSize"
+      : "none";
+  const volumeSize = splitMode === "volumeSize" ? normalizeCreateVolumeSize(input.volumeSize) : undefined;
+  const volumeCount = splitMode === "volumeCount" ? normalizeTzapVolumeCount(input.volumeCount) : undefined;
 
   return {
     sources: [...input.sources],
@@ -541,12 +567,13 @@ export function buildStartCreateRequest(input: BuildStartCreateRequestInput): St
     ...(input.password && createFormatSupportsPassword(input.format) ? { password: input.password } : {}),
     ...(input.compressionLevel !== undefined ? { compressionLevel: input.compressionLevel } : {}),
     ...(volumeSize !== undefined && input.format !== "tarZst" && input.format !== "tarGz" && input.format !== "appleArchive" ? { volumeSize } : {}),
+    ...(volumeCount !== undefined && input.format === "tzap" ? { volumeCount } : {}),
     ...(input.format === "zip" ? { zipCompression: input.zipCompression ?? "deflate" } : {}),
     ...(input.format === "tzap"
       ? {
           tzapRecoveryPercentage:
             normalizeTzapRecoveryPercentage(input.tzapRecoveryPercentage) ?? TZAP_RECOVERY_PERCENTAGE_DEFAULT,
-          tzapVolumeLossTolerance: volumeSize === undefined
+          tzapVolumeLossTolerance: splitMode === "none"
             ? 0
             : normalizeTzapVolumeLossTolerance(input.tzapVolumeLossTolerance) ?? 0,
           ...(input.tzapCertificates ? { tzapCertificates: input.tzapCertificates } : {}),

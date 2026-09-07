@@ -61,12 +61,19 @@ private func promiseReleaseCallback(_: UnsafeMutableRawPointer?) {}
 
 @Test func urlRoutingKeepsAuthenticationSecretsOutOfCallbacks() throws {
     let valid = try #require(URL(string:
-        "zmanager://auth-callback?state=state-1234567890&result=completed"
+        "tzap://auth/callback?state=state-1234567890&result=completed&handoff_code=handoff-code-1234567890"
     ))
+    #expect(NativeHostEventEncoder.hostedAuthPayload(from: valid)?["handoffCode"] as? String
+        == "handoff-code-1234567890")
     #expect(NativeHostEventEncoder.hostedAuthPayload(from: valid)?["state"] as? String
         == "state-1234567890")
+    #expect(NativeHostEventEncoder.hostedAuthPayload(from: valid)?["callbackUrl"] as? String
+        == "tzap://auth/callback")
+
+    let cancelled = try #require(URL(string: "tzap://auth/callback?state=state-1234567890&result=cancelled&handoff_code=handoff-code-1234567890"))
+    #expect(NativeHostEventEncoder.hostedAuthPayload(from: cancelled)?["handoffCode"] == nil)
     let secret = try #require(URL(string:
-        "zmanager://auth-callback?state=state-1234567890&result=completed&code=secret"
+        "tzap://auth/callback?state=state-1234567890&result=completed&handoff_code=handoff-code-1234567890&code=secret"
     ))
     #expect(NativeHostEventEncoder.hostedAuthPayload(from: secret) == nil)
 
@@ -85,7 +92,7 @@ private func promiseReleaseCallback(_: UnsafeMutableRawPointer?) {}
 
     for value in [shortState, longState, invalidState] {
         let url = try #require(URL(string:
-            "zmanager://auth-callback?state=\(value)&result=completed"
+            "tzap://auth/callback?state=\(value)&result=completed&handoff_code=handoff-code-1234567890"
         ))
         #expect(NativeHostEventEncoder.hostedAuthPayload(from: url) == nil)
     }

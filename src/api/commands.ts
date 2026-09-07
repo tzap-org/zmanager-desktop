@@ -7,6 +7,8 @@ import type {
   AccountImportSigningIdentityRequest,
   AccountInstallSigningCertificateRequest,
   AccountSnapshotDto,
+  AccountLifecycleResultDto,
+  AccountContactSyncResultDto,
   ArchiveChildrenPageDto,
   ArchiveChildrenRequest,
   ArchiveIndexSessionRequest,
@@ -151,8 +153,20 @@ export async function acceptAccountContactCard(
   });
 }
 
-export async function syncAccountContacts(): Promise<AccountSnapshotDto> {
-  return invoke<AccountSnapshotDto>("account_sync_contacts");
+export async function syncAccountContacts(): Promise<AccountContactSyncResultDto> {
+  return invoke<AccountContactSyncResultDto>("account_sync_contacts");
+}
+
+export async function enrollAccountCertificate(): Promise<AccountLifecycleResultDto> {
+  return invoke<AccountLifecycleResultDto>("account_enroll_certificate");
+}
+
+export async function renewAccountCertificate(certificateId: string): Promise<AccountLifecycleResultDto> {
+  return invoke<AccountLifecycleResultDto>("account_renew_certificate", { request: { certificateId } });
+}
+
+export async function retireAccountDevice(): Promise<AccountLifecycleResultDto> {
+  return invoke<AccountLifecycleResultDto>("account_retire_device");
 }
 
 export async function fetchHealthcheck(): Promise<HealthcheckResponse> {

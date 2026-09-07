@@ -85,7 +85,8 @@ function TzapVerification() {
 
   const busy = verification.state === "checking";
   const successful =
-    verification.state === "trusted" || verification.state === "signatureValid";
+    verification.state === "trusted" || verification.state === "signatureValid" || verification.state === "verifiedOffline" || verification.state === "verifiedWithCaveat";
+  const hasCaveat = verification.state === "verifiedWithCaveat";
   return (
     <section
       className="rounded-xl border border-black/10 bg-white/70 p-3 shadow-sm dark:border-white/10 dark:bg-white/[0.035]"
@@ -93,7 +94,7 @@ function TzapVerification() {
     >
       <div className="flex items-start gap-2">
         <span
-          className={`mt-0.5 rounded-lg p-1.5 ${successful ? "bg-emerald-500/10 text-emerald-700" : verification.state === "error" ? "bg-red-500/10 text-red-700" : "bg-blue-500/10 text-blue-700"}`}
+          className={`mt-0.5 rounded-lg p-1.5 ${hasCaveat ? "bg-amber-500/10 text-amber-700" : successful ? "bg-emerald-500/10 text-emerald-700" : verification.state === "error" ? "bg-red-500/10 text-red-700" : "bg-blue-500/10 text-blue-700"}`}
           aria-hidden="true"
         >
           {verification.state === "error" ? (
@@ -215,6 +216,21 @@ function TzapVerification() {
         </div>
       ) : null}
 
+      <label className="mt-3 flex items-center gap-2 text-[11px]">
+        <Checkbox
+          id="tzap-current-status"
+          checked={verification.checkCurrentStatus}
+          disabled={busy}
+          onCheckedChange={(checked) =>
+            actions.handleArchiveIntent({
+              type: "setTzapVerificationOptions",
+              patch: { checkCurrentStatus: checked === true },
+            })
+          }
+        />
+        <span>{i18n.t("extract.tzapVerification.currentStatus")}</span>
+      </label>
+
       <button
         type="button"
         className="mt-3 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"
@@ -231,7 +247,9 @@ function TzapVerification() {
       >
         {busy
           ? i18n.t("extract.tzapVerification.checking")
-          : verification.validateTrust
+          : verification.checkCurrentStatus
+            ? i18n.t("extract.tzapVerification.checkCurrentStatus")
+            : verification.validateTrust
             ? i18n.t("extract.tzapVerification.validate")
             : i18n.t("extract.tzapVerification.inspect")}
       </button>
@@ -239,7 +257,11 @@ function TzapVerification() {
       {verification.result ? (
         <div className="mt-3 grid gap-1 rounded-lg border border-emerald-500/20 bg-emerald-500/[0.06] p-2 text-[10px]">
           <strong className="text-emerald-700">
-            {verification.state === "trusted"
+            {hasCaveat
+              ? i18n.t("extract.tzapVerification.verifiedWithCaveat")
+              : verification.state === "verifiedOffline"
+              ? i18n.t("extract.tzapVerification.verifiedOffline")
+              : verification.state === "trusted"
               ? i18n.t("extract.tzapVerification.trusted")
               : i18n.t("extract.tzapVerification.signatureValid")}
           </strong>
@@ -258,6 +280,9 @@ function TzapVerification() {
           >
             {verification.result.certificateSha256}
           </code>
+          {hasCaveat && verification.result.statusReason ? (
+            <span className="text-amber-700 dark:text-amber-300">{i18n.t("extract.tzapVerification.statusReason")}: {verification.result.statusReason}</span>
+          ) : null}
         </div>
       ) : null}
       {verification.error ? (

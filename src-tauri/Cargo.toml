@@ -19,6 +19,13 @@ edition = "2024"
 license = "Apache-2.0"
 publish = false
 
+[features]
+default = []
+# The hosted online path remains opt-in until ADR 0011 and the exact staging/
+# production OAuth registrations are recorded. Offline identity and archive
+# behavior are available in the default build.
+hosted-online = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
