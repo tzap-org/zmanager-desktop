@@ -2,6 +2,8 @@ use reqwest::blocking::Client;
 use std::time::Duration;
 use zmanager_tzap_hosted::auth_client::{TzapAuthError, TzapAuthHttpMethod, TzapAuthHttpRequest, TzapAuthHttpResponse, TzapAuthHttpTransport};
 
+const DESKTOP_USER_AGENT: &str = concat!("ZManager-Desktop/", env!("CARGO_PKG_VERSION"));
+
 pub struct HostedHttpTransport {
     client: Client,
 }
@@ -14,6 +16,7 @@ impl HostedHttpTransport {
         // application-level choice to the caller.
         let _ = rustls::crypto::ring::default_provider().install_default();
         let client = Client::builder()
+            .user_agent(DESKTOP_USER_AGENT)
             .timeout(Duration::from_secs(3))
             .connect_timeout(Duration::from_secs(2))
             .redirect(reqwest::redirect::Policy::none())
@@ -59,5 +62,41 @@ impl TzapAuthHttpTransport for HostedHttpTransport {
         let body = response.bytes().map_err(|e| TzapAuthError::Transport { message: format!("Failed to read HTTP response body: {}", e) })?.to_vec();
 
         Ok(TzapAuthHttpResponse { status_code, headers, body })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use zmanager_tzap_hosted::auth_client::{TzapAuthHttpMethod, TzapAuthRequestOptions};
+
+    #[test]
+    fn hosted_transport_identifies_the_desktop_client() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+        let address = listener.local_addr().expect("test listener should expose an address");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("test request should connect");
+            let mut request = [0_u8; 4096];
+            let bytes_read = stream.read(&mut request).expect("test request should be readable");
+            let request = String::from_utf8_lossy(&request[..bytes_read]);
+            assert!(request.lines().any(|line| line.eq_ignore_ascii_case(&format!("user-agent: {DESKTOP_USER_AGENT}"))));
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok").expect("test response should be writable");
+        });
+
+        let transport = HostedHttpTransport::new().expect("desktop transport should initialize");
+        let response = transport
+            .send(&TzapAuthHttpRequest {
+                method: TzapAuthHttpMethod::Get,
+                url: format!("http://{address}/health"),
+                bearer_token: None,
+                body: None,
+                options: TzapAuthRequestOptions::default(),
+                headers: Vec::new(),
+            })
+            .expect("test request should succeed");
+        assert_eq!(response.status_code, 200);
+        server.join().expect("test server should finish");
     }
 }

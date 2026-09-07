@@ -12,11 +12,11 @@ const CONTRACT_ROWS = [
 ] as const;
 
 describe("TZAP online desktop conformance fixture", () => {
-  it("records the OAuth registration gate without inventing unverified client IDs", () => {
+  it("records the registered OAuth client and redirect contract", () => {
     expect(fixture.oauthRegistration.staging.redirectUri).toEqual("tzap://auth/callback");
     expect(fixture.oauthRegistration.production.redirectUri).toEqual("tzap://auth/callback");
-    expect(fixture.oauthRegistration.staging.clientId).toBeNull();
-    expect(fixture.oauthRegistration.production.clientId).toBeNull();
+    expect(fixture.oauthRegistration.staging.clientId).toEqual("zmanager_desktop");
+    expect(fixture.oauthRegistration.production.clientId).toEqual("zmanager_desktop");
   });
 
   it("contains request, response, and failure examples for every plan boundary", () => {

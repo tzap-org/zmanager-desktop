@@ -1,11 +1,11 @@
 {
   "oauthRegistration": {
     "staging": {
-      "clientId": null,
+      "clientId": "zmanager_desktop",
       "redirectUri": "tzap://auth/callback"
     },
     "production": {
-      "clientId": null,
+      "clientId": "zmanager_desktop",
       "redirectUri": "tzap://auth/callback"
     }
   },
