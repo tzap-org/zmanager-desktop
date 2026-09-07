@@ -24,6 +24,7 @@ use zmanager_tzap_hosted::auth_client::{
     TzapPendingAuthState, TzapSessionRecord, TzapSessionStore, complete_hosted_auth_handoff,
 };
 use zmanager_tzap_hosted::backup_client::{TzapBackupClient, TzapBackupError};
+use zmanager_tzap_hosted::intermediate_client::TzapOnlineIntermediateResolver;
 
 use crate::error::{CommandErrorDto, ErrorSeverityDto};
 use crate::secure_store::NativeTzapSecretStore;
@@ -854,7 +855,7 @@ pub fn sync_contact_snapshot(root: &Path, runtime: &AccountRuntime) -> Result<()
     let mut catalog_store = FileTzapIdentityCatalogStore::new(root);
     let mut catalog = ensure_catalog(root, runtime)?;
 
-    apply_contact_snapshot_to_catalog(&mut catalog, &snapshot, now);
+    apply_contact_snapshot_to_catalog_with_intermediate_resolver(&mut catalog, &snapshot, now, Some(root), Some(&config.hosted_account_base_url));
 
     let expected_revision = catalog.revision;
     catalog.revision = catalog.revision.saturating_add(1);
@@ -864,6 +865,16 @@ pub fn sync_contact_snapshot(root: &Path, runtime: &AccountRuntime) -> Result<()
 }
 
 pub fn apply_contact_snapshot_to_catalog(catalog: &mut TzapIdentityCatalog, snapshot: &zmanager_core::contact_snapshot::TzapContactSnapshot, now: u64) {
+    apply_contact_snapshot_to_catalog_with_intermediate_resolver(catalog, snapshot, now, None, None);
+}
+
+fn apply_contact_snapshot_to_catalog_with_intermediate_resolver(
+    catalog: &mut TzapIdentityCatalog,
+    snapshot: &zmanager_core::contact_snapshot::TzapContactSnapshot,
+    now: u64,
+    intermediate_cache_root: Option<&Path>,
+    service_base_url: Option<&str>,
+) {
     // 1. Merge and prune tombstones (365 days retention)
     let mut tombstone_map = std::collections::BTreeMap::<String, u64>::new();
     for t in catalog.removed_contacts.iter().chain(snapshot.removed.iter()) {
@@ -877,6 +888,10 @@ pub fn apply_contact_snapshot_to_catalog(catalog: &mut TzapIdentityCatalog, snap
     catalog.contacts.retain(|c| if let Some(&removed_at) = tombstone_map.get(&c.contact_id) { c.accepted_at_unix_seconds > removed_at } else { true });
 
     // 2. Process snapshot contacts: re-verify and merge
+    let resolver = intermediate_cache_root.map(|root| {
+        let cache = zmanager_core::trust::TzapIntermediateCache::new(root.join("intermediates"));
+        TzapOnlineIntermediateResolver::with_reqwest(cache, service_base_url.map(str::to_owned))
+    });
     let options = zmanager_core::contact_card::TzapContactCardImportOptions {
         verifier_time_unix_seconds: i64::try_from(now).unwrap_or(i64::MAX),
         official_root_pins: &zmanager_core::trust::OFFICIAL_TZAP_ROOT_PINS,
@@ -884,7 +899,7 @@ pub fn apply_contact_snapshot_to_catalog(catalog: &mut TzapIdentityCatalog, snap
         custom_trust_root_sha256: Vec::new(),
         custom_trust_root_certificates_der: Vec::new(),
         certificate_profile_options: zmanager_core::trust::TzapCertificateProfileOptions::default(),
-        intermediate_resolver: None,
+        intermediate_resolver: resolver.as_ref().map(|value| value as &dyn zmanager_core::trust::TzapIntermediateResolver),
     };
 
     let mut incoming_ids = std::collections::HashSet::new();

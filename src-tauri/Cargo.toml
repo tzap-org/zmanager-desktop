@@ -38,7 +38,7 @@ tokio = { version = "1", features = ["sync", "rt", "macros"] }
 unicode-normalization = "0.1"
 zmanager-shell-contract = { path = "../crates/zmanager-shell-contract" }
 zmanager-core = { path = "../../zmanager/crates/zmanager-core", package = "zmanager-core" }
-zmanager-tzap-hosted = { path = "../../zmanager/crates/zmanager-tzap-hosted" }
+zmanager-tzap-hosted = { path = "../../zmanager/crates/zmanager-tzap-hosted", features = ["reqwest-transport"] }
 zmanager-localsend = { path = "../../zmanager/crates/zmanager-localsend" }
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls-no-provider"] }
 rustls = { version = "0.23.36", default-features = false, features = ["ring", "std", "tls12", "logging"] }
