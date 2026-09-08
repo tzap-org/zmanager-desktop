@@ -215,7 +215,7 @@ pub struct AccountCompleteHostedAuthRequest {
 pub struct AccountCurrentUserDto {
     pub display_name: String,
     pub public_signer_id: Option<String>,
-    pub assurance_level: String,
+    pub assurance_level: Option<String>,
     pub selected_org_id: Option<String>,
 }
 
@@ -886,7 +886,7 @@ pub fn account_fetch_current_user(_app: AppHandle, runtime: State<'_, AccountRun
             Ok(AccountCurrentUserDto {
                 display_name: user.display_name,
                 public_signer_id: user.public_signer_id,
-                assurance_level: user.assurance_level.as_str().to_string(),
+                assurance_level: user.assurance_level.map(|value| value.as_str().to_owned()),
                 selected_org_id: user.selected_org_id,
             })
         }
@@ -1869,7 +1869,15 @@ fn snapshot_from_catalog(runtime: &AccountRuntime, catalog: TzapIdentityCatalog)
         ("launch_only", "unavailable", "offline_cache_only")
     };
 
-    let assurance_level = hosted_online_enabled().then(|| state.session.as_ref().map(|s| s.identity_assurance.as_str().to_owned())).flatten();
+    let assurance_level = hosted_online_enabled()
+        .then(|| {
+            catalog
+                .signing_identities
+                .iter()
+                .find(|identity| is_hosted_signing_identity(identity) && identity.lifecycle == "active")
+                .and_then(|identity| identity.assurance_level.clone())
+        })
+        .flatten();
     let session_expires_at_unix_seconds = hosted_online_enabled().then(|| state.session.as_ref().map(|s| s.expires_at_unix_seconds)).flatten();
     let display_name = hosted_online_enabled().then(|| state.cached_user.as_ref().map(|u| u.display_name.clone())).flatten();
     let public_signer_id = hosted_online_enabled().then(|| state.cached_user.as_ref().and_then(|u| u.public_signer_id.clone())).flatten();
@@ -2441,7 +2449,7 @@ mod tests {
             state.cached_user = Some(TzapCurrentUser {
                 display_name: "Cached User".to_owned(),
                 public_signer_id: Some("signer-1".to_owned()),
-                assurance_level: zmanager_core::trust::TzapIdentityAssurance::OauthVerifiedEmail,
+                assurance_level: Some(zmanager_core::trust::TzapIdentityAssurance::OauthVerifiedEmail),
                 selected_org_id: None,
             });
         }

@@ -184,7 +184,7 @@ export type AccountRenewCertificateRequest = {
 export type AccountCurrentUserDto = {
   displayName: string;
   publicSignerId?: string | null;
-  assuranceLevel: string;
+  assuranceLevel: string | null;
   selectedOrgId?: string | null;
 };
 
