@@ -457,6 +457,9 @@ fn map_lifecycle_error(error: TzapCertificateLifecycleError) -> CommandErrorDto 
         TzapCertificateLifecycleError::Enrollment(TzapEnrollmentError::Denied(denial)) => {
             account_error(denial.kind.as_str(), "The hosted service did not approve this device operation")
         }
+        TzapCertificateLifecycleError::Enrollment(TzapEnrollmentError::HttpStatus { status_code, .. }) => {
+            account_error("account_lifecycle_http_failed", format!("Hosted enrollment request failed with status {status_code}"))
+        }
         TzapCertificateLifecycleError::CertificateNotFound => account_error("account_certificate_not_found", "Certificate was not found locally"),
         TzapCertificateLifecycleError::CertificateNotRenewable => account_error("account_certificate_not_renewable", "Certificate cannot be renewed"),
         TzapCertificateLifecycleError::RenewalTargetMismatch => {
@@ -495,12 +498,12 @@ pub fn account_enroll_certificate(app: AppHandle, runtime: State<'_, AccountRunt
     let environment = hosted_environment(&environment_str)?;
     let (sign_base_url, login_base_url) = hosted_service_base_urls(environment);
     let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|error| account_error("account_http_client_failed", error))?;
-    let enrollment_client = if matches!(environment, TzapHostedAuthEnvironment::Local) {
+    let enrollment_client = if matches!(environment, TzapHostedAuthEnvironment::Local | TzapHostedAuthEnvironment::Staging) {
         TzapEnrollmentClient::local_staging_server_with_device_name(&sign_base_url, &transport, DESKTOP_DEVICE_NAME)
     } else {
         TzapEnrollmentClient::with_device_name(&sign_base_url, &transport, DESKTOP_DEVICE_NAME)
     };
-    let lifecycle_client = if matches!(environment, TzapHostedAuthEnvironment::Local) {
+    let lifecycle_client = if matches!(environment, TzapHostedAuthEnvironment::Local | TzapHostedAuthEnvironment::Staging) {
         TzapCertificateLifecycleClient::local_staging_server_with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
     } else {
         TzapCertificateLifecycleClient::with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
@@ -589,7 +592,7 @@ pub fn account_renew_certificate(
     let environment = hosted_environment(&environment_str)?;
     let (sign_base_url, login_base_url) = hosted_service_base_urls(environment);
     let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|error| account_error("account_http_client_failed", error))?;
-    let lifecycle_client = if matches!(environment, TzapHostedAuthEnvironment::Local) {
+    let lifecycle_client = if matches!(environment, TzapHostedAuthEnvironment::Local | TzapHostedAuthEnvironment::Staging) {
         TzapCertificateLifecycleClient::local_staging_server_with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
     } else {
         TzapCertificateLifecycleClient::with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
@@ -630,7 +633,7 @@ pub fn account_retire_device(app: AppHandle, runtime: State<'_, AccountRuntime>)
     let environment = hosted_environment(&environment_str)?;
     let (sign_base_url, login_base_url) = hosted_service_base_urls(environment);
     let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|error| account_error("account_http_client_failed", error))?;
-    let lifecycle_client = if matches!(environment, TzapHostedAuthEnvironment::Local) {
+    let lifecycle_client = if matches!(environment, TzapHostedAuthEnvironment::Local | TzapHostedAuthEnvironment::Staging) {
         TzapCertificateLifecycleClient::local_staging_server_with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
     } else {
         TzapCertificateLifecycleClient::with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
@@ -1812,10 +1815,8 @@ fn verify_contact_card_with_resolver(
     intermediate_resolver: Option<&dyn zmanager_core::trust::TzapIntermediateResolver>,
 ) -> Result<zmanager_core::contact_card::TzapVerifiedContactCard, zmanager_core::contact_card::TzapContactCardError> {
     let custom_trust_root_certificates_der = fixture_root_certificates().unwrap_or_default();
-    let custom_trust_root_sha256 = custom_trust_root_certificates_der
-        .iter()
-        .map(|certificate| zmanager_core::trust::certificate_sha256_identifier_for_der(certificate))
-        .collect();
+    let custom_trust_root_sha256 =
+        custom_trust_root_certificates_der.iter().map(|certificate| zmanager_core::trust::certificate_sha256_identifier_for_der(certificate)).collect();
     let options = zmanager_core::contact_card::TzapContactCardImportOptions {
         verifier_time_unix_seconds: i64::try_from(current_unix_seconds()).unwrap_or(i64::MAX),
         official_root_pins: &zmanager_core::trust::OFFICIAL_TZAP_ROOT_PINS,
@@ -2212,8 +2213,14 @@ mod tests {
             hosted_client_id(TzapHostedAuthEnvironment::Local).unwrap(),
             option_env!("TZAP_DESKTOP_LOCAL_CLIENT_ID").or(option_env!("TZAP_DESKTOP_CLIENT_ID")).unwrap_or("zmanager-desktop-local")
         );
-        assert_eq!(hosted_client_id(TzapHostedAuthEnvironment::Staging).unwrap(), option_env!("TZAP_DESKTOP_STAGING_CLIENT_ID").unwrap_or(REGISTERED_DESKTOP_CLIENT_ID));
-        assert_eq!(hosted_client_id(TzapHostedAuthEnvironment::Prod).unwrap(), option_env!("TZAP_DESKTOP_PROD_CLIENT_ID").unwrap_or(REGISTERED_DESKTOP_CLIENT_ID));
+        assert_eq!(
+            hosted_client_id(TzapHostedAuthEnvironment::Staging).unwrap(),
+            option_env!("TZAP_DESKTOP_STAGING_CLIENT_ID").unwrap_or(REGISTERED_DESKTOP_CLIENT_ID)
+        );
+        assert_eq!(
+            hosted_client_id(TzapHostedAuthEnvironment::Prod).unwrap(),
+            option_env!("TZAP_DESKTOP_PROD_CLIENT_ID").unwrap_or(REGISTERED_DESKTOP_CLIENT_ID)
+        );
     }
 
     #[test]

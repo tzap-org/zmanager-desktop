@@ -200,14 +200,20 @@ fn hosted_auth_callback_event_from_url(value: &str) -> Option<NativeInboundEvent
     if !bounded_auth_token(&state, 16, 256, |byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')) {
         return None;
     }
-    let result = url.query_pairs().find(|(key, _)| key == "result").map(|(_, value)| value.into_owned())?;
-    let result = match result.as_str() {
-        "completed" => HostedAuthResult::Completed,
-        "cancelled" => HostedAuthResult::Cancelled,
-        "failed" => HostedAuthResult::Failed,
-        _ => return None,
-    };
     let handoff_code = url.query_pairs().find(|(key, _)| key == "handoff_code").map(|(_, value)| value.into_owned());
+    let result = match url.query_pairs().find(|(key, _)| key == "result").map(|(_, value)| value.into_owned()) {
+        Some(result) => match result.as_str() {
+            "completed" => HostedAuthResult::Completed,
+            "cancelled" => HostedAuthResult::Cancelled,
+            "failed" => HostedAuthResult::Failed,
+            _ => return None,
+        },
+        // The hosted service's approved native callback shape is state plus a
+        // one-time handoff code. Treat the presence of a valid handoff code as
+        // completion when the optional result discriminator is omitted.
+        None if handoff_code.is_some() => HostedAuthResult::Completed,
+        None => return None,
+    };
     if matches!(result, HostedAuthResult::Completed)
         && !handoff_code
             .as_deref()
@@ -730,6 +736,17 @@ mod tests {
         assert_eq!(payload.handoff_code.as_deref(), Some("handoff-code-1234567890"));
         assert_eq!(payload.callback_url.as_deref(), Some("tzap://auth/callback"));
         assert!(hosted_auth_callback_event_from_args([OsString::from("tzap://auth/callback?state=state-1234567890&result=completed&code=secret")]).is_none());
+    }
+
+    #[test]
+    fn hosted_auth_callback_defaults_completion_when_result_is_omitted() {
+        let event = hosted_auth_callback_event_from_args([OsString::from("tzap://auth/callback?state=state-1234567890&handoff_code=handoff-code-1234567890")])
+            .expect("approved callback shape should be recognized");
+        let NativeInboundPayload::HostedAuthCallback(payload) = event.payload else {
+            panic!("expected hosted auth payload");
+        };
+        assert_eq!(payload.result, HostedAuthResult::Completed);
+        assert_eq!(payload.handoff_code.as_deref(), Some("handoff-code-1234567890"));
     }
 
     #[test]

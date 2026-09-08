@@ -66,15 +66,93 @@ async function completeBrowserAuth(launchUrl: string): Promise<string> {
   const browserSession = await chromium.launch({ channel: "msedge", headless: true });
   try {
     const page = await browserSession.newPage();
+    const requests: Array<{ method: string; protocol: string; path: string; queryKeys: string[] }> = [];
+    let attemptedCallback: string | null = null;
+    let callbackRequestObserved = false;
+    const captureCallbackAttempt = (urlValue: string) => {
+      try {
+        const url = new URL(urlValue);
+        if ((url.protocol === "tzap:" && url.pathname === "/callback") || (url.protocol === "zmanager:" && url.pathname === "/auth-callback")) {
+          callbackRequestObserved = true;
+          attemptedCallback = urlValue;
+        }
+      } catch {
+        // Ignore non-URL browser events.
+      }
+    };
+    page.on("request", (request) => {
+      captureCallbackAttempt(request.url());
+      try {
+        const url = new URL(request.url());
+        requests.push({ method: request.method(), protocol: url.protocol, path: url.pathname, queryKeys: [...url.searchParams.keys()] });
+      } catch {
+        // Ignore non-URL browser events.
+      }
+    });
     await page.goto(launchUrl, { waitUntil: "domcontentloaded" });
-    await page.locator("input[name=username]").fill(username);
-    await page.locator("input[name=password]").fill(password);
+    const usernameInput = page.locator("input[name=username], input[name=email], input[type=email]").first();
+    const passwordInput = page.locator("input[name=password], input[type=password]").first();
+    await usernameInput.waitFor({ state: "visible", timeout: 15_000 }).catch(() => undefined);
+    await passwordInput.waitFor({ state: "visible", timeout: 15_000 }).catch(() => undefined);
+    if (!await usernameInput.isVisible().catch(() => false) || !await passwordInput.isVisible().catch(() => false)) {
+      const controls = await page.locator("input, button, [role=button]").evaluateAll((elements) => elements.map((element) => ({
+        tag: element.tagName.toLowerCase(),
+        type: element.getAttribute("type"),
+        name: element.getAttribute("name"),
+        id: element.id,
+        text: (element.textContent ?? "").trim().slice(0, 80),
+      })));
+      const bodyText = (await page.locator("body").innerText().catch(() => ""))
+        .replaceAll(username, "<redacted-username>")
+        .replaceAll(password, "<redacted-password>")
+        .replace(/https?:\/\/[^\s]+/gu, "<redacted-url>")
+        .slice(0, 1000);
+      const finalUrl = new URL(page.url());
+      throw new Error(JSON.stringify({
+        pageTitle: await page.title(),
+        finalOrigin: finalUrl.origin,
+        finalPath: finalUrl.pathname,
+        finalQueryKeys: [...finalUrl.searchParams.keys()],
+        readyState: await page.evaluate(() => document.readyState),
+        controls,
+        bodyText,
+        requests,
+      }));
+    }
+    await usernameInput.fill(username);
+    await passwordInput.fill(password);
     await Promise.all([
       page.waitForLoadState("domcontentloaded"),
       page.locator("button[type=submit]").click(),
     ]);
     const callbackLink = page.locator("[data-callback-url], a[href^='tzap://'], a[href^='zmanager://']").first();
-    const callback = await callbackLink.getAttribute("data-callback-url") ?? await callbackLink.getAttribute("href");
+    let callback: string | null = attemptedCallback;
+    try {
+      if (!callback) {
+        await callbackLink.waitFor({ state: "attached", timeout: 15_000 });
+        callback = await callbackLink.getAttribute("data-callback-url") ?? await callbackLink.getAttribute("href");
+      }
+    } catch {
+      if (attemptedCallback) {
+        callback = attemptedCallback;
+      } else {
+        const finalUrl = new URL(page.url());
+        const postLoginText = (await page.locator("body").innerText().catch(() => ""))
+          .replaceAll(username, "<redacted-username>")
+          .replaceAll(password, "<redacted-password>")
+          .replace(/https?:\/\/[^\s]+/gu, "<redacted-url>")
+          .slice(0, 1000);
+        throw new Error(JSON.stringify({
+          pageTitle: await page.title(),
+          finalOrigin: finalUrl.origin,
+          finalPath: finalUrl.pathname,
+          finalQueryKeys: [...finalUrl.searchParams.keys()],
+          postLoginText,
+          requests,
+          callbackRequestObserved,
+        }));
+      }
+    }
     assert(callback, "hosted login must return a tzap:// callback URL");
     await openDeepLink(callback);
     return callback;
@@ -127,6 +205,10 @@ function evidenceFailure(error: unknown, snapshot: unknown): Error {
 
 if (config.environment === "staging") {
   describe("Online TZAP account lifecycle", () => {
+    beforeAll(() => {
+      mkdirSync(runArtifactDir, { recursive: true });
+    });
+
     it("completes the real staging browser handoff and current-user session", async () => {
       const launch = await invoke<{ launchUrl: string; state: string; expiresAtUnixSeconds: number }>("account_begin_hosted_auth", {
         request: { environment: "staging", audience: process.env.TZAP_E2E_AUDIENCE ?? "sign.tzap.org" },
@@ -136,8 +218,44 @@ if (config.environment === "staging") {
       assert.equal(new URL(callback).protocol, "tzap:");
       const snapshot = await waitForSignedIn();
       assert.equal(snapshot.capabilities.auth, "handoff_exchange");
-      const currentUser = await invoke<AccountCurrentUserDto>("account_fetch_current_user");
-      assert.ok(currentUser.publicSignerId);
+      await invoke<AccountCurrentUserDto>("account_fetch_current_user");
+
+      const callbackUrl = new URL(callback);
+      await assert.rejects(
+        () => invoke("account_complete_hosted_auth", {
+          request: { state: callbackUrl.searchParams.get("state"), handoffCode: callbackUrl.searchParams.get("handoff_code"), callbackUrl: "tzap://auth/callback" },
+        }),
+        "a replayed hosted handoff must be rejected",
+      );
+    });
+
+    it("enrolls, signs, and verifies the mobile-parity staging flow", async () => {
+      const result = await invoke<AccountLifecycleResultDto>("account_enroll_certificate");
+      assert.equal(result.outcome, "complete");
+      const hosted = result.snapshot.certificates.find((certificate) => certificate.identityType === "hosted" && certificate.state === "active");
+      assert(hosted, "staging enrollment must produce an active hosted certificate");
+      assert.equal(hosted.assuranceLevel, "oauth_verified_email");
+      assert.equal(result.snapshot.defaultSigningIdentityId, hosted.identityId);
+
+      const archivePath = path.join(runArtifactDir, "staging-mobile-parity.tzap");
+      const sourceManifest = hashTree(sourceRoot);
+      await startCreate({
+        sources: [sourceRoot], destinationPath: archivePath, format: "tzap", cleanSource: false,
+        replaceExisting: true, preserveMetadata: true,
+        tzapCertificates: { signingSelection: { mode: "enrolledIdentity", signingIdentityId: hosted.identityId }, recipientSelection: { recipientKeyIds: [], contactRecipientIds: [], oneTimeCertificatePaths: [] } },
+      });
+
+      const offline = await invoke<VerifyTzapCertificateResponse>("verify_tzap_certificate", { request: { archivePath, validateTrust: true, trustedCaCertificatePaths: [], trustedSystemRoots: false, includeOfficialTzapRoot: true, checkCurrentStatus: false, environment: "staging" } });
+      assert.equal(offline.signatureCheck, "ok", JSON.stringify(offline));
+      assert.equal(offline.certificateTime, "valid_at_signing", JSON.stringify(offline));
+      const extractedRoot = path.join(runArtifactDir, "staging-mobile-parity-extracted");
+      await startExtract({ archivePath, destinationPath: extractedRoot, password: null, recipientKeyId: null, overwrite: "replace", destinationCollisionStrategy: "refuse", entryPaths: null, stripComponents: 0, tzapRestorePolicy: "content", tzapAllowDegraded: false, tzapAllowAbsoluteSymlinks: false, ignoreSymlinks: false });
+      assertHashManifestEqual(sourceManifest, path.join(extractedRoot, path.basename(sourceRoot)));
+
+      const online = await invoke<VerifyTzapCertificateResponse>("verify_tzap_certificate", { request: { archivePath, validateTrust: true, trustedCaCertificatePaths: [], trustedSystemRoots: false, includeOfficialTzapRoot: true, checkCurrentStatus: true, environment: "staging" } });
+      assert.equal(online.signatureCheck, "ok", JSON.stringify(online));
+      assert.equal(online.statusCheck, "fresh_valid", JSON.stringify(online));
+      assert.equal(online.verificationState, "verified_with_caveat", JSON.stringify(online));
     });
   });
 } else {

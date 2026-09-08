@@ -12,13 +12,29 @@ function loadOnlineE2eEnvFile(): void {
   if (!existsSync(filePath)) {
     throw new Error(`TZAP_E2E_ENV_FILE does not exist: ${filePath}`);
   }
+  const values = new Map<string, string>();
   for (const line of readFileSync(filePath, "utf8").split(/\r?\n/u)) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
-    const match = /^(TZAP_E2E_[A-Z0-9_]+)=(.*)$/u.exec(trimmed);
-    if (!match || process.env[match[1]] !== undefined) continue;
+    const match = /^(?:export\s+)?([A-Z][A-Z0-9_]*)=(.*)$/u.exec(trimmed);
+    if (!match) continue;
     const [, key, rawValue] = match;
-    process.env[key] = rawValue.replace(/^['"]|['"]$/gu, "");
+    const value = rawValue.replace(/^['"]|['"]$/gu, "");
+    values.set(key, value);
+    if (key.startsWith("TZAP_E2E_") && process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+
+  // Preserve the existing staging.env.txt contract used by the sibling
+  // staging scripts while keeping TZAP_E2E_* as the canonical interface.
+  if (process.env.TZAP_E2E_USERNAME === undefined) {
+    const username = values.get("STAGING_TEST_USER_1") ?? values.get("STAGING_TEST_USER_OAUTH");
+    if (username) process.env.TZAP_E2E_USERNAME = username;
+  }
+  if (process.env.TZAP_E2E_PASSWORD === undefined) {
+    const password = values.get("STAGING_TEST_USER_PASSWORD");
+    if (password) process.env.TZAP_E2E_PASSWORD = password;
   }
 }
 
