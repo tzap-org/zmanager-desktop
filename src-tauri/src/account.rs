@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -43,6 +43,7 @@ const ACCOUNT_KEY: &str = "default";
 const REDIRECT_URI: &str = "tzap://auth/callback";
 const DESKTOP_DEVICE_NAME: &str = "ZManager Desktop";
 const REGISTERED_DESKTOP_CLIENT_ID: &str = "zmanager_desktop";
+static GUI_TEST_ACCOUNT_STATE_INITIALIZED: OnceLock<()> = OnceLock::new();
 
 fn hosted_online_enabled() -> bool {
     cfg!(feature = "hosted-online")
@@ -313,7 +314,7 @@ pub struct AccountRuntime(Arc<Mutex<AccountRuntimeState>>, Arc<Mutex<NativeTzapS
 
 impl AccountRuntime {
     pub fn new() -> Self {
-        let store = NativeTzapSecretStore::new(ACCOUNT_KEY).expect("default account secure-store scope is valid");
+        let store = NativeTzapSecretStore::for_desktop_account().expect("desktop account secure-store scope is valid");
         let persisted_session = store.load_session(ACCOUNT_KEY);
         let persisted_environment = store.load_session_environment(ACCOUNT_KEY);
         let had_persisted_session = persisted_session.is_some();
@@ -341,6 +342,45 @@ impl AccountRuntime {
 }
 
 struct OfficialEnrollmentCertificateValidator;
+
+struct DesktopEnrollmentCertificateValidator;
+
+fn local_fixture_enabled() -> bool {
+    cfg!(debug_assertions)
+        && std::env::var("ZMANAGER_GUI_TEST_MODE").ok().as_deref() == Some("1")
+        && std::env::var("TZAP_E2E_ENV").ok().as_deref() == Some("local")
+}
+
+fn fixture_root_certificates() -> Option<Vec<Vec<u8>>> {
+    if !local_fixture_enabled() {
+        return None;
+    }
+    let path = std::env::var_os("TZAP_E2E_FIXTURE_ROOT_CERT")?;
+    let pem = std::fs::read(path).ok()?;
+    let certificate = X509::from_pem(&pem).ok()?;
+    Some(vec![certificate.to_der().ok()?])
+}
+
+impl TzapEnrollmentCertificateValidator for DesktopEnrollmentCertificateValidator {
+    fn validate_certificate_chain(&self, chain_der: &[Vec<u8>]) -> Result<zmanager_core::trust::TzapCertificatePublicMetadata, TzapEnrollmentError> {
+        if local_fixture_enabled() {
+            return trust::validate_custom_tzap_certificate_chain_der(chain_der, &TzapCertificateProfileOptions::default())
+                .map(|validation| validation.public_metadata)
+                .map_err(|error| TzapEnrollmentError::CertificateChain(error.to_string()));
+        }
+        OfficialEnrollmentCertificateValidator.validate_certificate_chain(chain_der)
+    }
+
+    fn validate_and_complete_certificate_chain(
+        &self,
+        chain_der: &[Vec<u8>],
+    ) -> Result<(Vec<Vec<u8>>, zmanager_core::trust::TzapCertificatePublicMetadata), TzapEnrollmentError> {
+        if local_fixture_enabled() {
+            return self.validate_certificate_chain(chain_der).map(|metadata| (chain_der.to_vec(), metadata));
+        }
+        OfficialEnrollmentCertificateValidator.validate_and_complete_certificate_chain(chain_der)
+    }
+}
 
 impl TzapEnrollmentCertificateValidator for OfficialEnrollmentCertificateValidator {
     fn validate_certificate_chain(&self, chain_der: &[Vec<u8>]) -> Result<zmanager_core::trust::TzapCertificatePublicMetadata, TzapEnrollmentError> {
@@ -479,7 +519,7 @@ pub fn account_enroll_certificate(app: AppHandle, runtime: State<'_, AccountRunt
     let result = enroll_or_renew_device_certificate(
         &enrollment_client,
         &lifecycle_client,
-        &OfficialEnrollmentCertificateValidator,
+        &DesktopEnrollmentCertificateValidator,
         &mut store,
         &session,
         &request,
@@ -555,7 +595,7 @@ pub fn account_renew_certificate(
         TzapCertificateLifecycleClient::with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
     };
     match lifecycle_client.renew_certificate_with_reconciliation(
-        &OfficialEnrollmentCertificateValidator,
+        &DesktopEnrollmentCertificateValidator,
         &mut store,
         &session,
         &renewal_request,
@@ -1438,12 +1478,17 @@ fn apply_contact_snapshot_with_shared_core(
         .filter(|contact| contact.source == "phone_sync")
         .map(|contact| contact.contact_id.clone())
         .collect::<std::collections::HashSet<_>>();
+    let custom_trust_root_certificates_der = fixture_root_certificates().unwrap_or_default();
+    let custom_trust_root_sha256 = custom_trust_root_certificates_der
+        .iter()
+        .map(|certificate| zmanager_core::trust::certificate_sha256_identifier_for_der(certificate))
+        .collect();
     let options = zmanager_core::contact_card::TzapContactCardImportOptions {
         verifier_time_unix_seconds: i64::try_from(now).unwrap_or(i64::MAX),
         official_root_pins: &zmanager_core::trust::OFFICIAL_TZAP_ROOT_PINS,
         official_root_certificates_der: Vec::new(),
-        custom_trust_root_sha256: Vec::new(),
-        custom_trust_root_certificates_der: Vec::new(),
+        custom_trust_root_sha256,
+        custom_trust_root_certificates_der,
         certificate_profile_options: zmanager_core::trust::TzapCertificateProfileOptions::default(),
         intermediate_resolver,
     };
@@ -1740,6 +1785,25 @@ pub fn resolve_tzap_recipient_private_key(
 }
 
 fn account_state_dir(app: &AppHandle) -> Result<PathBuf, CommandErrorDto> {
+    if cfg!(debug_assertions) && std::env::var_os("ZMANAGER_GUI_TEST_MODE").is_some() {
+        if let Some(root) = std::env::var_os("TZAP_E2E_ACCOUNT_STATE_ROOT") {
+            let root = PathBuf::from(root);
+            if root.is_absolute() {
+                if GUI_TEST_ACCOUNT_STATE_INITIALIZED.get().is_none() {
+                    if root.exists() {
+                        let mut entries = std::fs::read_dir(&root).map_err(|error| account_error("account_state_path_failed", error))?;
+                        if entries.next().transpose().map_err(|error| account_error("account_state_path_failed", error))?.is_some() {
+                            return Err(account_error("account_state_path_failed", "TZAP_E2E_ACCOUNT_STATE_ROOT must be a fresh per-run directory"));
+                        }
+                    }
+                    std::fs::create_dir_all(&root).map_err(|error| account_error("account_state_path_failed", error))?;
+                    let _ = GUI_TEST_ACCOUNT_STATE_INITIALIZED.set(());
+                }
+                return Ok(root);
+            }
+            return Err(account_error("account_state_path_failed", "TZAP_E2E_ACCOUNT_STATE_ROOT must be absolute"));
+        }
+    }
     app.path().app_data_dir().map(|path| path.join("tzap-state")).map_err(|error| account_error("account_state_path_failed", error))
 }
 
@@ -1747,12 +1811,17 @@ fn verify_contact_card_with_resolver(
     card: &Value,
     intermediate_resolver: Option<&dyn zmanager_core::trust::TzapIntermediateResolver>,
 ) -> Result<zmanager_core::contact_card::TzapVerifiedContactCard, zmanager_core::contact_card::TzapContactCardError> {
+    let custom_trust_root_certificates_der = fixture_root_certificates().unwrap_or_default();
+    let custom_trust_root_sha256 = custom_trust_root_certificates_der
+        .iter()
+        .map(|certificate| zmanager_core::trust::certificate_sha256_identifier_for_der(certificate))
+        .collect();
     let options = zmanager_core::contact_card::TzapContactCardImportOptions {
         verifier_time_unix_seconds: i64::try_from(current_unix_seconds()).unwrap_or(i64::MAX),
         official_root_pins: &zmanager_core::trust::OFFICIAL_TZAP_ROOT_PINS,
         official_root_certificates_der: Vec::new(),
-        custom_trust_root_sha256: Vec::new(),
-        custom_trust_root_certificates_der: Vec::new(),
+        custom_trust_root_sha256,
+        custom_trust_root_certificates_der,
         certificate_profile_options: zmanager_core::trust::TzapCertificateProfileOptions::default(),
         intermediate_resolver,
     };
