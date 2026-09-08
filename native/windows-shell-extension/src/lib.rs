@@ -2,6 +2,7 @@
 #![allow(non_snake_case)]
 
 use std::{
+    cell::{Cell, RefCell},
     collections::HashSet,
     ffi::c_void,
     fs::{self, OpenOptions},
@@ -20,10 +21,11 @@ use windows::{
             LibraryLoader::{GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, GetModuleFileNameW, GetModuleHandleExW},
         },
         UI::Shell::{
-            ECF_DEFAULT, ECS_ENABLED, ECS_HIDDEN, IEnumExplorerCommand, IExplorerCommand, IExplorerCommand_Impl, IShellItemArray, SHStrDupW, SIGDN_FILESYSPATH,
+            ECF_DEFAULT, ECF_HASSUBCOMMANDS, ECS_ENABLED, ECS_HIDDEN, IEnumExplorerCommand, IEnumExplorerCommand_Impl, IExplorerCommand, IExplorerCommand_Impl,
+            IShellItemArray, SHStrDupW, SIGDN_FILESYSPATH,
         },
     },
-    core::{BOOL, Error, GUID, HRESULT, Interface, PCWSTR, PWSTR, Ref, Result as WindowsResult},
+    core::{BOOL, Error, GUID, HRESULT, Interface, PCWSTR, PWSTR, Ref, Result as WindowsResult, w},
 };
 use windows_core::implement;
 use zmanager_shell_contract::{ShellActionKind, ShellActionRequest, base_name_without_archive_extension};
@@ -122,15 +124,172 @@ impl IExplorerCommand_Impl for ZManagerExplorerCommand_Impl {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ExplorerRoot {
+    Archive,
+    Create,
+}
+
+impl ExplorerRoot {
+    fn from_clsid(clsid: &GUID) -> Option<Self> {
+        match *clsid {
+            ARCHIVE_ROOT_CLSID => Some(Self::Archive),
+            CREATE_ROOT_CLSID => Some(Self::Create),
+            _ => None,
+        }
+    }
+
+    fn clsid(self) -> GUID {
+        match self {
+            Self::Archive => ARCHIVE_ROOT_CLSID,
+            Self::Create => CREATE_ROOT_CLSID,
+        }
+    }
+
+    fn actions(self) -> &'static [ExplorerAction] {
+        match self {
+            Self::Archive => ARCHIVE_EXPLORER_ACTIONS,
+            Self::Create => CREATE_EXPLORER_ACTIONS,
+        }
+    }
+}
+
+#[implement(IEnumExplorerCommand)]
+struct ZManagerExplorerCommandEnumerator {
+    commands: Vec<IExplorerCommand>,
+    index: Cell<usize>,
+    _live: LiveObject,
+}
+
+impl ZManagerExplorerCommandEnumerator {
+    fn new(commands: Vec<IExplorerCommand>) -> Self {
+        Self { commands, index: Cell::new(0), _live: LiveObject::new() }
+    }
+}
+
+impl IEnumExplorerCommand_Impl for ZManagerExplorerCommandEnumerator_Impl {
+    fn Next(&self, celt: u32, puicommand: *mut Option<IExplorerCommand>, pceltfetched: *mut u32) -> HRESULT {
+        if puicommand.is_null() || (celt != 1 && pceltfetched.is_null()) {
+            return E_INVALIDARG;
+        }
+
+        let mut fetched = 0;
+        while fetched < celt && self.index.get() < self.commands.len() {
+            let index = self.index.get();
+            unsafe { puicommand.add(fetched as usize).write(Some(self.commands[index].clone())) };
+            self.index.set(index + 1);
+            fetched += 1;
+        }
+
+        if !pceltfetched.is_null() {
+            unsafe { pceltfetched.write(fetched) };
+        }
+        if fetched == celt { S_OK } else { S_FALSE }
+    }
+
+    fn Skip(&self, celt: u32) -> WindowsResult<()> {
+        self.index.set(self.index.get().saturating_add(celt as usize).min(self.commands.len()));
+        Ok(())
+    }
+
+    fn Reset(&self) -> WindowsResult<()> {
+        self.index.set(0);
+        Ok(())
+    }
+
+    fn Clone(&self) -> WindowsResult<IEnumExplorerCommand> {
+        Ok(ZManagerExplorerCommandEnumerator { commands: self.commands.clone(), index: Cell::new(self.index.get()), _live: LiveObject::new() }.into())
+    }
+}
+
+#[implement(IExplorerCommand)]
+struct ZManagerRootExplorerCommand {
+    root: ExplorerRoot,
+    subcommands: RefCell<Option<Vec<IExplorerCommand>>>,
+    _live: LiveObject,
+}
+
+impl ZManagerRootExplorerCommand {
+    fn new(root: ExplorerRoot) -> Self {
+        Self { root, subcommands: RefCell::new(None), _live: LiveObject::new() }
+    }
+
+    fn load_subcommands(&self, selection: Option<&IShellItemArray>) {
+        let actions = match selection {
+            Some(selection) => match selected_file_system_paths(selection) {
+                Ok(paths) => self.root.actions().iter().copied().filter(|action| action.supports_paths(&paths)).collect(),
+                Err(_) => Vec::new(),
+            },
+            None => self.root.actions().to_vec(),
+        };
+        let commands = actions.into_iter().map(|action| ZManagerExplorerCommand::new(action).into()).collect();
+        *self.subcommands.borrow_mut() = Some(commands);
+    }
+
+    fn subcommands(&self) -> Vec<IExplorerCommand> {
+        let mut subcommands = self.subcommands.borrow_mut();
+        let commands =
+            subcommands.get_or_insert_with(|| self.root.actions().iter().copied().map(|action| ZManagerExplorerCommand::new(action).into()).collect());
+        commands.clone()
+    }
+}
+
+impl IExplorerCommand_Impl for ZManagerRootExplorerCommand_Impl {
+    fn GetTitle(&self, selection: Ref<'_, IShellItemArray>) -> WindowsResult<PWSTR> {
+        self.load_subcommands(selection.ok().ok());
+        unsafe { SHStrDupW(w!("ZManager")) }
+    }
+
+    fn GetIcon(&self, _selection: Ref<'_, IShellItemArray>) -> WindowsResult<PWSTR> {
+        Err(Error::from_hresult(E_NOTIMPL))
+    }
+
+    fn GetToolTip(&self, _selection: Ref<'_, IShellItemArray>) -> WindowsResult<PWSTR> {
+        Err(Error::from_hresult(E_NOTIMPL))
+    }
+
+    fn GetCanonicalName(&self) -> WindowsResult<GUID> {
+        Ok(self.root.clsid())
+    }
+
+    fn GetState(&self, _selection: Ref<'_, IShellItemArray>, _ok_to_be_slow: BOOL) -> WindowsResult<u32> {
+        Ok(ECS_ENABLED.0 as u32)
+    }
+
+    fn Invoke(&self, _selection: Ref<'_, IShellItemArray>, _bind_context: Ref<'_, IBindCtx>) -> WindowsResult<()> {
+        Err(Error::from_hresult(E_NOTIMPL))
+    }
+
+    fn GetFlags(&self) -> WindowsResult<u32> {
+        Ok(ECF_HASSUBCOMMANDS.0 as u32)
+    }
+
+    fn EnumSubCommands(&self) -> WindowsResult<IEnumExplorerCommand> {
+        Ok(ZManagerExplorerCommandEnumerator::new(self.subcommands()).into())
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ExplorerClass {
+    Root(ExplorerRoot),
+    Action(ExplorerAction),
+}
+
+impl ExplorerClass {
+    fn from_clsid(clsid: &GUID) -> Option<Self> {
+        ExplorerRoot::from_clsid(clsid).map(Self::Root).or_else(|| ExplorerAction::from_clsid(clsid).map(Self::Action))
+    }
+}
+
 #[implement(IClassFactory)]
 struct ZManagerClassFactory {
-    action: ExplorerAction,
+    class: ExplorerClass,
     _live: LiveObject,
 }
 
 impl ZManagerClassFactory {
-    fn new(action: ExplorerAction) -> Self {
-        Self { action, _live: LiveObject::new() }
+    fn new(class: ExplorerClass) -> Self {
+        Self { class, _live: LiveObject::new() }
     }
 }
 
@@ -143,7 +302,10 @@ impl IClassFactory_Impl for ZManagerClassFactory_Impl {
             return Err(Error::from_hresult(E_INVALIDARG));
         }
 
-        let command: IExplorerCommand = ZManagerExplorerCommand::new(self.action).into();
+        let command: IExplorerCommand = match self.class {
+            ExplorerClass::Root(root) => ZManagerRootExplorerCommand::new(root).into(),
+            ExplorerClass::Action(action) => ZManagerExplorerCommand::new(action).into(),
+        };
         unsafe { command.query(interface_id, object).ok() }
     }
 
@@ -239,10 +401,10 @@ unsafe extern "system" fn DllGetClassObject(class_id: *const GUID, interface_id:
     }
     unsafe { *object = std::ptr::null_mut() };
 
-    let Some(action) = ExplorerAction::from_clsid(unsafe { &*class_id }) else {
+    let Some(class) = ExplorerClass::from_clsid(unsafe { &*class_id }) else {
         return CLASS_E_CLASSNOTAVAILABLE;
     };
-    let factory: IClassFactory = ZManagerClassFactory::new(action).into();
+    let factory: IClassFactory = ZManagerClassFactory::new(class).into();
     unsafe { factory.query(interface_id, object) }
 }
 
@@ -317,6 +479,72 @@ mod tests {
     }
 
     #[test]
+    fn root_command_enumerates_its_context_actions() {
+        let command: IExplorerCommand = ZManagerRootExplorerCommand::new(ExplorerRoot::Archive).into();
+        assert_eq!(unsafe { command.GetFlags() }.expect("root should advertise subcommands"), ECF_HASSUBCOMMANDS.0 as u32);
+
+        let enumerator = unsafe { command.EnumSubCommands() }.expect("root should expose a subcommand enumerator");
+        let mut commands = vec![None; ARCHIVE_EXPLORER_ACTIONS.len()];
+        let mut fetched = 0;
+        let result = unsafe { enumerator.Next(&mut commands, Some(&mut fetched)) };
+
+        assert_eq!(result, S_OK);
+        assert_eq!(fetched as usize, ARCHIVE_EXPLORER_ACTIONS.len());
+        for (command, expected) in commands.into_iter().zip(ARCHIVE_EXPLORER_ACTIONS) {
+            assert_eq!(
+                unsafe { command.expect("enumerator should return a command").GetCanonicalName() }.expect("child should expose its canonical ID"),
+                expected.clsid()
+            );
+        }
+    }
+
+    #[test]
+    fn root_command_filters_children_using_the_current_selection() {
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok() }.expect("COM apartment should initialize");
+        let directory = std::env::temp_dir().join(format!("zmanager-shell-root-command-test-{}", REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)));
+        let folder1 = directory.join("folder1");
+        let folder2 = directory.join("folder2");
+        fs::create_dir_all(&folder1).expect("first folder should be created");
+        fs::create_dir_all(&folder2).expect("second folder should be created");
+
+        let selection = shell_item_array(&[&folder1, &folder2]);
+        let command: IExplorerCommand = ZManagerRootExplorerCommand::new(ExplorerRoot::Archive).into();
+        let title = unsafe { command.GetTitle(Some(&selection)) }.expect("root title should resolve");
+        unsafe { CoTaskMemFree(Some(title.0.cast())) };
+
+        let enumerator = unsafe { command.EnumSubCommands() }.expect("filtered root should expose an enumerator");
+        let mut commands = vec![None; 8];
+        let mut fetched = 0;
+        assert_eq!(unsafe { enumerator.Next(&mut commands, Some(&mut fetched)) }, S_OK);
+        assert_eq!(fetched, 8);
+
+        let canonical_names = commands
+            .into_iter()
+            .map(|command| unsafe { command.expect("enumerator should return a command").GetCanonicalName() }.expect("child should expose its canonical ID"))
+            .collect::<Vec<_>>();
+        assert!(!canonical_names.contains(&OPEN_ARCHIVE_CLSID));
+        assert!(!canonical_names.contains(&EXTRACT_TO_FOLDER_CLSID));
+        assert!(!canonical_names.contains(&SHARE_ON_LAN_CLSID));
+
+        drop(selection);
+        let _ = fs::remove_dir_all(directory);
+        unsafe { CoUninitialize() };
+    }
+
+    #[test]
+    fn exported_class_factory_creates_root_explorer_command() {
+        let mut factory_pointer = std::ptr::null_mut();
+        let result = unsafe { DllGetClassObject(&ARCHIVE_ROOT_CLSID, &IClassFactory::IID, &mut factory_pointer) };
+        assert_eq!(result, S_OK);
+        let factory = unsafe { IClassFactory::from_raw(factory_pointer) };
+
+        let command: IExplorerCommand =
+            unsafe { factory.CreateInstance(None::<&windows::core::IUnknown>).expect("root class factory should create IExplorerCommand") };
+
+        assert_eq!(unsafe { command.GetCanonicalName() }.expect("root should expose its canonical ID"), ARCHIVE_ROOT_CLSID);
+    }
+
+    #[test]
     fn request_file_contains_one_versioned_request_with_all_paths() {
         let directory =
             std::env::temp_dir().join(format!("zmanager-shell-extension-test-{}-{}", std::process::id(), REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)));
@@ -332,11 +560,8 @@ mod tests {
 
     #[test]
     fn share_on_lan_requires_one_regular_file_but_compress_share_accepts_directories() {
-        let directory = std::env::temp_dir().join(format!(
-            "zmanager-shell-share-shape-test-{}-{}",
-            std::process::id(),
-            REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-        ));
+        let directory =
+            std::env::temp_dir().join(format!("zmanager-shell-share-shape-test-{}-{}", std::process::id(), REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)));
         let folder = directory.join("folder");
         let file = directory.join("file.txt");
         fs::create_dir_all(&folder).expect("test folder should be created");

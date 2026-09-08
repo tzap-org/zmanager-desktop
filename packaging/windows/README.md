@@ -27,8 +27,11 @@ can also be archived again. Selected folders and folder backgrounds show the sam
 add actions. The installed COM-backed `*\shell` cascade gives generic file
 selections the same create actions in the classic context menu and receives the
 complete selection. Windows 11's compact context menu has separate
-package-identity requirements. The hook uses explicit ordered per-user
-`ExtendedSubCommandsKey` entries so Explorer does not choose the submenu order.
+package-identity requirements. Selected-item cascades use the registered root
+`IExplorerCommand` providers, which enumerate the available children for the
+current selection. The folder background cascade remains an explicit ordered
+per-user `ExtendedSubCommandsKey` because it invokes the one-target `%V`
+quick-action commands directly.
 The generic `Add to archive...` action opens the regular Create
 Archive dialog with the selected item preloaded. Fixed-format actions use the same
 create workflow and start with rename-on-collision enabled. Extraction is registered
@@ -52,4 +55,3 @@ Next packaging steps remain code signing, WinGet metadata after public artifacts
 stable, and a signed package-with-external-location registration if first-tier
 Windows 11 compact-menu placement is required. That packaging enhancement reuses
 the same COM DLL and versioned request boundary.
-

@@ -3,6 +3,8 @@ use std::path::Path;
 use windows::core::{GUID, PCWSTR, w};
 use zmanager_shell_contract::ShellActionKind;
 
+pub(crate) const ARCHIVE_ROOT_CLSID: GUID = GUID::from_u128(0xd5ba8f7a_bb17_4c40_bb7b_28e971b37288);
+pub(crate) const CREATE_ROOT_CLSID: GUID = GUID::from_u128(0x5af01874_4485_4fcf_b31a_37918614b6c5);
 pub(crate) const OPEN_ARCHIVE_CLSID: GUID = GUID::from_u128(0x8ac91dd4_b918_4118_9635_9407a4731972);
 pub(crate) const ADD_TO_ARCHIVE_CLSID: GUID = GUID::from_u128(0x8bd7f398_a6c3_40a2_a4f8_725e0d671366);
 pub(crate) const ADD_TO_ZIP_CLSID: GUID = GUID::from_u128(0xaa751926_e80f_47a5_9e03_dfa87926f23a);
@@ -43,6 +45,31 @@ pub(crate) const ALL_EXPLORER_ACTIONS: &[ExplorerAction] = &[
     ExplorerAction::ShareOnLan,
     ExplorerAction::ExtractHere,
     ExplorerAction::ExtractToFolder,
+];
+
+pub(crate) const ARCHIVE_EXPLORER_ACTIONS: &[ExplorerAction] = &[
+    ExplorerAction::ExtractHere,
+    ExplorerAction::ExtractToFolder,
+    ExplorerAction::Open,
+    ExplorerAction::Compress,
+    ExplorerAction::CompressTzap,
+    ExplorerAction::CompressZip,
+    ExplorerAction::CompressSevenZ,
+    ExplorerAction::CompressTarZst,
+    ExplorerAction::CompressTarGz,
+    ExplorerAction::CompressShareOnLan,
+    ExplorerAction::ShareOnLan,
+];
+
+pub(crate) const CREATE_EXPLORER_ACTIONS: &[ExplorerAction] = &[
+    ExplorerAction::Compress,
+    ExplorerAction::CompressTzap,
+    ExplorerAction::CompressZip,
+    ExplorerAction::CompressSevenZ,
+    ExplorerAction::CompressTarZst,
+    ExplorerAction::CompressTarGz,
+    ExplorerAction::CompressShareOnLan,
+    ExplorerAction::ShareOnLan,
 ];
 
 impl ExplorerAction {

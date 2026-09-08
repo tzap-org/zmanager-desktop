@@ -37,45 +37,65 @@ function registeredArchiveExtensions(macroName: string): string[] {
 }
 
 describe("Windows context menu installer hook", () => {
-  it("registers ExtendedSubCommandsKey as a parent-local submenu key", () => {
-    expect(script).toContain('DeleteRegKey HKCU "${SHELL_KEY}\\${ZM_MENU_KEY}\\ExtendedSubCommandsKey"');
-    expect(script).toContain('WriteRegStr HKCU "${SHELL_KEY}\\${ZM_MENU_KEY}\\ExtendedSubCommandsKey\\shell\\${VERB_NAME}"');
-    expect(script).toContain('DeleteRegValue HKCU "${SHELL_KEY}\\${ZM_MENU_KEY}" "SubCommands"');
-    expect(script).not.toContain('WriteRegStr HKCU "${SHELL_KEY}\\${ZM_MENU_KEY}" "ExtendedSubCommandsKey"');
-    expect(script).toContain('!insertmacro ZM_REGISTER_GENERATED_ARCHIVE_SUBCOMMANDS "${SHELL_KEY}"');
-    expect(script).toContain('!insertmacro ZM_REGISTER_GENERATED_CREATE_FILE_SUBCOMMANDS "${SHELL_KEY}"');
-    expect(script).toContain('!insertmacro ZM_REGISTER_GENERATED_BACKGROUND_SUBCOMMANDS "${SHELL_KEY}"');
+  it("registers one root IExplorerCommand provider for each selected-item cascade", () => {
+    const cascadeMacroStart = script.indexOf("!macro ZM_WRITE_CASCADE_MENU");
+    const cascadeMacroEnd = script.indexOf("!macroend", cascadeMacroStart);
+    expect(cascadeMacroStart).toBeGreaterThan(-1);
+    expect(cascadeMacroEnd).toBeGreaterThan(cascadeMacroStart);
+    const cascadeMacro = script.slice(cascadeMacroStart, cascadeMacroEnd);
+    expect(cascadeMacro).toContain('DeleteRegValue HKCU "${SHELL_KEY}\\${ZM_MENU_KEY}" "SubCommands"');
+    expect(cascadeMacro).toContain('DeleteRegValue HKCU "${SHELL_KEY}\\${ZM_MENU_KEY}" "ExtendedSubCommandsKey"');
+    expect(cascadeMacro).toContain('WriteRegStr HKCU "${SHELL_KEY}\\${ZM_MENU_KEY}" "ExplorerCommandHandler" "${ROOT_CLSID}"');
+    expect(cascadeMacro).not.toContain('WriteRegStr HKCU "${SHELL_KEY}\\${ZM_MENU_KEY}" "ExtendedSubCommandsKey"');
+    expect(script).toContain('!insertmacro ZM_WRITE_CASCADE_MENU "${SHELL_KEY}" "${ZM_ARCHIVE_ROOT_CLSID}"');
+    expect(script).toContain('!insertmacro ZM_WRITE_CASCADE_MENU "${SHELL_KEY}" "${ZM_CREATE_ROOT_CLSID}"');
+    expect(script).not.toContain('!insertmacro ZM_REGISTER_GENERATED_ARCHIVE_SUBCOMMANDS');
+    expect(script).not.toContain('!insertmacro ZM_REGISTER_GENERATED_CREATE_FILE_SUBCOMMANDS');
   });
 
   it("keeps the archive submenu actions in the requested order", () => {
-    const expected = [
-      '"01ExtractHere" "Extract Here"',
-      '"02ExtractToFolder" "Extract to Archive Folder"',
-      '"03OpenArchive" "Open archive"',
-      '"04AddToArchive" "Add to archive..."',
-      '"05AddToTzap" "Add to .tzap"',
-      '"06AddToZip" "Add to .zip"',
-      '"07AddToSevenZ" "Add to .7z"',
-      '"08AddToTzst" "Add to .tzst"',
-      '"09AddToTgz" "Add to .tgz"',
-    ];
+    const generatedSource = readFileSync(
+      join(process.cwd(), "native", "windows-shell-extension", "src", "generated.rs"),
+      "utf8",
+    );
+
+    expect(generatedSource).toContain("pub(crate) const ARCHIVE_ROOT_CLSID");
+    expect(generatedSource).toContain("pub(crate) const CREATE_ROOT_CLSID");
+    const archiveActionsStart = generatedSource.indexOf("pub(crate) const ARCHIVE_EXPLORER_ACTIONS");
+    const createActionsStart = generatedSource.indexOf("pub(crate) const CREATE_EXPLORER_ACTIONS");
+    expect(archiveActionsStart).toBeGreaterThan(-1);
+    expect(createActionsStart).toBeGreaterThan(archiveActionsStart);
+    const archiveActions = generatedSource.slice(archiveActionsStart, createActionsStart);
+
+    let cursor = -1;
+    for (const action of [
+      "ExtractHere",
+      "ExtractToFolder",
+      "Open",
+      "Compress",
+      "CompressTzap",
+      "CompressZip",
+      "CompressSevenZ",
+      "CompressTarZst",
+      "CompressTarGz",
+    ]) {
+      const marker = `ExplorerAction::${action}`;
+      const index = archiveActions.indexOf(marker);
+      expect(index, `${marker} should be present`).toBeGreaterThan(-1);
+      expect(index, `${marker} should follow the previous action`).toBeGreaterThan(cursor);
+      cursor = index;
+    }
 
     const generatedScript = readFileSync(
       join(process.cwd(), "packaging", "windows", "nsis-shell-actions.generated.nsh"),
       "utf8",
     );
-
-    expect(generatedScript).toContain("!macro ZM_REGISTER_GENERATED_ARCHIVE_SUBCOMMANDS SHELL_KEY");
-    expect(generatedScript).toContain("!macro ZM_REGISTER_GENERATED_CREATE_FILE_SUBCOMMANDS SHELL_KEY");
-    expect(generatedScript).toContain("!macro ZM_REGISTER_GENERATED_BACKGROUND_SUBCOMMANDS SHELL_KEY");
-
-    let cursor = -1;
-    for (const marker of expected) {
-      const index = generatedScript.indexOf(marker);
-      expect(index, `${marker} should be present`).toBeGreaterThan(-1);
-      expect(index, `${marker} should follow the previous action`).toBeGreaterThan(cursor);
-      cursor = index;
-    }
+    expect(generatedScript).toContain('!define ZM_ARCHIVE_ROOT_CLSID "{D5BA8F7A-BB17-4C40-BB7B-28E971B37288}"');
+    expect(generatedScript).toContain('!define ZM_CREATE_ROOT_CLSID "{5AF01874-4485-4FCF-B31A-37918614B6C5}"');
+    expect(generatedScript).toContain("!macro ZM_REGISTER_GENERATED_SHELL_EXTENSION_CLASSES");
+    expect(generatedScript).not.toContain("ZM_REGISTER_GENERATED_ARCHIVE_SUBCOMMANDS");
+    expect(generatedScript).not.toContain("ZM_REGISTER_GENERATED_CREATE_FILE_SUBCOMMANDS");
+    expect(generatedScript).toContain("!macro ZM_REGISTER_GENERATED_BACKGROUND_SUBCOMMANDS SUBCOMMANDS_KEY");
   });
 
   it("does not use the removed shell multi-select coordinator flag", () => {

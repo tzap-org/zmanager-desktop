@@ -8,26 +8,31 @@
 !define ZM_CREATE_BACKGROUND_SUBCOMMANDS_KEY "ZManager.Desktop.ContextMenu.CreateBackground"
 !define ZM_NON_ARCHIVE_FILE_APPLIES_TO "NOT System.FileExtension:=.7z AND NOT System.FileExtension:=.7z.001 AND NOT System.FileExtension:=.a AND NOT System.FileExtension:=.aar AND NOT System.FileExtension:=.ad1 AND NOT System.FileExtension:=.aea AND NOT System.FileExtension:=.aff4 AND NOT System.FileExtension:=.apk AND NOT System.FileExtension:=.appimage AND NOT System.FileExtension:=.appx AND NOT System.FileExtension:=.ar AND NOT System.FileExtension:=.b64 AND NOT System.FileExtension:=.br AND NOT System.FileExtension:=.bz2 AND NOT System.FileExtension:=.cab AND NOT System.FileExtension:=.cb7 AND NOT System.FileExtension:=.cbr AND NOT System.FileExtension:=.cbt AND NOT System.FileExtension:=.cbz AND NOT System.FileExtension:=.ccd AND NOT System.FileExtension:=.cdi AND NOT System.FileExtension:=.cpgz AND NOT System.FileExtension:=.cpio AND NOT System.FileExtension:=.cpio.bz2 AND NOT System.FileExtension:=.cpio.gz AND NOT System.FileExtension:=.cpio.lzma AND NOT System.FileExtension:=.cpio.xz AND NOT System.FileExtension:=.cpio.zst AND NOT System.FileExtension:=.cue AND NOT System.FileExtension:=.dar AND NOT System.FileExtension:=.dd AND NOT System.FileExtension:=.deb AND NOT System.FileExtension:=.dmg AND NOT System.FileExtension:=.dsk AND NOT System.FileExtension:=.e01 AND NOT System.FileExtension:=.epub AND NOT System.FileExtension:=.ex01 AND NOT System.FileExtension:=.gz AND NOT System.FileExtension:=.img AND NOT System.FileExtension:=.ipa AND NOT System.FileExtension:=.iso AND NOT System.FileExtension:=.isz AND NOT System.FileExtension:=.jar AND NOT System.FileExtension:=.lha AND NOT System.FileExtension:=.lib AND NOT System.FileExtension:=.lz AND NOT System.FileExtension:=.lz4 AND NOT System.FileExtension:=.lzh AND NOT System.FileExtension:=.lzma AND NOT System.FileExtension:=.lzo AND NOT System.FileExtension:=.mdf AND NOT System.FileExtension:=.mds AND NOT System.FileExtension:=.msi AND NOT System.FileExtension:=.mtree AND NOT System.FileExtension:=.nrg AND NOT System.FileExtension:=.pax AND NOT System.FileExtension:=.pkg AND NOT System.FileExtension:=.qcow AND NOT System.FileExtension:=.qcow2 AND NOT System.FileExtension:=.rar AND NOT System.FileExtension:=.raw AND NOT System.FileExtension:=.rpm AND NOT System.FileExtension:=.sevenz AND NOT System.FileExtension:=.sqfs AND NOT System.FileExtension:=.squashfs AND NOT System.FileExtension:=.swm AND NOT System.FileExtension:=.tar AND NOT System.FileExtension:=.tar.b64 AND NOT System.FileExtension:=.tar.br AND NOT System.FileExtension:=.tar.bz2 AND NOT System.FileExtension:=.tar.gz AND NOT System.FileExtension:=.tar.lrz AND NOT System.FileExtension:=.tar.lz AND NOT System.FileExtension:=.tar.lz4 AND NOT System.FileExtension:=.tar.lzma AND NOT System.FileExtension:=.tar.lzo AND NOT System.FileExtension:=.tar.uu AND NOT System.FileExtension:=.tar.xz AND NOT System.FileExtension:=.tar.z AND NOT System.FileExtension:=.tar.zst AND NOT System.FileExtension:=.taz AND NOT System.FileExtension:=.tbz AND NOT System.FileExtension:=.tbz2 AND NOT System.FileExtension:=.tgz AND NOT System.FileExtension:=.tlzma AND NOT System.FileExtension:=.txz AND NOT System.FileExtension:=.tzap AND NOT System.FileExtension:=.tzst AND NOT System.FileExtension:=.udf AND NOT System.FileExtension:=.ustar AND NOT System.FileExtension:=.uu AND NOT System.FileExtension:=.vdi AND NOT System.FileExtension:=.vhd AND NOT System.FileExtension:=.vhdx AND NOT System.FileExtension:=.vmdk AND NOT System.FileExtension:=.vol000.tzap AND NOT System.FileExtension:=.war AND NOT System.FileExtension:=.warc AND NOT System.FileExtension:=.wim AND NOT System.FileExtension:=.xar AND NOT System.FileExtension:=.xpi AND NOT System.FileExtension:=.xz AND NOT System.FileExtension:=.z AND NOT System.FileExtension:=.zip AND NOT System.FileExtension:=.zipx AND NOT System.FileExtension:=.zst"
 
-!macro ZM_WRITE_CASCADE_MENU SHELL_KEY
-  DeleteRegKey HKCU "${SHELL_KEY}\${ZM_MENU_KEY}\ExtendedSubCommandsKey"
+!macro ZM_WRITE_CASCADE_MENU SHELL_KEY ROOT_CLSID
   DeleteRegValue HKCU "${SHELL_KEY}\${ZM_MENU_KEY}" "SubCommands"
+  DeleteRegValue HKCU "${SHELL_KEY}\${ZM_MENU_KEY}" "ExtendedSubCommandsKey"
+  DeleteRegKey HKCU "${SHELL_KEY}\${ZM_MENU_KEY}\ExtendedSubCommandsKey"
   WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}" "MUIVerb" "ZManager"
   WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}" "Icon" "$INSTDIR\${ZM_EXE_NAME}"
+  WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}" "ExplorerCommandHandler" "${ROOT_CLSID}"
   WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}" "MultiSelectModel" "Player"
 !macroend
 
-!macro ZM_WRITE_COM_SUBCOMMAND_VERB SHELL_KEY VERB_NAME LABEL CLSID
-  WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}\ExtendedSubCommandsKey\shell\${VERB_NAME}" "MUIVerb" "${LABEL}"
-  WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}\ExtendedSubCommandsKey\shell\${VERB_NAME}" "Icon" "$INSTDIR\${ZM_EXE_NAME}"
-  WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}\ExtendedSubCommandsKey\shell\${VERB_NAME}" "MultiSelectModel" "Player"
-  WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}\ExtendedSubCommandsKey\shell\${VERB_NAME}" "ExplorerCommandHandler" "${CLSID}"
+!macro ZM_WRITE_STATIC_CASCADE_MENU SHELL_KEY SUBCOMMANDS_KEY
+  DeleteRegValue HKCU "${SHELL_KEY}\${ZM_MENU_KEY}" "SubCommands"
+  DeleteRegValue HKCU "${SHELL_KEY}\${ZM_MENU_KEY}" "ExplorerCommandHandler"
+  DeleteRegKey HKCU "${SHELL_KEY}\${ZM_MENU_KEY}\ExtendedSubCommandsKey"
+  WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}" "MUIVerb" "ZManager"
+  WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}" "Icon" "$INSTDIR\${ZM_EXE_NAME}"
+  WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}" "ExtendedSubCommandsKey" "${SUBCOMMANDS_KEY}"
+  WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}" "MultiSelectModel" "Player"
 !macroend
 
-!macro ZM_WRITE_COMMAND_SUBCOMMAND_VERB SHELL_KEY VERB_NAME LABEL QUICK_ACTION TARGET_TOKEN
-  WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}\ExtendedSubCommandsKey\shell\${VERB_NAME}" "MUIVerb" "${LABEL}"
-  WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}\ExtendedSubCommandsKey\shell\${VERB_NAME}" "Icon" "$INSTDIR\${ZM_EXE_NAME}"
-  WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}\ExtendedSubCommandsKey\shell\${VERB_NAME}" "MultiSelectModel" "Player"
-  WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}\ExtendedSubCommandsKey\shell\${VERB_NAME}\command" "" "$\"$INSTDIR\${ZM_EXE_NAME}$\" --quick-action ${QUICK_ACTION} --path $\"${TARGET_TOKEN}$\""
+!macro ZM_WRITE_COMMAND_SUBCOMMAND_VERB SUBCOMMANDS_KEY VERB_NAME LABEL QUICK_ACTION TARGET_TOKEN
+  WriteRegStr HKCU "Software\Classes\${SUBCOMMANDS_KEY}\shell\${VERB_NAME}" "MUIVerb" "${LABEL}"
+  WriteRegStr HKCU "Software\Classes\${SUBCOMMANDS_KEY}\shell\${VERB_NAME}" "Icon" "$INSTDIR\${ZM_EXE_NAME}"
+  WriteRegStr HKCU "Software\Classes\${SUBCOMMANDS_KEY}\shell\${VERB_NAME}" "MultiSelectModel" "Player"
+  WriteRegStr HKCU "Software\Classes\${SUBCOMMANDS_KEY}\shell\${VERB_NAME}\command" "" "$\"$INSTDIR\${ZM_EXE_NAME}$\" --quick-action ${QUICK_ACTION} --path $\"${TARGET_TOKEN}$\""
 !macroend
 
 !macro ZM_REGISTER_COM_CLASS CLSID
@@ -81,18 +86,16 @@
 !macroend
 
 !macro ZM_WRITE_ARCHIVE_CASCADE_MENU SHELL_KEY
-  !insertmacro ZM_WRITE_CASCADE_MENU "${SHELL_KEY}"
-  !insertmacro ZM_REGISTER_GENERATED_ARCHIVE_SUBCOMMANDS "${SHELL_KEY}"
+  !insertmacro ZM_WRITE_CASCADE_MENU "${SHELL_KEY}" "${ZM_ARCHIVE_ROOT_CLSID}"
 !macroend
 
 !macro ZM_WRITE_CREATE_CASCADE_MENU SHELL_KEY
-  !insertmacro ZM_WRITE_CASCADE_MENU "${SHELL_KEY}"
-  !insertmacro ZM_REGISTER_GENERATED_CREATE_FILE_SUBCOMMANDS "${SHELL_KEY}"
+  !insertmacro ZM_WRITE_CASCADE_MENU "${SHELL_KEY}" "${ZM_CREATE_ROOT_CLSID}"
 !macroend
 
 !macro ZM_WRITE_BACKGROUND_CREATE_CASCADE_MENU SHELL_KEY
-  !insertmacro ZM_WRITE_CASCADE_MENU "${SHELL_KEY}"
-  !insertmacro ZM_REGISTER_GENERATED_BACKGROUND_SUBCOMMANDS "${SHELL_KEY}"
+  !insertmacro ZM_WRITE_STATIC_CASCADE_MENU "${SHELL_KEY}" "${ZM_CREATE_BACKGROUND_SUBCOMMANDS_KEY}"
+  !insertmacro ZM_REGISTER_GENERATED_BACKGROUND_SUBCOMMANDS "${ZM_CREATE_BACKGROUND_SUBCOMMANDS_KEY}"
 !macroend
 
 !macro ZM_DELETE_CONTEXT_VERB SHELL_KEY VERB_NAME
@@ -367,6 +370,7 @@
 !macro NSIS_HOOK_POSTINSTALL
   SetOutPath "$INSTDIR"
   File /oname=${ZM_SHELL_EXTENSION_NAME} "${ZM_SHELL_EXTENSION_SOURCE}"
+  !insertmacro ZM_UNREGISTER_RETIRED_SHELL_EXTENSION_CLASSES
   !insertmacro ZM_REGISTER_SHELL_EXTENSION_CLASSES
   !insertmacro ZM_DELETE_CONTEXT_VERB "Software\Classes\*\shell" "CompressZip"
   !insertmacro ZM_DELETE_CONTEXT_VERB "Software\Classes\*\shell" "CompressCleanSource"
@@ -405,6 +409,7 @@
   !insertmacro ZM_DELETE_CONTEXT_VERB "Software\Classes\Directory\Background\shell" "CompressCleanSource"
   !insertmacro ZM_UNREGISTER_ARCHIVE_EXTENSIONS
   !insertmacro ZM_UNREGISTER_ORDERED_SUBCOMMANDS
+  !insertmacro ZM_UNREGISTER_RETIRED_SHELL_EXTENSION_CLASSES
   !insertmacro ZM_UNREGISTER_RETIRED_COMMANDSTORE_VERBS
   !insertmacro ZM_UNREGISTER_SHELL_EXTENSION_CLASSES
   !insertmacro ZM_REFRESH_SHELL_ASSOCIATIONS

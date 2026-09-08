@@ -1,10 +1,10 @@
 # ZManager Windows shell extension
 
 This architecture-matched COM DLL implements the selected-item
-`IExplorerCommand` verbs registered by `packaging/windows/nsis-context-menu.nsh`.
-Explorer supplies one `IShellItemArray`; the extension resolves all filesystem
-paths, writes one versioned `ShellActionRequest`, and launches
-`zmanager-desktop.exe` once.
+`IExplorerCommand` roots registered by `packaging/windows/nsis-context-menu.nsh`.
+Each root enumerates the commands supported by Explorer's current
+`IShellItemArray`; the leaf command resolves all filesystem paths, writes one
+versioned `ShellActionRequest`, and launches `zmanager-desktop.exe` once.
 
 The extension must remain a thin operating-system adapter. Do not add archive
 planning, format behavior, preferences, passwords, logging, networking, or job
@@ -18,7 +18,8 @@ powershell -ExecutionPolicy Bypass -File scripts/build-windows-shell-extension.p
 
 The Windows package build invokes this script automatically and copies the
 resulting DLL into the NSIS installer. Registration is per-user. Folder
-background commands do not use the DLL because they have one unambiguous target.
+background commands do not use the DLL because they have one unambiguous target;
+they remain static `%V` registry commands.
 
 The current NSIS registration targets Explorer's classic context menu. A future
 signed package-with-external-location manifest can expose the same CLSIDs in the
