@@ -42,6 +42,7 @@ use crate::secure_store::{NativeTzapLocalIdentityStore, NativeTzapSecretStore};
 const ACCOUNT_KEY: &str = "default";
 const REDIRECT_URI: &str = "tzap://auth/callback";
 const DESKTOP_DEVICE_NAME: &str = "ZManager Desktop";
+const REGISTERED_DESKTOP_CLIENT_ID: &str = "zmanager_desktop";
 
 fn hosted_online_enabled() -> bool {
     cfg!(feature = "hosted-online")
@@ -80,8 +81,8 @@ fn hosted_client_id(environment: TzapHostedAuthEnvironment) -> Result<&'static s
         TzapHostedAuthEnvironment::Local => {
             option_env!("TZAP_DESKTOP_LOCAL_CLIENT_ID").or(option_env!("TZAP_DESKTOP_CLIENT_ID")).or(Some("zmanager-desktop-local"))
         }
-        TzapHostedAuthEnvironment::Staging => option_env!("TZAP_DESKTOP_STAGING_CLIENT_ID"),
-        TzapHostedAuthEnvironment::Prod => option_env!("TZAP_DESKTOP_PROD_CLIENT_ID"),
+        TzapHostedAuthEnvironment::Staging => option_env!("TZAP_DESKTOP_STAGING_CLIENT_ID").or(Some(REGISTERED_DESKTOP_CLIENT_ID)),
+        TzapHostedAuthEnvironment::Prod => option_env!("TZAP_DESKTOP_PROD_CLIENT_ID").or(Some(REGISTERED_DESKTOP_CLIENT_ID)),
     };
     configured
         .filter(|value| !value.trim().is_empty())
@@ -2137,19 +2138,13 @@ mod tests {
     }
 
     #[test]
-    fn hosted_client_id_requires_registered_non_local_configuration() {
+    fn hosted_client_id_uses_the_registered_desktop_client_by_default() {
         assert_eq!(
             hosted_client_id(TzapHostedAuthEnvironment::Local).unwrap(),
             option_env!("TZAP_DESKTOP_LOCAL_CLIENT_ID").or(option_env!("TZAP_DESKTOP_CLIENT_ID")).unwrap_or("zmanager-desktop-local")
         );
-        assert_eq!(
-            hosted_client_id(TzapHostedAuthEnvironment::Staging).is_ok(),
-            option_env!("TZAP_DESKTOP_STAGING_CLIENT_ID").is_some_and(|value| !value.trim().is_empty())
-        );
-        assert_eq!(
-            hosted_client_id(TzapHostedAuthEnvironment::Prod).is_ok(),
-            option_env!("TZAP_DESKTOP_PROD_CLIENT_ID").is_some_and(|value| !value.trim().is_empty())
-        );
+        assert_eq!(hosted_client_id(TzapHostedAuthEnvironment::Staging).unwrap(), option_env!("TZAP_DESKTOP_STAGING_CLIENT_ID").unwrap_or(REGISTERED_DESKTOP_CLIENT_ID));
+        assert_eq!(hosted_client_id(TzapHostedAuthEnvironment::Prod).unwrap(), option_env!("TZAP_DESKTOP_PROD_CLIENT_ID").unwrap_or(REGISTERED_DESKTOP_CLIENT_ID));
     }
 
     #[test]
