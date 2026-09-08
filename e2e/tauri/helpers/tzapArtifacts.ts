@@ -45,6 +45,13 @@ export function writeArchiveEvidence(args: {
   sourceManifest: HashManifest;
   signerCertificateSha256?: string;
   recipientFingerprint?: string;
+  contactSummary?: {
+    contactId: string;
+    displayName: string;
+    publicSignerId?: string | null;
+    signingCertificateSha256: string;
+    recipientPublicKeyFingerprint: string;
+  };
   runId: string;
 }): { manifestPath: string; checksumPath: string } {
   const receiverDir = path.join(args.artifactDir, args.recipientFingerprint ? "receiver-contact-a" : "portable");
@@ -60,8 +67,13 @@ export function writeArchiveEvidence(args: {
   const evidenceName = args.recipientFingerprint ? "signed-for-contact-a" : "signed-portable";
   const manifestPath = path.join(receiverDir, `${evidenceName}.manifest.json`);
   const checksumPath = path.join(receiverDir, `${evidenceName}.sha256`);
+  const sourceChecksumPath = path.join(receiverDir, "source.sha256");
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   writeFileSync(checksumPath, `${volumes.map((volume) => `${sha256File(volume)}  ${path.basename(volume)}`).join("\n")}\n`);
+  writeFileSync(sourceChecksumPath, `${Object.entries(args.sourceManifest).sort(([left], [right]) => left.localeCompare(right)).map(([relativePath, digest]) => `${digest}  ${relativePath}`).join("\n")}\n`);
+  if (args.contactSummary) {
+    writeFileSync(path.join(receiverDir, "contact-summary.json"), `${JSON.stringify({ ...args.contactSummary }, null, 2)}\n`);
+  }
   return { manifestPath, checksumPath };
 }
 

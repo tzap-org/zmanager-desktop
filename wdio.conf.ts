@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 
@@ -60,11 +60,20 @@ function prepareOnlineE2eProcessEnvironment(): void {
 
   process.env.TZAP_E2E_ENV = environment;
   process.env.TZAP_E2E_RUN_ID = runId;
+  process.env.TZAP_E2E_ARTIFACT_DIR_MANAGED = process.env.TZAP_E2E_ARTIFACT_DIR ? "0" : "1";
   process.env.TZAP_E2E_ARTIFACT_DIR = artifactDir;
   process.env.TZAP_E2E_ACCOUNT_STATE_ROOT = stateRoot;
   process.env.TZAP_E2E_SECURE_STORE_NAMESPACE = `e2e-${runId}`;
   process.env.TZAP_E2E_FIXTURE_ROOT_CERT = join(artifactDir, "fixture-root.pem");
   process.env.TZAP_E2E_ALLOW_PRODUCTION = "0";
+}
+
+function redactFailureText(value: unknown): string {
+  let text = value instanceof Error ? `${value.name}: ${value.message}\n${value.stack ?? ""}` : String(value ?? "");
+  for (const secret of [process.env.TZAP_E2E_USERNAME, process.env.TZAP_E2E_PASSWORD]) {
+    if (secret) text = text.replaceAll(secret, "<redacted>");
+  }
+  return text.replace(/([?&](?:password|handoff_code|code_verifier|access_token|session_token)=)[^&\s]*/giu, "$1<redacted>");
 }
 
 prepareOnlineE2eProcessEnvironment();
@@ -122,6 +131,29 @@ export const config: WebdriverIO.Config = {
   reporters: ["spec"],
   jasmineOpts: {
     defaultTimeoutInterval: 60_000,
+  },
+  afterTest: async (test, _context, result) => {
+    if (result.passed) return;
+    process.env.TZAP_E2E_FAILURES = "1";
+    const failureDir = join(process.env.TZAP_E2E_ARTIFACT_DIR!, "failures");
+    mkdirSync(failureDir, { recursive: true });
+    const slug = `${test.title}-${randomUUID()}`.replace(/[^a-zA-Z0-9_-]+/gu, "-").slice(0, 120);
+    const screenshotPath = join(failureDir, `${slug}.png`);
+    let screenshotError: string | null = null;
+    try {
+      await browser.saveScreenshot(screenshotPath);
+    } catch (error) {
+      screenshotError = redactFailureText(error);
+    }
+    writeFileSync(join(failureDir, `${slug}.json`), `${JSON.stringify({
+      title: test.title,
+      fullTitle: test.fullTitle,
+      passed: result.passed,
+      durationMs: result.duration,
+      error: redactFailureText(result.error),
+      screenshotPath: screenshotError ? null : screenshotPath,
+      screenshotError,
+    }, null, 2)}\n`);
   },
   waitforTimeout: 10_000,
   connectionRetryTimeout: 90_000,

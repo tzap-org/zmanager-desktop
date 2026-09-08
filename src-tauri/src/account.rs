@@ -1562,6 +1562,7 @@ fn refresh_contact_statuses<T: TzapAuthHttpTransport>(catalog: &mut TzapIdentity
             Err(_) => {
                 failed = failed.saturating_add(chunk.len() as u32);
                 for (contact_id, certificate_sha256, offline_state) in chunk {
+                    catalog.status_cache.retain(|status| status.lookup_id != *certificate_sha256);
                     if let Some(contact) = catalog.contacts.iter_mut().find(|contact| &contact.contact_id == contact_id) {
                         let decision = classify_contact_status(offline_state, None, certificate_sha256, None, now as i64);
                         contact.verification_state = decision.verification_state.to_owned();
@@ -1587,9 +1588,7 @@ fn refresh_contact_statuses<T: TzapAuthHttpTransport>(catalog: &mut TzapIdentity
                 contact.verification_state = decision.verification_state.to_owned();
                 contact.missing_status_caveat = decision.missing_status_caveat;
             }
-            catalog
-                .status_cache
-                .retain(|status| status.lookup_id != response.response.certificate_sha256.clone().unwrap_or_else(|| certificate_sha256.clone()));
+            catalog.status_cache.retain(|status| status.lookup_id != *certificate_sha256);
             if let (Some(this_update), Some(next_update)) = (response.response.this_update_unix_seconds, response.response.next_update_unix_seconds) {
                 let lookup_id = response.response.certificate_sha256.clone().unwrap_or_else(|| certificate_sha256.clone());
                 catalog.status_cache.push(TzapPublicStatusCacheRecord {

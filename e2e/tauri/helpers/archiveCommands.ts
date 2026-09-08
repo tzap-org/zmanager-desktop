@@ -91,8 +91,9 @@ async function invoke<T>(command: string, args?: Record<string, unknown>): Promi
                   .join(" ");
               } catch { return String(error); }
             })();
-        const knownCodes = ["invalid_request", "not_found", "password_required", "invalid_password", "unsafe_archive", "io_error", "unsupported_format", "cancelled", "operation_failed", "unauthorized"];
-        const code = knownCodes.find((candidate) => text.includes(candidate));
+        const knownCodes = ["invalid_request", "account_signing_identity_invalid", "not_found", "password_required", "invalid_password", "unsafe_archive", "io_error", "unsupported_format", "cancelled", "operation_failed", "unauthorized"];
+        const code = knownCodes.find((candidate) => text.includes(candidate))
+          ?? (text.includes("TZAP signing requires both a certificate and a matching private key") ? "account_signing_identity_invalid" : undefined);
         return {
           ok: false,
           error: {

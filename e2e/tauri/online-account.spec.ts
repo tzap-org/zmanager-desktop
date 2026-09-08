@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { execFileSync, spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { chromium } from "@playwright/test";
 
@@ -179,6 +180,39 @@ async function startExtract(request: Record<string, unknown>): Promise<void> {
   assert.equal(terminal.status, "completed", JSON.stringify(terminal.latestFailure));
 }
 
+async function startExtractExpectingFailure(request: Record<string, unknown>): Promise<void> {
+  const terminal = await runJobInTaskWindow("start_extract", request, 120_000);
+  assert.equal(terminal.status, "failed", JSON.stringify(terminal));
+}
+
+async function verifyArchiveOffline(archivePath: string): Promise<VerifyTzapCertificateResponse> {
+  const result = await invoke<VerifyTzapCertificateResponse>("verify_tzap_certificate", {
+    request: {
+      archivePath,
+      validateTrust: true,
+      trustedCaCertificatePaths: fixture ? [fixture.rootCertificatePath] : [],
+      trustedSystemRoots: false,
+      includeOfficialTzapRoot: !fixture,
+      checkCurrentStatus: false,
+      environment: config.environment,
+    },
+  });
+  assert.equal(result.signatureCheck, "ok", JSON.stringify(result));
+  assert.equal(result.certificateTime, "valid_at_signing", JSON.stringify(result));
+  return result;
+}
+
+function listTzapVolumes(archivePath: string): string[] {
+  const directory = path.dirname(archivePath);
+  const base = path.basename(archivePath);
+  const stem = base.endsWith(".tzap") ? base.slice(0, -".tzap".length) : base;
+  return readdirSync(directory)
+    .filter((entry) => entry === base || entry.startsWith(`${base}.`) || entry.startsWith(`${stem}.vol`))
+    .map((entry) => path.join(directory, entry))
+    .filter((entry) => existsSync(entry))
+    .sort();
+}
+
 function runReceiverCliExtraction(archivePath: string, destinationPath: string, privateKeyPath: string): void {
   const configuredCli = process.env.TZAP_E2E_RECEIVER_CLI;
   const defaultCli = path.resolve("..", "zmanager", "target", "debug", process.platform === "win32" ? "zm.exe" : "zm");
@@ -203,10 +237,81 @@ function evidenceFailure(error: unknown, snapshot: unknown): Error {
   return new Error(JSON.stringify(safe));
 }
 
+async function clearTestIdentityMaterial(): Promise<void> {
+  try {
+    const snapshot = await invoke<AccountSnapshotDto>("account_snapshot");
+    for (const identity of snapshot.certificates) {
+      await invoke("account_remove_signing_identity", { request: { id: identity.identityId } }).catch(() => undefined);
+    }
+    for (const key of snapshot.recipientKeys) {
+      await invoke("account_remove_recipient_key", { request: { id: key.keyId } }).catch(() => undefined);
+    }
+    await invoke("account_forget").catch(() => undefined);
+  } catch {
+    // The app may already be gone after a native-driver failure. The fixture
+    // and managed state cleanup still run from the surrounding afterAll hook.
+  }
+}
+
+function cleanupRunArtifacts(): void {
+  if (process.env.TZAP_E2E_KEEP_ARTIFACTS === "1" || process.env.TZAP_E2E_FAILURES === "1") return;
+  const managed = process.env.TZAP_E2E_ARTIFACT_DIR_MANAGED === "1";
+  if (managed) {
+    rmSync(runArtifactDir, { recursive: true, force: true });
+    return;
+  }
+  for (const name of [
+    "desktop-state",
+    "portable",
+    "receiver-contact-a",
+    "failures",
+    "fixture-root.pem",
+    "staging-mobile-parity.tzap",
+    "staging-mobile-parity-extracted",
+    "signed-portable.tzap",
+    "signed-portable-tampered.tzap",
+    "signed-contact-a.tzap",
+    "matrix-source",
+    "matrix-passworded-count.tzap",
+    "matrix-split-size.tzap",
+    "matrix-local-recipient.tzap",
+    "matrix-passworded.tzap",
+    "matrix-passworded-count.vol000.tzap",
+    "matrix-passworded-count.vol001.tzap",
+    "matrix-split-size.vol000.tzap",
+    "matrix-split-size.vol001.tzap",
+    "matrix-split-size.vol002.tzap",
+    "matrix-split-size.vol003.tzap",
+    "matrix-split-size.vol004.tzap",
+    "matrix-split-size.vol005.tzap",
+    "matrix-split-size.vol006.tzap",
+    "matrix-passworded-extracted",
+    "matrix-passworded-count-extracted",
+    "matrix-split-size-extracted",
+    "matrix-local-recipient-extracted",
+    "matrix-wrong-password",
+    "extracted-portable",
+    "receiver-contact-a-extracted",
+  ]) {
+    rmSync(path.join(runArtifactDir, name), { recursive: true, force: true });
+  }
+  if (existsSync(runArtifactDir) && readdirSync(runArtifactDir).length === 0) {
+    rmSync(runArtifactDir, { recursive: true, force: true });
+  }
+}
+
 if (config.environment === "staging") {
   describe("Online TZAP account lifecycle", () => {
     beforeAll(() => {
       mkdirSync(runArtifactDir, { recursive: true });
+    });
+
+    afterAll(async () => {
+      try {
+        await clearTestIdentityMaterial();
+      } finally {
+        cleanupRunArtifacts();
+      }
     });
 
     it("completes the real staging browser handoff and current-user session", async () => {
@@ -272,7 +377,16 @@ if (config.environment === "staging") {
     });
 
     afterAll(async () => {
-      await fixture?.stop();
+      try {
+        await clearTestIdentityMaterial();
+      } finally {
+        try {
+          await fixture?.stop();
+        } finally {
+          await fixture?.cleanup();
+          cleanupRunArtifacts();
+        }
+      }
     });
 
     it("proves the real hosted browser handoff and current-user session", async () => {
@@ -321,21 +435,45 @@ if (config.environment === "staging") {
       assert.equal(after.recipientKeys.at(-1)?.lifecycle, "active");
     });
 
-    it("syncs signed hosted contacts, rejects malformed cards, and applies removals", async () => {
+    it("downloads signed contacts read-only, applies status caveats, and preserves cache on failure", async () => {
+      assert(fixture);
       const first = await invoke<AccountContactSyncResultDto>("account_sync_contacts");
       assert.ok(first.counts.imported + first.counts.updated >= 2, JSON.stringify(first.counts));
       assert.ok(first.counts.rejected >= 1, JSON.stringify(first.counts));
+      assert.deepEqual(first.counts.rejectedReasons, ["invalid_card"], JSON.stringify(first.counts));
       assert.equal(first.counts.statusRefreshFailed, 0, JSON.stringify(first.counts));
       assert.ok(first.snapshot.contacts.length >= 2);
-      assert.ok(first.snapshot.contacts.some((contact) => contact.displayName === "Receiver Contact A"));
-      assert.ok(first.snapshot.contacts.some((contact) => contact.displayName === "Receiver Contact B"));
+      const contactA = first.snapshot.contacts.find((contact) => contact.displayName === "Receiver Contact A");
+      const contactB = first.snapshot.contacts.find((contact) => contact.displayName === "Receiver Contact B");
+      assert(contactA);
+      assert(contactB);
+      assert.equal(contactA.publicSignerId, "psign_E2EContactASigner01");
+      assert.match(contactA.signingCertificateSha256, /^sha256:[0-9a-f]{64}$/u);
+      assert.match(contactA.recipientPublicKeyFingerprint, /^sha256:[0-9a-f]{64}$/u);
+      assert.equal(contactA.phoneSourced, true);
+      assert.equal(contactA.verificationState, "valid_now");
+      assert.equal(contactA.missingStatusCaveat, false);
+      assert.equal(contactB.phoneSourced, true);
+      assert.equal(contactB.verificationState, "valid_now");
 
+      await fixture.setStatus("unavailable");
       const repeat = await invoke<AccountContactSyncResultDto>("account_sync_contacts");
       assert.equal(repeat.counts.imported, 0, JSON.stringify(repeat.counts));
       assert.equal(repeat.counts.updated, 0, JSON.stringify(repeat.counts));
       assert.equal(repeat.counts.removed, 0, JSON.stringify(repeat.counts));
+      assert.ok(repeat.counts.statusRefreshFailed >= 1, JSON.stringify(repeat.counts));
+      const unavailableContact = repeat.snapshot.contacts.find((contact) => contact.contactId === contactB.contactId);
+      assert(unavailableContact);
+      assert.equal(unavailableContact.verificationState, "cryptographically_intact_offline", JSON.stringify(repeat));
+      assert.equal(unavailableContact.missingStatusCaveat, true);
 
-      await fixture?.setContactSnapshotVersion(2);
+      await fixture.setStatus("valid");
+      const recovered = await invoke<AccountContactSyncResultDto>("account_sync_contacts");
+      const recoveredContact = recovered.snapshot.contacts.find((contact) => contact.contactId === contactB.contactId);
+      assert(recoveredContact);
+      assert.equal(recoveredContact.verificationState, "valid_now", JSON.stringify(recovered));
+
+      await fixture.setContactSnapshotVersion(2);
       const second = await invoke<AccountContactSyncResultDto>("account_sync_contacts");
       assert.ok(second.counts.updated >= 1, JSON.stringify(second.counts));
       assert.ok(second.counts.removed >= 1, JSON.stringify(second.counts));
@@ -343,6 +481,19 @@ if (config.environment === "staging") {
       assert.ok(second.snapshot.contacts.some((contact) => contact.displayName === "Receiver Contact A (updated)"));
       assert.ok(second.snapshot.contacts.some((contact) => contact.displayName === "Receiver Contact C"));
       assert.ok(!second.snapshot.contacts.some((contact) => contact.displayName === "Receiver Contact B"));
+      const contactBackupRequests = fixture.requestSummary().filter((request) => request.path === "/v1/me/contact-backup");
+      assert.ok(contactBackupRequests.length >= 3, JSON.stringify(contactBackupRequests));
+      assert.ok(contactBackupRequests.every((request) => request.method === "GET"), JSON.stringify(contactBackupRequests));
+
+      const cachedBeforeFailure = structuredClone(second.snapshot.contacts);
+      await fixture.stop();
+      try {
+        await assert.rejects(() => invoke<AccountContactSyncResultDto>("account_sync_contacts"));
+        const cachedAfterFailure = (await invoke<AccountSnapshotDto>("account_snapshot")).contacts;
+        assert.deepEqual(cachedAfterFailure, cachedBeforeFailure, "failed contact download must preserve the last good cache");
+      } finally {
+        await fixture.start();
+      }
     });
 
     it("creates, verifies, extracts, and hashes a signed portable archive", async () => {
@@ -374,16 +525,132 @@ if (config.environment === "staging") {
         replaceExisting: true, preserveMetadata: true,
         tzapCertificates: { signingSelection: { mode: "enrolledIdentity", signingIdentityId: hosted.identityId }, recipientSelection: { recipientKeyIds: [], contactRecipientIds: [contact.contactId], oneTimeCertificatePaths: [] } },
       });
+      const contactVerification = await verifyArchiveOffline(contactArchivePath);
+      assert.equal(contactVerification.signatureCheck, "ok", JSON.stringify(contactVerification));
       const receiverExtractedRoot = path.join(runArtifactDir, "receiver-contact-a-extracted");
       runReceiverCliExtraction(contactArchivePath, receiverExtractedRoot, fixture!.receiverPrivateKeyPath);
       assertHashManifestEqual(sourceManifest, path.join(receiverExtractedRoot, path.basename(sourceRoot)));
-      writeArchiveEvidence({ artifactDir: runArtifactDir, archivePath: contactArchivePath, sourceManifest, signerCertificateSha256: hosted.certificateSha256, recipientFingerprint: contact.recipientPublicKeyFingerprint, runId: process.env.TZAP_E2E_RUN_ID ?? "unknown" });
+      const evidence = writeArchiveEvidence({
+        artifactDir: runArtifactDir,
+        archivePath: contactArchivePath,
+        sourceManifest,
+        signerCertificateSha256: hosted.certificateSha256,
+        recipientFingerprint: contact.recipientPublicKeyFingerprint,
+        contactSummary: {
+          contactId: contact.contactId,
+          displayName: contact.displayName,
+          publicSignerId: contact.publicSignerId,
+          signingCertificateSha256: contact.signingCertificateSha256,
+          recipientPublicKeyFingerprint: contact.recipientPublicKeyFingerprint,
+        },
+        runId: process.env.TZAP_E2E_RUN_ID ?? "unknown",
+      });
+      assert.ok(existsSync(evidence.manifestPath));
+      assert.ok(existsSync(evidence.checksumPath));
+      assert.ok(existsSync(path.join(runArtifactDir, "receiver-contact-a", "source.sha256")));
+      assert.ok(existsSync(path.join(runArtifactDir, "receiver-contact-a", "contact-summary.json")));
     });
 
-    it("rejects unsafe TZAP option combinations at the command boundary", async () => {
-      const outcome = await invokeExpectingError("start_create", { request: { sources: [sourceRoot], destinationPath: path.join(runArtifactDir, "invalid.tzap"), format: "tzap", cleanSource: false, replaceExisting: true, preserveMetadata: true, password: "fixture-password-never-log", tzapCertificates: { signingSelection: { mode: "none" }, recipientSelection: { recipientKeyIds: ["missing"], contactRecipientIds: [], oneTimeCertificatePaths: [] } } } });
-      assert.equal(outcome.code, "invalid_request");
-      assertNoSecrets(outcome, ["fixture-password-never-log"]);
+    it("restores hosted passworded, split, and local-recipient TZAP inputs", async () => {
+      assert(fixture);
+      const hosted = (await invoke<AccountSnapshotDto>("account_snapshot")).certificates.find((certificate) => certificate.identityType === "hosted" && certificate.state === "active");
+      assert(hosted);
+      const matrixSource = path.join(runArtifactDir, "matrix-source");
+      mkdirSync(matrixSource, { recursive: true });
+      writeFileSync(path.join(matrixSource, "payload.bin"), randomBytes(3 * 1024 * 1024));
+      const sourceManifest = hashTree(matrixSource);
+      const certificateOptions = { signingSelection: { mode: "enrolledIdentity", signingIdentityId: hosted.identityId }, recipientSelection: { recipientKeyIds: [], contactRecipientIds: [], oneTimeCertificatePaths: [] } };
+      const common = {
+        sources: [matrixSource], format: "tzap", cleanSource: false, replaceExisting: true, preserveMetadata: true,
+        tzapCertificates: certificateOptions,
+      };
+
+      const password = "fixture-matrix-password-never-log";
+      const passwordArchive = path.join(runArtifactDir, "matrix-passworded.tzap");
+      await startCreate({ ...common, destinationPath: passwordArchive, password });
+      await verifyArchiveOffline(passwordArchive);
+      await startExtractExpectingFailure({ archivePath: passwordArchive, destinationPath: path.join(runArtifactDir, "matrix-wrong-password"), password: "wrong-matrix-password", overwrite: "replace", destinationCollisionStrategy: "refuse", entryPaths: null, stripComponents: 0, tzapRestorePolicy: "portable", tzapAllowDegraded: false, tzapAllowAbsoluteSymlinks: false, ignoreSymlinks: false });
+      await startExtract({ archivePath: passwordArchive, destinationPath: path.join(runArtifactDir, "matrix-passworded-extracted"), password, overwrite: "replace", destinationCollisionStrategy: "refuse", entryPaths: null, stripComponents: 0, tzapRestorePolicy: "portable", tzapAllowDegraded: false, tzapAllowAbsoluteSymlinks: false, ignoreSymlinks: false });
+      assertHashManifestEqual(sourceManifest, path.join(runArtifactDir, "matrix-passworded-extracted", path.basename(matrixSource)));
+
+      const countArchive = path.join(runArtifactDir, "matrix-passworded-count.tzap");
+      await startCreate({ ...common, destinationPath: countArchive, password, volumeCount: 2, tzapRecoveryPercentage: 0, tzapVolumeLossTolerance: 0 });
+      const countVolumes = listTzapVolumes(countArchive);
+      assert.equal(countVolumes.length, 2, "passworded split-by-count must produce exactly two volumes");
+      await verifyArchiveOffline(countVolumes[0]);
+      await startExtract({ archivePath: countVolumes[0], destinationPath: path.join(runArtifactDir, "matrix-passworded-count-extracted"), password, overwrite: "replace", destinationCollisionStrategy: "refuse", entryPaths: null, stripComponents: 0, tzapRestorePolicy: "portable", tzapAllowDegraded: false, tzapAllowAbsoluteSymlinks: false, ignoreSymlinks: false });
+      assertHashManifestEqual(sourceManifest, path.join(runArtifactDir, "matrix-passworded-count-extracted", path.basename(matrixSource)));
+
+      const sizeArchive = path.join(runArtifactDir, "matrix-split-size.tzap");
+      await startCreate({ ...common, destinationPath: sizeArchive, volumeSize: 1024 * 1024, tzapRecoveryPercentage: 0, tzapVolumeLossTolerance: 1 });
+      const sizeVolumes = listTzapVolumes(sizeArchive);
+      assert.ok(sizeVolumes.length >= 2, "split-by-size must produce multiple volumes for the matrix payload");
+      const missingVolume = sizeVolumes.at(-1);
+      assert(missingVolume);
+      rmSync(missingVolume, { force: true });
+      await startExtract({ archivePath: sizeVolumes[0], destinationPath: path.join(runArtifactDir, "matrix-split-size-extracted"), overwrite: "replace", destinationCollisionStrategy: "refuse", entryPaths: null, stripComponents: 0, tzapRestorePolicy: "portable", tzapAllowDegraded: false, tzapAllowAbsoluteSymlinks: false, ignoreSymlinks: false });
+      assertHashManifestEqual(sourceManifest, path.join(runArtifactDir, "matrix-split-size-extracted", path.basename(matrixSource)));
+
+      const generated = await invoke<AccountSnapshotDto>("account_generate_recipient_key", { request: { label: "Online E2E Local Recovery Recipient" } });
+      const localRecipient = generated.recipientKeys.find((key) => key.lifecycle === "active");
+      assert(localRecipient);
+      const recipientArchive = path.join(runArtifactDir, "matrix-local-recipient.tzap");
+      await startCreate({
+        ...common,
+        destinationPath: recipientArchive,
+        tzapCertificates: { ...certificateOptions, recipientSelection: { recipientKeyIds: [localRecipient.keyId], contactRecipientIds: [], oneTimeCertificatePaths: [] } },
+      });
+      await verifyArchiveOffline(recipientArchive);
+      await startExtract({ archivePath: recipientArchive, destinationPath: path.join(runArtifactDir, "matrix-local-recipient-extracted"), recipientKeyId: localRecipient.keyId, overwrite: "replace", destinationCollisionStrategy: "refuse", entryPaths: null, stripComponents: 0, tzapRestorePolicy: "portable", tzapAllowDegraded: false, tzapAllowAbsoluteSymlinks: false, ignoreSymlinks: false });
+      assertHashManifestEqual(sourceManifest, path.join(runArtifactDir, "matrix-local-recipient-extracted", path.basename(matrixSource)));
+    });
+
+    it("rejects every unsupported TZAP option combination at the command boundary", async () => {
+      const contacts = (await invoke<AccountSnapshotDto>("account_snapshot")).contacts;
+      const contactIds = contacts.map((contact) => contact.contactId);
+      const baseRequest = {
+        sources: [sourceRoot], format: "tzap", cleanSource: false, replaceExisting: true, preserveMetadata: true,
+        tzapCertificates: { signingSelection: { mode: "none" }, recipientSelection: { recipientKeyIds: [], contactRecipientIds: [], oneTimeCertificatePaths: [] } },
+      };
+      const cases: Array<{ name: string; patch: Record<string, unknown>; message: RegExp }> = [
+        { name: "recipient plus password", patch: { password: "fixture-matrix-password-never-log", tzapCertificates: { signingSelection: { mode: "none" }, recipientSelection: { recipientKeyIds: ["missing"], contactRecipientIds: [], oneTimeCertificatePaths: [] } } }, message: /cannot be combined with a password/u },
+        { name: "recipient plus split by size", patch: { volumeSize: 1024, tzapCertificates: { signingSelection: { mode: "none" }, recipientSelection: { recipientKeyIds: ["missing"], contactRecipientIds: [], oneTimeCertificatePaths: [] } } }, message: /cannot be split/u },
+        { name: "multiple recipients plus split by count", patch: { volumeCount: 2, tzapCertificates: { signingSelection: { mode: "none" }, recipientSelection: { recipientKeyIds: ["missing-a", "missing-b"], contactRecipientIds: contactIds.slice(0, 2), oneTimeCertificatePaths: [] } } }, message: /cannot be split/u },
+        { name: "password plus split plus multiple recipients", patch: { password: "fixture-matrix-password-never-log", volumeCount: 2, tzapCertificates: { signingSelection: { mode: "none" }, recipientSelection: { recipientKeyIds: [], contactRecipientIds: contactIds.slice(0, 2), oneTimeCertificatePaths: [] } } }, message: /cannot be combined with a password|cannot be split/u },
+        { name: "volume size plus count", patch: { volumeSize: 1024, volumeCount: 2 }, message: /mutually exclusive/u },
+        { name: "tolerance without split", patch: { tzapVolumeLossTolerance: 1 }, message: /requires an active split/u },
+        { name: "tolerance equal to count", patch: { volumeCount: 2, tzapVolumeLossTolerance: 2 }, message: /less than volumeCount/u },
+      ];
+      for (const testCase of cases) {
+        const outcome = await invokeExpectingError("start_create", { request: { ...baseRequest, ...testCase.patch, destinationPath: path.join(runArtifactDir, `invalid-${testCase.name.replaceAll(" ", "-")}.tzap`) } });
+        assert.equal(outcome.code, "invalid_request", testCase.name);
+        assert.match(outcome.message, testCase.message, testCase.name);
+        assertNoSecrets(outcome, ["fixture-matrix-password-never-log"]);
+      }
+
+      const incompleteOneTime = await invokeExpectingError("start_create", {
+        request: {
+          ...baseRequest,
+          destinationPath: path.join(runArtifactDir, "invalid-incomplete-one-time-certificate.tzap"),
+          tzapCertificates: {
+            signingSelection: { mode: "oneTimeCertificateAndKey", certificate_path: "", private_key_path: "", chain_paths: [], password: null },
+            recipientSelection: { recipientKeyIds: [], contactRecipientIds: [], oneTimeCertificatePaths: [] },
+          },
+        },
+      });
+      assert.equal(incompleteOneTime.code, "invalid_request", incompleteOneTime.message);
+      assert.match(incompleteOneTime.message, /requires both a certificate and a matching private key/u);
+
+      const inactiveKey = (await invoke<AccountSnapshotDto>("account_snapshot")).recipientKeys.find((key) => key.lifecycle === "active");
+      assert(inactiveKey, "matrix must have an active local recipient key to retire");
+      await invoke("account_remove_recipient_key", { request: { id: inactiveKey.keyId } });
+      const inactiveTerminal = await runJobInTaskWindow("start_create", {
+        ...baseRequest,
+        destinationPath: path.join(runArtifactDir, "invalid-inactive-recipient.tzap"),
+        tzapCertificates: { signingSelection: { mode: "none" }, recipientSelection: { recipientKeyIds: [inactiveKey.keyId], contactRecipientIds: [], oneTimeCertificatePaths: [] } },
+      }, 120_000);
+      assert.equal(inactiveTerminal.status, "failed", JSON.stringify(inactiveTerminal));
+      assert.match(inactiveTerminal.latestFailure?.message ?? "", /retired recipient keys cannot be selected/iu);
     });
 
     it("reports online status separately from offline cryptographic verification", async () => {

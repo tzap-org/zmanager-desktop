@@ -29,8 +29,22 @@ $env:TZAP_E2E_STAGING_CALLBACK_ADAPTER = '1'
 .\scripts\test-windows-gui.ps1 -Architecture arm64
 ```
 
-The current repository deliberately does not automate staging callback delivery. The local lane is the required CI/default acceptance path; staging is for an operator with an approved browser profile and adapter.
+The `online-account.spec.ts` staging lane automates browser login and delivers
+the real `tzap://auth/callback` through the OS/deep-link adapter. The local lane
+remains the required CI/default acceptance path; staging still requires an
+operator-approved browser profile, credentials, and explicit adapter opt-in.
+The legacy `staging-contact-sync.spec.ts` uses the same OS callback delivery
+path and is an optional staging contact-download regression lane, not a mobile
+or LocalSend transport test.
 
 ## Artifacts and safety
 
-Each run receives a unique `TZAP_E2E_RUN_ID`, isolated desktop state root, secure-store namespace, and artifact directory under `%TEMP%\zmanager-online-e2e` unless overridden. The runner refuses production, requires staging credentials, keeps destructive actions disabled by default, redacts secrets from evidence, and writes receiver-bundle hash evidence beside the archive.
+Each run receives a unique `TZAP_E2E_RUN_ID`, isolated desktop state root,
+secure-store namespace, public evidence artifact directory, and a separate
+private fixture-secret directory under `%TEMP%\zmanager-online-e2e-secrets`.
+Fixture private keys never enter the evidence directory. The runner refuses
+production, requires staging credentials, keeps destructive actions disabled by
+default, writes failure screenshots/task summaries, redacts secrets from
+evidence, and writes receiver-bundle hash evidence beside the archive.
+Set `TZAP_E2E_KEEP_ARTIFACTS=1` to retain a successful review bundle; failed
+runs retain their failure evidence for diagnosis.

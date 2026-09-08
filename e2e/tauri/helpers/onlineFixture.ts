@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, sign } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -29,7 +29,9 @@ export type OnlineFixture = Readonly<{
   start(): Promise<void>;
   stop(): Promise<void>;
   setStatus(mode: FixtureStatusMode): Promise<void>;
+  setContactStatus(contactId: string, mode: FixtureStatusMode): Promise<void>;
   setContactSnapshotVersion(version: 1 | 2): Promise<void>;
+  cleanup(): Promise<void>;
   requestSummary(): ReadonlyArray<{ method: string; path: string; status: number }>;
   redact(value: unknown): unknown;
 }>;
@@ -38,6 +40,7 @@ type FixtureState = {
   username: string;
   password: string;
   statusMode: FixtureStatusMode;
+  contactStatusOverrides: Map<string, FixtureStatusMode>;
   contactSnapshotVersion: 1 | 2;
   handoffs: Map<string, { state: string; verifier: string; redirectUri: string; audience: string; expiresAt: number }>;
   sessions: Map<string, { expiresAt: number; audience: string }>;
@@ -256,6 +259,21 @@ function statusBody(record: CertificateRecord, mode: FixtureStatusMode): Record<
   };
 }
 
+function unavailableStatusBody(record: CertificateRecord): Record<string, unknown> {
+  return { ...statusBody(record, "valid"), this_update_unix_seconds: nowSeconds() - 3600, next_update_unix_seconds: nowSeconds() - 1 };
+}
+
+function statusModeForContact(
+  contact: ContactCardFixture | undefined,
+  state: FixtureState,
+): FixtureStatusMode {
+  return contact
+    ? state.contactStatusOverrides.get(contact.certificate.certificateSha256)
+      ?? state.contactStatusOverrides.get(contact.contactId)
+      ?? state.statusMode
+    : state.statusMode;
+}
+
 type ContactCardFixture = { contactId: string; card: Record<string, unknown>; certificate: CertificateRecord };
 
 function fixtureSnapshot(version: 1 | 2, contacts: { a: ContactCardFixture; b: ContactCardFixture; aUpdated: ContactCardFixture; c: ContactCardFixture }, acceptedAt: number): Record<string, unknown> {
@@ -271,7 +289,10 @@ function fixtureSnapshot(version: 1 | 2, contacts: { a: ContactCardFixture; b: C
 function createFixture(): OnlineFixture {
   const runId = configValue("TZAP_E2E_RUN_ID") ?? randomUUID();
   const artifactDir = path.resolve(configValue("TZAP_E2E_ARTIFACT_DIR", path.join(os.tmpdir(), "zmanager-online-e2e", runId)) ?? path.join(os.tmpdir(), "zmanager-online-e2e", runId));
-  const fixtureDir = path.join(artifactDir, "fixture-service");
+  const safeRunId = runId.replace(/[^a-zA-Z0-9_-]/gu, "-");
+  const secretDir = path.join(os.tmpdir(), "zmanager-online-e2e-secrets", safeRunId);
+  rmSync(secretDir, { recursive: true, force: true });
+  const fixtureDir = secretDir;
   mkdirSync(fixtureDir, { recursive: true });
   const ca = generateCa(fixtureDir);
   const rootCertificatePath = path.resolve(configValue("TZAP_E2E_FIXTURE_ROOT_CERT", path.join(artifactDir, "fixture-root.pem")) ?? path.join(artifactDir, "fixture-root.pem"));
@@ -282,6 +303,7 @@ function createFixture(): OnlineFixture {
     username: configuredUsername ?? `fixture-${runId.slice(-12)}`,
     password: configuredPassword ?? base64Url(randomBytes(24)),
     statusMode: "valid",
+    contactStatusOverrides: new Map(),
     contactSnapshotVersion: 1,
     handoffs: new Map(),
     sessions: new Map(),
@@ -371,20 +393,43 @@ function createFixture(): OnlineFixture {
         if (state.statusMode === "unavailable") { status = 503; sendJson(response, status, { error: "status_unavailable" }); }
         else {
           const lookups = Array.isArray(body.lookups) ? body.lookups as Array<Record<string, unknown>> : [];
-          sendJson(response, 200, { results: lookups.map((lookup) => { const record = [...state.certificates.values()].find((candidate) => candidate.certificateSha256 === lookup.certificate_sha256) ?? [...state.certificates.values()][0]; return { lookup_id: lookup.lookup_id, status_response: record ? statusBody(record, state.statusMode) : { status: "unknown_certificate", query: lookup } }; }) });
+          sendJson(response, 200, { results: lookups.map((lookup) => {
+            const record = [...state.certificates.values()].find((candidate) => candidate.certificateSha256 === lookup.certificate_sha256);
+            const contact = Object.values(contacts).find((candidate) => candidate.certificate.certificateSha256 === record?.certificateSha256);
+            const contactMode = statusModeForContact(contact, state);
+            return {
+              lookup_id: lookup.lookup_id,
+              status_response: record
+                ? contactMode === "unavailable"
+                  ? unavailableStatusBody(record)
+                  : statusBody(record, contactMode)
+                : { status: "unknown_certificate", query: lookup },
+            };
+          }) });
         }
       } else if (request.method === "GET" && url.pathname.startsWith("/v1/status/certificates/by-fingerprint/")) {
         if (state.statusMode === "unavailable") { status = 503; sendJson(response, status, { error: "status_unavailable" }); }
         else {
           const requestedFingerprint = decodeURIComponent(url.pathname.slice("/v1/status/certificates/by-fingerprint/".length));
           const record = [...state.certificates.values()].find((candidate) => candidate.certificateSha256 === requestedFingerprint);
-          sendJson(response, 200, record ? statusBody(record, state.statusMode) : { status: "unknown_certificate", query: { certificate_sha256: requestedFingerprint } });
+          const contact = Object.values(contacts).find((candidate) => candidate.certificate.certificateSha256 === record?.certificateSha256);
+          const contactMode = statusModeForContact(contact, state);
+          sendJson(response, 200, record
+            ? contactMode === "unavailable"
+              ? unavailableStatusBody(record)
+              : statusBody(record, contactMode)
+            : { status: "unknown_certificate", query: { certificate_sha256: requestedFingerprint } });
         }
       } else if (request.method === "GET" && url.pathname === "/fixture/root.pem") {
         sendPem(response, 200, readFileSync(ca.rootPem));
       } else if (request.method === "POST" && url.pathname === "/test/control") {
         const body = await readJson(request);
         if (body.statusMode === "valid" || body.statusMode === "unavailable" || body.statusMode === "revoked" || body.statusMode === "mismatch") state.statusMode = body.statusMode;
+        if (typeof body.contactId === "string" && (body.contactStatus === "valid" || body.contactStatus === "unavailable" || body.contactStatus === "revoked" || body.contactStatus === "mismatch")) {
+          const matchingContacts = Object.values(contacts).filter((candidate) => candidate.contactId === body.contactId);
+          if (matchingContacts.length === 0) state.contactStatusOverrides.set(body.contactId, body.contactStatus);
+          for (const contact of matchingContacts) state.contactStatusOverrides.set(contact.certificate.certificateSha256, body.contactStatus);
+        }
         if (body.contactSnapshotVersion === 1 || body.contactSnapshotVersion === 2) state.contactSnapshotVersion = body.contactSnapshotVersion;
         sendJson(response, 200, { ok: true, statusMode: state.statusMode, contactSnapshotVersion: state.contactSnapshotVersion });
       } else {
@@ -421,7 +466,9 @@ function createFixture(): OnlineFixture {
       state.server = null;
     },
     async setStatus(mode: FixtureStatusMode) { state.statusMode = mode; },
+    async setContactStatus(contactId: string, mode: FixtureStatusMode) { state.contactStatusOverrides.set(contactId, mode); },
     async setContactSnapshotVersion(version: 1 | 2) { state.contactSnapshotVersion = version; },
+    async cleanup() { rmSync(secretDir, { recursive: true, force: true }); },
     requestSummary() { return state.requests.map((request) => ({ ...request })); },
     redact(value: unknown) { return sanitize(value); },
   } satisfies OnlineFixture;
@@ -465,11 +512,13 @@ export function createOnlineFixture(): OnlineFixture {
   // request bodies or secrets to the test output.
   const baseUrl = fixture.baseUrl;
   const control = async (body: Record<string, unknown>): Promise<void> => {
-    await fetch(`${baseUrl}/test/control`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    const response = await fetch(`${baseUrl}/test/control`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    if (!response.ok) throw new Error(`fixture control failed: ${response.status}`);
   };
   return {
     ...fixture,
     setStatus: async (mode) => control({ statusMode: mode }),
+    setContactStatus: async (contactId, mode) => control({ contactId, contactStatus: mode }),
     setContactSnapshotVersion: async (version) => control({ contactSnapshotVersion: version }),
   };
 }
