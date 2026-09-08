@@ -17,12 +17,25 @@ const SERVICE_NAME: &str = "org.tzap.zmanager.identity";
 const SESSION_ENVIRONMENT_KEY: &str = "session-environment";
 
 fn session_storage_account_key(account_key: &str) -> String {
-    if std::env::var("ZMANAGER_GUI_TEST_MODE").as_deref() == Ok("1") {
+    if std::env::var("ZMANAGER_GUI_TEST_MODE").as_deref() == Ok("1") && std::env::var("TZAP_E2E_SECURE_STORE_NAMESPACE").is_err() {
         static TEST_SESSION_SCOPE: OnceLock<String> = OnceLock::new();
         let scope = TEST_SESSION_SCOPE.get_or_init(|| format!("gui-test-{}", std::process::id()));
         return format!("{account_key}:{scope}");
     }
     account_key.to_owned()
+}
+
+fn account_scope() -> String {
+    let test_mode = cfg!(debug_assertions) && std::env::var_os("ZMANAGER_GUI_TEST_MODE").is_some();
+    if test_mode {
+        if let Ok(scope) = std::env::var("TZAP_E2E_SECURE_STORE_NAMESPACE") {
+            if !scope.is_empty() && scope.len() <= 128 && scope.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')) {
+                return scope;
+            }
+            panic!("TZAP_E2E_SECURE_STORE_NAMESPACE must be a non-empty, separator-free test namespace");
+        }
+    }
+    "default".to_owned()
 }
 
 #[derive(Debug, Clone)]
@@ -41,7 +54,7 @@ pub struct NativeTzapLocalIdentityStore {
 impl NativeTzapLocalIdentityStore {
     pub fn new(root: impl Into<PathBuf>, account_key: impl Into<String>) -> Result<Self, TzapLocalIdentityStoreError> {
         let account_key = account_key.into();
-        NativeTzapSecretStore::new(account_key.clone())
+        NativeTzapSecretStore::for_desktop_account()
             .map_err(|error| TzapLocalIdentityStoreError::Catalog(Box::new(zmanager_core::identity_catalog::TzapIdentityCatalogError::Secret(error))))?;
         Ok(Self { root: root.into(), account_key })
     }
@@ -51,7 +64,7 @@ impl NativeTzapLocalIdentityStore {
     }
 
     fn secret_store(&self) -> Result<NativeTzapSecretStore, TzapLocalIdentityStoreError> {
-        NativeTzapSecretStore::new(self.account_key.clone())
+        NativeTzapSecretStore::for_desktop_account()
             .map_err(|error| TzapLocalIdentityStoreError::Catalog(Box::new(zmanager_core::identity_catalog::TzapIdentityCatalogError::Secret(error))))
     }
 }
@@ -101,6 +114,10 @@ impl NativeTzapSecretStore {
             return Err(TzapSecretStoreError::InvalidReference);
         }
         Ok(Self { account_scope })
+    }
+
+    pub fn for_desktop_account() -> Result<Self, TzapSecretStoreError> {
+        Self::new(account_scope())
     }
 
     fn entry(&self, purpose: TzapSecretPurpose, reference: &TzapSecretRef) -> Result<Entry, TzapSecretStoreError> {

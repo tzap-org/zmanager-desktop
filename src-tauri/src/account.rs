@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -42,6 +42,8 @@ use crate::secure_store::{NativeTzapLocalIdentityStore, NativeTzapSecretStore};
 const ACCOUNT_KEY: &str = "default";
 const REDIRECT_URI: &str = "tzap://auth/callback";
 const DESKTOP_DEVICE_NAME: &str = "ZManager Desktop";
+const REGISTERED_DESKTOP_CLIENT_ID: &str = "zmanager_desktop";
+static GUI_TEST_ACCOUNT_STATE_INITIALIZED: OnceLock<()> = OnceLock::new();
 
 fn hosted_online_enabled() -> bool {
     cfg!(feature = "hosted-online")
@@ -80,8 +82,8 @@ fn hosted_client_id(environment: TzapHostedAuthEnvironment) -> Result<&'static s
         TzapHostedAuthEnvironment::Local => {
             option_env!("TZAP_DESKTOP_LOCAL_CLIENT_ID").or(option_env!("TZAP_DESKTOP_CLIENT_ID")).or(Some("zmanager-desktop-local"))
         }
-        TzapHostedAuthEnvironment::Staging => option_env!("TZAP_DESKTOP_STAGING_CLIENT_ID"),
-        TzapHostedAuthEnvironment::Prod => option_env!("TZAP_DESKTOP_PROD_CLIENT_ID"),
+        TzapHostedAuthEnvironment::Staging => option_env!("TZAP_DESKTOP_STAGING_CLIENT_ID").or(Some(REGISTERED_DESKTOP_CLIENT_ID)),
+        TzapHostedAuthEnvironment::Prod => option_env!("TZAP_DESKTOP_PROD_CLIENT_ID").or(Some(REGISTERED_DESKTOP_CLIENT_ID)),
     };
     configured
         .filter(|value| !value.trim().is_empty())
@@ -312,7 +314,7 @@ pub struct AccountRuntime(Arc<Mutex<AccountRuntimeState>>, Arc<Mutex<NativeTzapS
 
 impl AccountRuntime {
     pub fn new() -> Self {
-        let store = NativeTzapSecretStore::new(ACCOUNT_KEY).expect("default account secure-store scope is valid");
+        let store = NativeTzapSecretStore::for_desktop_account().expect("desktop account secure-store scope is valid");
         let persisted_session = store.load_session(ACCOUNT_KEY);
         let persisted_environment = store.load_session_environment(ACCOUNT_KEY);
         let had_persisted_session = persisted_session.is_some();
@@ -340,6 +342,45 @@ impl AccountRuntime {
 }
 
 struct OfficialEnrollmentCertificateValidator;
+
+struct DesktopEnrollmentCertificateValidator;
+
+fn local_fixture_enabled() -> bool {
+    cfg!(debug_assertions)
+        && std::env::var("ZMANAGER_GUI_TEST_MODE").ok().as_deref() == Some("1")
+        && std::env::var("TZAP_E2E_ENV").ok().as_deref() == Some("local")
+}
+
+fn fixture_root_certificates() -> Option<Vec<Vec<u8>>> {
+    if !local_fixture_enabled() {
+        return None;
+    }
+    let path = std::env::var_os("TZAP_E2E_FIXTURE_ROOT_CERT")?;
+    let pem = std::fs::read(path).ok()?;
+    let certificate = X509::from_pem(&pem).ok()?;
+    Some(vec![certificate.to_der().ok()?])
+}
+
+impl TzapEnrollmentCertificateValidator for DesktopEnrollmentCertificateValidator {
+    fn validate_certificate_chain(&self, chain_der: &[Vec<u8>]) -> Result<zmanager_core::trust::TzapCertificatePublicMetadata, TzapEnrollmentError> {
+        if local_fixture_enabled() {
+            return trust::validate_custom_tzap_certificate_chain_der(chain_der, &TzapCertificateProfileOptions::default())
+                .map(|validation| validation.public_metadata)
+                .map_err(|error| TzapEnrollmentError::CertificateChain(error.to_string()));
+        }
+        OfficialEnrollmentCertificateValidator.validate_certificate_chain(chain_der)
+    }
+
+    fn validate_and_complete_certificate_chain(
+        &self,
+        chain_der: &[Vec<u8>],
+    ) -> Result<(Vec<Vec<u8>>, zmanager_core::trust::TzapCertificatePublicMetadata), TzapEnrollmentError> {
+        if local_fixture_enabled() {
+            return self.validate_certificate_chain(chain_der).map(|metadata| (chain_der.to_vec(), metadata));
+        }
+        OfficialEnrollmentCertificateValidator.validate_and_complete_certificate_chain(chain_der)
+    }
+}
 
 impl TzapEnrollmentCertificateValidator for OfficialEnrollmentCertificateValidator {
     fn validate_certificate_chain(&self, chain_der: &[Vec<u8>]) -> Result<zmanager_core::trust::TzapCertificatePublicMetadata, TzapEnrollmentError> {
@@ -416,6 +457,9 @@ fn map_lifecycle_error(error: TzapCertificateLifecycleError) -> CommandErrorDto 
         TzapCertificateLifecycleError::Enrollment(TzapEnrollmentError::Denied(denial)) => {
             account_error(denial.kind.as_str(), "The hosted service did not approve this device operation")
         }
+        TzapCertificateLifecycleError::Enrollment(TzapEnrollmentError::HttpStatus { status_code, .. }) => {
+            account_error("account_lifecycle_http_failed", format!("Hosted enrollment request failed with status {status_code}"))
+        }
         TzapCertificateLifecycleError::CertificateNotFound => account_error("account_certificate_not_found", "Certificate was not found locally"),
         TzapCertificateLifecycleError::CertificateNotRenewable => account_error("account_certificate_not_renewable", "Certificate cannot be renewed"),
         TzapCertificateLifecycleError::RenewalTargetMismatch => {
@@ -454,12 +498,12 @@ pub fn account_enroll_certificate(app: AppHandle, runtime: State<'_, AccountRunt
     let environment = hosted_environment(&environment_str)?;
     let (sign_base_url, login_base_url) = hosted_service_base_urls(environment);
     let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|error| account_error("account_http_client_failed", error))?;
-    let enrollment_client = if matches!(environment, TzapHostedAuthEnvironment::Local) {
+    let enrollment_client = if matches!(environment, TzapHostedAuthEnvironment::Local | TzapHostedAuthEnvironment::Staging) {
         TzapEnrollmentClient::local_staging_server_with_device_name(&sign_base_url, &transport, DESKTOP_DEVICE_NAME)
     } else {
         TzapEnrollmentClient::with_device_name(&sign_base_url, &transport, DESKTOP_DEVICE_NAME)
     };
-    let lifecycle_client = if matches!(environment, TzapHostedAuthEnvironment::Local) {
+    let lifecycle_client = if matches!(environment, TzapHostedAuthEnvironment::Local | TzapHostedAuthEnvironment::Staging) {
         TzapCertificateLifecycleClient::local_staging_server_with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
     } else {
         TzapCertificateLifecycleClient::with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
@@ -478,7 +522,7 @@ pub fn account_enroll_certificate(app: AppHandle, runtime: State<'_, AccountRunt
     let result = enroll_or_renew_device_certificate(
         &enrollment_client,
         &lifecycle_client,
-        &OfficialEnrollmentCertificateValidator,
+        &DesktopEnrollmentCertificateValidator,
         &mut store,
         &session,
         &request,
@@ -548,13 +592,13 @@ pub fn account_renew_certificate(
     let environment = hosted_environment(&environment_str)?;
     let (sign_base_url, login_base_url) = hosted_service_base_urls(environment);
     let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|error| account_error("account_http_client_failed", error))?;
-    let lifecycle_client = if matches!(environment, TzapHostedAuthEnvironment::Local) {
+    let lifecycle_client = if matches!(environment, TzapHostedAuthEnvironment::Local | TzapHostedAuthEnvironment::Staging) {
         TzapCertificateLifecycleClient::local_staging_server_with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
     } else {
         TzapCertificateLifecycleClient::with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
     };
     match lifecycle_client.renew_certificate_with_reconciliation(
-        &OfficialEnrollmentCertificateValidator,
+        &DesktopEnrollmentCertificateValidator,
         &mut store,
         &session,
         &renewal_request,
@@ -589,7 +633,7 @@ pub fn account_retire_device(app: AppHandle, runtime: State<'_, AccountRuntime>)
     let environment = hosted_environment(&environment_str)?;
     let (sign_base_url, login_base_url) = hosted_service_base_urls(environment);
     let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|error| account_error("account_http_client_failed", error))?;
-    let lifecycle_client = if matches!(environment, TzapHostedAuthEnvironment::Local) {
+    let lifecycle_client = if matches!(environment, TzapHostedAuthEnvironment::Local | TzapHostedAuthEnvironment::Staging) {
         TzapCertificateLifecycleClient::local_staging_server_with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
     } else {
         TzapCertificateLifecycleClient::with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
@@ -813,7 +857,7 @@ fn take_matching_pending_auth(runtime: &AccountRuntime, expected_state: &str) ->
 }
 
 #[tauri::command]
-pub fn account_fetch_current_user(app: AppHandle, runtime: State<'_, AccountRuntime>) -> Result<AccountCurrentUserDto, CommandErrorDto> {
+pub fn account_fetch_current_user(_app: AppHandle, runtime: State<'_, AccountRuntime>) -> Result<AccountCurrentUserDto, CommandErrorDto> {
     require_hosted_online_enabled()?;
     expire_session_if_needed(&runtime);
     let (session, environment_str) = {
@@ -837,13 +881,8 @@ pub fn account_fetch_current_user(app: AppHandle, runtime: State<'_, AccountRunt
 
     match user_result {
         Ok(user) => {
-            {
-                let mut state = runtime.0.lock().expect("account runtime lock poisoned");
-                state.cached_user = Some(user.clone());
-            }
-            if let Ok(root) = account_state_dir(&app) {
-                let _ = sync_contact_snapshot(&root, &runtime);
-            }
+            let mut state = runtime.0.lock().expect("account runtime lock poisoned");
+            state.cached_user = Some(user.clone());
             Ok(AccountCurrentUserDto {
                 display_name: user.display_name,
                 public_signer_id: user.public_signer_id,
@@ -1330,11 +1369,6 @@ pub fn account_sync_contacts(app: AppHandle, runtime: State<'_, AccountRuntime>)
     Ok(AccountContactSyncResultDto { snapshot: snapshot_at(&root, &runtime)?, last_successful_sync_at: current_unix_seconds(), counts })
 }
 
-pub fn sync_contact_snapshot(root: &Path, runtime: &AccountRuntime) -> Result<AccountContactSyncCountsDto, CommandErrorDto> {
-    let _lifecycle_guard = runtime.2.lock().expect("account lifecycle lock poisoned");
-    sync_contact_snapshot_inner(root, runtime)
-}
-
 fn sync_contact_snapshot_inner(root: &Path, runtime: &AccountRuntime) -> Result<AccountContactSyncCountsDto, CommandErrorDto> {
     expire_session_if_needed(runtime);
     let (session, environment_str) = {
@@ -1437,38 +1471,33 @@ fn apply_contact_snapshot_with_shared_core(
         .filter(|contact| contact.source == "phone_sync")
         .map(|contact| contact.contact_id.clone())
         .collect::<std::collections::HashSet<_>>();
+    let existing_contacts = before.contacts.iter().map(|contact| (contact.contact_id.clone(), contact.clone())).collect::<std::collections::HashMap<_, _>>();
+    let custom_trust_root_certificates_der = fixture_root_certificates().unwrap_or_default();
+    let custom_trust_root_sha256 =
+        custom_trust_root_certificates_der.iter().map(|certificate| zmanager_core::trust::certificate_sha256_identifier_for_der(certificate)).collect();
     let options = zmanager_core::contact_card::TzapContactCardImportOptions {
         verifier_time_unix_seconds: i64::try_from(now).unwrap_or(i64::MAX),
         official_root_pins: &zmanager_core::trust::OFFICIAL_TZAP_ROOT_PINS,
         official_root_certificates_der: trust::official_tzap_root_certificates_der(),
-        custom_trust_root_sha256: Vec::new(),
-        custom_trust_root_certificates_der: Vec::new(),
+        custom_trust_root_sha256,
+        custom_trust_root_certificates_der,
         certificate_profile_options: zmanager_core::trust::TzapCertificateProfileOptions::default(),
         intermediate_resolver,
     };
     let report = zmanager_core::contact_snapshot::apply_contact_snapshot(store, account_key, snapshot, &options, now).map_err(|error| error.to_string())?;
-    if std::env::var("ZMANAGER_GUI_TEST_CONTACT_DIAGNOSTIC").as_deref() == Ok("1") {
-        for failure in &report.failed_contacts {
-            eprintln!("ZMANAGER_GUI_TEST_CONTACT_REJECTED: {}", failure.error);
+    let mut counts = AccountContactSyncCountsDto::default();
+    let incoming_ids = report.restored_contacts.iter().map(|contact| contact.contact_id.clone()).collect::<std::collections::HashSet<_>>();
+    for restored in &report.restored_contacts {
+        match existing_contacts.get(&restored.contact_id) {
+            Some(previous) if contact_sync_record_changed(previous, restored) => counts.updated = counts.updated.saturating_add(1),
+            Some(_) => {}
+            None => counts.imported = counts.imported.saturating_add(1),
         }
     }
     let mut inventory = store.load_inventory(account_key).map_err(|error| error.to_string())?;
-    let mut counts = AccountContactSyncCountsDto::default();
-    let mut incoming_ids = std::collections::HashSet::new();
-    for entry in &snapshot.contacts {
-        if let Ok(contact_id) = entry.resolved_contact_id() {
-            incoming_ids.insert(contact_id);
-        }
-    }
-    let restored_ids = report.restored_contacts.iter().map(|contact| contact.contact_id.clone()).collect::<std::collections::HashSet<_>>();
     for contact in &mut inventory.contacts {
-        if restored_ids.contains(&contact.contact_id) {
+        if incoming_ids.contains(&contact.contact_id) {
             contact.source = "phone_sync".to_owned();
-            if existing_phone_ids.contains(&contact.contact_id) {
-                counts.updated = counts.updated.saturating_add(1);
-            } else {
-                counts.imported = counts.imported.saturating_add(1);
-            }
         }
     }
     inventory.contacts.retain(|contact| contact.source != "phone_sync" || incoming_ids.contains(&contact.contact_id));
@@ -1484,6 +1513,21 @@ fn apply_contact_snapshot_with_shared_core(
     }
     store.save_inventory(account_key, inventory).map_err(|error| error.to_string())?;
     Ok(counts)
+}
+
+fn contact_sync_record_changed(
+    previous: &zmanager_core::local_identity_store::TzapContactRecord,
+    current: &zmanager_core::local_identity_store::TzapContactRecord,
+) -> bool {
+    previous.contact_id != current.contact_id
+        || previous.display_name != current.display_name
+        || previous.signing_certificate_sha256 != current.signing_certificate_sha256
+        || previous.recipient_public_key_fingerprint != current.recipient_public_key_fingerprint
+        || previous.trust_anchor_type != current.trust_anchor_type
+        || previous.contact_card_payload != current.contact_card_payload
+        || previous.accepted_at_unix_seconds != current.accepted_at_unix_seconds
+        || previous.local_alias != current.local_alias
+        || previous.card != current.card
 }
 
 fn record_contact_rejection(counts: &mut AccountContactSyncCountsDto, reason: &str) {
@@ -1748,6 +1792,23 @@ fn account_state_dir(app: &AppHandle) -> Result<PathBuf, CommandErrorDto> {
         if let Some(path) = std::env::var_os("ZMANAGER_GUI_TEST_STATE_DIR") {
             return Ok(PathBuf::from(path).join("tzap-state"));
         }
+        if let Some(root) = std::env::var_os("TZAP_E2E_ACCOUNT_STATE_ROOT") {
+            let root = PathBuf::from(root);
+            if root.is_absolute() {
+                if GUI_TEST_ACCOUNT_STATE_INITIALIZED.get().is_none() {
+                    if root.exists() {
+                        let mut entries = std::fs::read_dir(&root).map_err(|error| account_error("account_state_path_failed", error))?;
+                        if entries.next().transpose().map_err(|error| account_error("account_state_path_failed", error))?.is_some() {
+                            return Err(account_error("account_state_path_failed", "TZAP_E2E_ACCOUNT_STATE_ROOT must be a fresh per-run directory"));
+                        }
+                    }
+                    std::fs::create_dir_all(&root).map_err(|error| account_error("account_state_path_failed", error))?;
+                    let _ = GUI_TEST_ACCOUNT_STATE_INITIALIZED.set(());
+                }
+                return Ok(root);
+            }
+            return Err(account_error("account_state_path_failed", "TZAP_E2E_ACCOUNT_STATE_ROOT must be absolute"));
+        }
     }
     app.path().app_data_dir().map(|path| path.join("tzap-state")).map_err(|error| account_error("account_state_path_failed", error))
 }
@@ -1756,12 +1817,15 @@ fn verify_contact_card_with_resolver(
     card: &Value,
     intermediate_resolver: Option<&dyn zmanager_core::trust::TzapIntermediateResolver>,
 ) -> Result<zmanager_core::contact_card::TzapVerifiedContactCard, zmanager_core::contact_card::TzapContactCardError> {
+    let custom_trust_root_certificates_der = fixture_root_certificates().unwrap_or_default();
+    let custom_trust_root_sha256 =
+        custom_trust_root_certificates_der.iter().map(|certificate| zmanager_core::trust::certificate_sha256_identifier_for_der(certificate)).collect();
     let options = zmanager_core::contact_card::TzapContactCardImportOptions {
         verifier_time_unix_seconds: i64::try_from(current_unix_seconds()).unwrap_or(i64::MAX),
         official_root_pins: &zmanager_core::trust::OFFICIAL_TZAP_ROOT_PINS,
         official_root_certificates_der: trust::official_tzap_root_certificates_der(),
-        custom_trust_root_sha256: Vec::new(),
-        custom_trust_root_certificates_der: Vec::new(),
+        custom_trust_root_sha256,
+        custom_trust_root_certificates_der,
         certificate_profile_options: zmanager_core::trust::TzapCertificateProfileOptions::default(),
         intermediate_resolver,
     };
@@ -2147,18 +2211,18 @@ mod tests {
     }
 
     #[test]
-    fn hosted_client_id_requires_registered_non_local_configuration() {
+    fn hosted_client_id_uses_the_registered_desktop_client_by_default() {
         assert_eq!(
             hosted_client_id(TzapHostedAuthEnvironment::Local).unwrap(),
             option_env!("TZAP_DESKTOP_LOCAL_CLIENT_ID").or(option_env!("TZAP_DESKTOP_CLIENT_ID")).unwrap_or("zmanager-desktop-local")
         );
         assert_eq!(
-            hosted_client_id(TzapHostedAuthEnvironment::Staging).is_ok(),
-            option_env!("TZAP_DESKTOP_STAGING_CLIENT_ID").is_some_and(|value| !value.trim().is_empty())
+            hosted_client_id(TzapHostedAuthEnvironment::Staging).unwrap(),
+            option_env!("TZAP_DESKTOP_STAGING_CLIENT_ID").unwrap_or(REGISTERED_DESKTOP_CLIENT_ID)
         );
         assert_eq!(
-            hosted_client_id(TzapHostedAuthEnvironment::Prod).is_ok(),
-            option_env!("TZAP_DESKTOP_PROD_CLIENT_ID").is_some_and(|value| !value.trim().is_empty())
+            hosted_client_id(TzapHostedAuthEnvironment::Prod).unwrap(),
+            option_env!("TZAP_DESKTOP_PROD_CLIENT_ID").unwrap_or(REGISTERED_DESKTOP_CLIENT_ID)
         );
     }
 

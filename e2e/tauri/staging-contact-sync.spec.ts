@@ -145,22 +145,6 @@ async function syncContacts(): Promise<void> {
   });
 }
 
-async function diagnoseRemoteCards(): Promise<void> {
-  const backupPath = process.env.DESKTOP_STAGING_CONTACT_BACKUP_DIAGNOSTIC;
-  if (!backupPath) return;
-  const backup = JSON.parse(await readFile(backupPath, "utf8")) as { payload?: { contacts?: Array<{ card?: unknown }> } };
-  for (const [index, entry] of (backup.payload?.contacts ?? []).entries()) {
-    if (!entry.card) continue;
-    try {
-      await invoke("account_inspect_contact_card", { request: { contactCard: entry.card } });
-      console.log(`contact_card_diagnostic=${index}:accepted`);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.log(`contact_card_diagnostic=${index}:rejected:${message}`);
-    }
-  }
-}
-
 async function assertExpectedContacts(expected: ExpectedContact[]): Promise<void> {
   const rows = await renderedContactRows();
   for (const contact of expected) {
@@ -191,7 +175,6 @@ describe("staging hosted contact sync", () => {
     await invoke("account_forget");
     await completeHostedAuth();
     await openContacts();
-    await diagnoseRemoteCards();
     await syncContacts();
     await assertExpectedContacts(expected);
 

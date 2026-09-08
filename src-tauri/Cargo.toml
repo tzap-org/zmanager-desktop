@@ -20,10 +20,9 @@ license = "Apache-2.0"
 publish = false
 
 [features]
-default = []
-# The hosted online path remains opt-in until ADR 0011 and the exact staging/
-# production OAuth registrations are recorded. Offline identity and archive
-# behavior are available in the default build.
+default = ["hosted-online"]
+# Hosted account sign-in is part of the product build. The client ID is public
+# configuration; private session material remains in the native secure store.
 hosted-online = []
 
 [build-dependencies]

@@ -50,6 +50,10 @@ fn main() {
 
     let diagnostics = diagnostics::DiagnosticLog::new();
     let native_launch_inbox = native_launch_inbox::NativeLaunchInbox::new();
+    let startup_args = std::env::args_os().skip(1).collect::<Vec<_>>();
+    if let Some(event) = quick_action::hosted_auth_callback_event_from_args(startup_args.clone()) {
+        native_launch_inbox.ingest(event).expect("failed to queue hosted auth deep-link callback");
+    }
     let launch_instance_mode = quick_action::LaunchInstanceMode::from_startup_env();
     let startup_window_state = quick_action::QuickActionStartupState::from_startup_env();
     record_launch_classification(&diagnostics, "primaryProcess", &startup_window_state);

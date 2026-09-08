@@ -8,6 +8,9 @@ use std::{
 use tauri::Url;
 
 use crate::dto::{QuickActionKindDto, QuickActionRequestDto, QuickActionStartupErrorDto, QuickActionStartupStateDto, QuickActionWindowDispositionDto};
+use crate::native_launch_inbox::{
+    HostedAuthCallbackPayload, HostedAuthResult, NATIVE_INBOUND_EVENT_VERSION, NativeInboundEvent, NativeInboundEventKind, NativeInboundPayload,
+};
 
 const QUICK_ACTION_ARG: &str = "--quick-action";
 const QUICK_ACTION_ARG_ALIAS: &str = "--action";
@@ -27,7 +30,7 @@ pub enum LaunchInstanceMode {
 
 impl LaunchInstanceMode {
     pub fn from_startup_env() -> Self {
-        let test_mode = cfg!(debug_assertions) && std::env::var("ZMANAGER_GUI_TEST_MODE").is_ok();
+        let test_mode = cfg!(debug_assertions) && std::env::var("ZMANAGER_GUI_TEST_MODE").is_ok() && std::env::var("ZMANAGER_GUI_TEST_DEEP_LINK").is_err();
         Self::from_args(std::env::args_os().skip(1), std::env::var("ZMANAGER_MACOS_QUICK_ACTION").is_ok() || test_mode)
     }
 
@@ -87,6 +90,10 @@ impl QuickActionStartupState {
     }
 
     pub fn from_args(args: impl IntoIterator<Item = OsString>) -> Self {
+        let args = args.into_iter().collect::<Vec<_>>();
+        if hosted_auth_callback_event_from_args(args.clone()).is_some() {
+            return Self::NotRequested;
+        }
         match parse_quick_action_args(args) {
             ParseOutcome::NotRequested => Self::NotRequested,
             ParseOutcome::Requested(result) => match result {
@@ -147,12 +154,102 @@ impl QuickActionLaunchCoordinator {
     }
 
     pub fn ingest_secondary_process_args(&self, args: Vec<OsString>, inbox: &crate::native_launch_inbox::NativeLaunchInbox) -> QuickActionStartupState {
+        if let Some(event) = hosted_auth_callback_event_from_args(args.clone()) {
+            let _ = inbox.ingest(event);
+            return QuickActionStartupState::NotRequested;
+        }
         let state = QuickActionStartupState::from_process_or_user_args(args);
         if let QuickActionStartupState::Requested(request) = &state {
             let _ = inbox.ingest(crate::native_launch_inbox::NativeLaunchInbox::from_quick_action(request.clone()));
         }
         state
     }
+}
+
+/// Converts a Windows/Linux process argument carrying a hosted-auth callback
+/// into the same native inbox event used by the macOS URL event path. Keeping
+/// this parser at the process boundary ensures the callback is delivered even
+/// when the app is launched by the OS as a fresh process.
+pub fn hosted_auth_callback_event_from_args(args: impl IntoIterator<Item = OsString>) -> Option<NativeInboundEvent> {
+    let mut values = args.into_iter().filter_map(|arg| arg.into_string().ok()).collect::<Vec<_>>();
+    let first_is_executable = values.first().is_some_and(|value| {
+        let argument = OsString::from(value);
+        first_arg_is_executable_path(Some(&argument))
+    });
+    if first_is_executable {
+        values.remove(0);
+    }
+    values.into_iter().find_map(|value| hosted_auth_callback_event_from_url(&value))
+}
+
+fn hosted_auth_callback_event_from_url(value: &str) -> Option<NativeInboundEvent> {
+    let url = url::Url::parse(value).ok()?;
+    let is_current = url.scheme() == "tzap" && url.host_str() == Some("auth") && url.path() == "/callback";
+    let is_legacy = url.scheme() == "zmanager" && url.host_str() == Some("auth-callback") && url.path().is_empty();
+    if !is_current && !is_legacy {
+        return None;
+    }
+
+    const FORBIDDEN_KEYS: [&str; 9] =
+        ["code", "token", "access_token", "authorization_code", "password", "relay_body", "session_token", "refresh_token", "id_token"];
+    if url.query_pairs().any(|(key, _)| FORBIDDEN_KEYS.iter().any(|forbidden| key.eq_ignore_ascii_case(forbidden))) {
+        return None;
+    }
+
+    let state = url.query_pairs().find(|(key, _)| key == "state").map(|(_, value)| value.into_owned())?;
+    if !bounded_auth_token(&state, 16, 256, |byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-')) {
+        return None;
+    }
+    let handoff_code = url.query_pairs().find(|(key, _)| key == "handoff_code").map(|(_, value)| value.into_owned());
+    let result = match url.query_pairs().find(|(key, _)| key == "result").map(|(_, value)| value.into_owned()) {
+        Some(result) => match result.as_str() {
+            "completed" => HostedAuthResult::Completed,
+            "cancelled" => HostedAuthResult::Cancelled,
+            "failed" => HostedAuthResult::Failed,
+            _ => return None,
+        },
+        // The hosted service's approved native callback shape is state plus a
+        // one-time handoff code. Treat the presence of a valid handoff code as
+        // completion when the optional result discriminator is omitted.
+        None if handoff_code.is_some() => HostedAuthResult::Completed,
+        None => return None,
+    };
+    if matches!(result, HostedAuthResult::Completed)
+        && !handoff_code
+            .as_deref()
+            .is_some_and(|code| bounded_auth_token(code, 16, 2048, |byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-' | b'~')))
+    {
+        return None;
+    }
+    if !matches!(result, HostedAuthResult::Completed) && handoff_code.is_some() {
+        return None;
+    }
+    let error_code = url.query_pairs().find(|(key, _)| key == "error_code").map(|(_, value)| value.into_owned());
+    if error_code.as_deref().is_some_and(|code| code.len() > 128 || code.bytes().any(|byte| byte.is_ascii_control())) {
+        return None;
+    }
+
+    static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let timestamp_unix_ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis().min(u128::from(u64::MAX)) as u64;
+    let counter = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    Some(NativeInboundEvent {
+        version: NATIVE_INBOUND_EVENT_VERSION,
+        event_id: format!("native-auth-{}-{timestamp_unix_ms}-{counter}", std::process::id()),
+        kind: NativeInboundEventKind::HostedAuthCallback,
+        timestamp_unix_ms,
+        idempotency_key: None,
+        payload: NativeInboundPayload::HostedAuthCallback(HostedAuthCallbackPayload {
+            state,
+            result,
+            error_code,
+            handoff_code,
+            callback_url: Some(if is_current { "tzap://auth/callback" } else { "zmanager://auth-callback" }.to_string()),
+        }),
+    })
+}
+
+fn bounded_auth_token(value: &str, min: usize, max: usize, allowed: impl Fn(u8) -> bool) -> bool {
+    (min..=max).contains(&value.len()) && value.bytes().all(allowed)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -619,6 +716,37 @@ mod tests {
             assert_eq!(mode, LaunchInstanceMode::NormalSingleton);
             assert!(mode.registers_single_instance());
         }
+    }
+
+    #[test]
+    fn hosted_auth_callback_arguments_enter_the_native_inbox_contract() {
+        let event = hosted_auth_callback_event_from_args(
+            [
+                OsString::from("C:/Program Files/ZManager/zmanager-desktop.exe"),
+                OsString::from("tzap://auth/callback?state=state-1234567890&result=completed&handoff_code=handoff-code-1234567890"),
+            ]
+            .into_iter(),
+        )
+        .expect("callback argument should be recognized");
+        assert_eq!(event.kind, NativeInboundEventKind::HostedAuthCallback);
+        let NativeInboundPayload::HostedAuthCallback(payload) = event.payload else {
+            panic!("expected hosted auth payload");
+        };
+        assert_eq!(payload.state, "state-1234567890");
+        assert_eq!(payload.handoff_code.as_deref(), Some("handoff-code-1234567890"));
+        assert_eq!(payload.callback_url.as_deref(), Some("tzap://auth/callback"));
+        assert!(hosted_auth_callback_event_from_args([OsString::from("tzap://auth/callback?state=state-1234567890&result=completed&code=secret")]).is_none());
+    }
+
+    #[test]
+    fn hosted_auth_callback_defaults_completion_when_result_is_omitted() {
+        let event = hosted_auth_callback_event_from_args([OsString::from("tzap://auth/callback?state=state-1234567890&handoff_code=handoff-code-1234567890")])
+            .expect("approved callback shape should be recognized");
+        let NativeInboundPayload::HostedAuthCallback(payload) = event.payload else {
+            panic!("expected hosted auth payload");
+        };
+        assert_eq!(payload.result, HostedAuthResult::Completed);
+        assert_eq!(payload.handoff_code.as_deref(), Some("handoff-code-1234567890"));
     }
 
     #[test]
