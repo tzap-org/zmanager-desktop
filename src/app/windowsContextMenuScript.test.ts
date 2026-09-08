@@ -37,10 +37,14 @@ function registeredArchiveExtensions(macroName: string): string[] {
 }
 
 describe("Windows context menu installer hook", () => {
-  it("uses ExtendedSubCommandsKey without stale SubCommands values", () => {
-    expect(script).toContain('"ExtendedSubCommandsKey"');
+  it("registers ExtendedSubCommandsKey as a parent-local submenu key", () => {
+    expect(script).toContain('DeleteRegKey HKCU "${SHELL_KEY}\\${ZM_MENU_KEY}\\ExtendedSubCommandsKey"');
+    expect(script).toContain('WriteRegStr HKCU "${SHELL_KEY}\\${ZM_MENU_KEY}\\ExtendedSubCommandsKey\\shell\\${VERB_NAME}"');
     expect(script).toContain('DeleteRegValue HKCU "${SHELL_KEY}\\${ZM_MENU_KEY}" "SubCommands"');
-    expect(script).not.toContain('WriteRegStr HKCU "${SHELL_KEY}\\${ZM_MENU_KEY}" "SubCommands"');
+    expect(script).not.toContain('WriteRegStr HKCU "${SHELL_KEY}\\${ZM_MENU_KEY}" "ExtendedSubCommandsKey"');
+    expect(script).toContain('!insertmacro ZM_REGISTER_GENERATED_ARCHIVE_SUBCOMMANDS "${SHELL_KEY}"');
+    expect(script).toContain('!insertmacro ZM_REGISTER_GENERATED_CREATE_FILE_SUBCOMMANDS "${SHELL_KEY}"');
+    expect(script).toContain('!insertmacro ZM_REGISTER_GENERATED_BACKGROUND_SUBCOMMANDS "${SHELL_KEY}"');
   });
 
   it("keeps the archive submenu actions in the requested order", () => {
@@ -60,6 +64,10 @@ describe("Windows context menu installer hook", () => {
       join(process.cwd(), "packaging", "windows", "nsis-shell-actions.generated.nsh"),
       "utf8",
     );
+
+    expect(generatedScript).toContain("!macro ZM_REGISTER_GENERATED_ARCHIVE_SUBCOMMANDS SHELL_KEY");
+    expect(generatedScript).toContain("!macro ZM_REGISTER_GENERATED_CREATE_FILE_SUBCOMMANDS SHELL_KEY");
+    expect(generatedScript).toContain("!macro ZM_REGISTER_GENERATED_BACKGROUND_SUBCOMMANDS SHELL_KEY");
 
     let cursor = -1;
     for (const marker of expected) {

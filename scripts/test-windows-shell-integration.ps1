@@ -26,10 +26,10 @@ if (Compare-Object $rustClassIds $nsisClassIds) {
 if ($quickAction.Contains('QUICK_ACTION_BURST_DEBOUNCE') -or $quickAction.Contains('pending_creates')) {
     throw "Timing-based quick-action coalescing must not return."
 }
-if (-not $nsis.Contains('ZM_WRITE_COM_SUBCOMMAND_VERB "${ZM_CREATE_FILE_SUBCOMMANDS_KEY}"')) {
+if (-not $nsis.Contains('ZM_REGISTER_GENERATED_CREATE_FILE_SUBCOMMANDS SHELL_KEY')) {
     throw "Selected create verbs are not registered through IExplorerCommand."
 }
-if (-not $nsis.Contains('ZM_WRITE_COMMAND_SUBCOMMAND_VERB "${ZM_CREATE_BACKGROUND_SUBCOMMANDS_KEY}"')) {
+if (-not $nsis.Contains('ZM_REGISTER_GENERATED_BACKGROUND_SUBCOMMANDS SHELL_KEY')) {
     throw "Folder-background verbs must retain their single-target command registration."
 }
 if (-not (Test-Path $extensionArtifact)) {
