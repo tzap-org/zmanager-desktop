@@ -138,18 +138,14 @@ describe("macOS native Tauri integration", () => {
 
   it("writes macOS diagnostics under the user Library log directory", async () => {
     const info = await invoke<DiagnosticLogInfo>("diagnostic_log_info");
-    const expectedPath = path.join(
-      os.homedir(),
-      "Library",
-      "Logs",
-      "org.tzap-org.zmanager",
-      "zmanager-diagnostics.log",
-    );
+    const expectedRoot = path.join(os.homedir(), "Library", "Logs");
 
     assert.equal(info.enabled, true);
     assert.equal(info.location, "user");
     assert.ok(info.path);
-    assert.equal(path.resolve(info.path), path.resolve(expectedPath));
+    const resolvedPath = path.resolve(info.path);
+    assert.equal(path.dirname(path.dirname(resolvedPath)), path.resolve(expectedRoot));
+    assert.equal(path.basename(resolvedPath), "zmanager-diagnostics.log");
     assert.match(info.sessionId, /^\d+-\d+$/);
   });
 

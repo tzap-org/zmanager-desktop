@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { chromium } from "@playwright/test";
 
@@ -67,7 +67,13 @@ async function openDeepLink(url: string): Promise<void> {
 
 async function completeBrowserAuth(launchUrl: string, dispatchCallback = true): Promise<string> {
   assert(username && password, "staging browser credentials must be configured");
-  const browserSession = await chromium.launch({ channel: "msedge", headless: true });
+  const edgeBinary = "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge";
+  const chromeBinary = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+  const channel = process.env.TZAP_E2E_BROWSER_CHANNEL
+    ?? (process.platform === "darwin"
+      ? (existsSync(edgeBinary) ? "msedge" : existsSync(chromeBinary) ? "chrome" : undefined)
+      : "msedge");
+  const browserSession = await chromium.launch({ ...(channel ? { channel } : {}), headless: true });
   try {
     const page = await browserSession.newPage();
     let productionRequest: string | null = null;
