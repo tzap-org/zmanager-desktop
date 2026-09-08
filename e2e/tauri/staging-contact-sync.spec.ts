@@ -127,7 +127,10 @@ async function openContacts(): Promise<void> {
   const dialog = await $("[role='dialog'][aria-labelledby='account-title']");
   await dialog.waitForDisplayed();
   await dialog.$("button=Contacts & Keys").click();
-  await $("button=Download from Phone").waitForDisplayed();
+  await browser.waitUntil(async () => {
+    const body = await browser.execute(() => document.body.textContent ?? "");
+    return body.includes("Download from Phone") || body.includes("Sign in to sync contacts");
+  }, { timeout: 10_000, interval: 250 });
 }
 
 async function renderedContactRows(): Promise<string[]> {
@@ -140,6 +143,22 @@ async function syncContacts(): Promise<void> {
     timeout: 60_000,
     interval: 500,
   });
+}
+
+async function diagnoseRemoteCards(): Promise<void> {
+  const backupPath = process.env.DESKTOP_STAGING_CONTACT_BACKUP_DIAGNOSTIC;
+  if (!backupPath) return;
+  const backup = JSON.parse(await readFile(backupPath, "utf8")) as { payload?: { contacts?: Array<{ card?: unknown }> } };
+  for (const [index, entry] of (backup.payload?.contacts ?? []).entries()) {
+    if (!entry.card) continue;
+    try {
+      await invoke("account_inspect_contact_card", { request: { contactCard: entry.card } });
+      console.log(`contact_card_diagnostic=${index}:accepted`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.log(`contact_card_diagnostic=${index}:rejected:${message}`);
+    }
+  }
 }
 
 async function assertExpectedContacts(expected: ExpectedContact[]): Promise<void> {
@@ -172,6 +191,7 @@ describe("staging hosted contact sync", () => {
     await invoke("account_forget");
     await completeHostedAuth();
     await openContacts();
+    await diagnoseRemoteCards();
     await syncContacts();
     await assertExpectedContacts(expected);
 
@@ -192,9 +212,11 @@ describe("staging hosted contact sync", () => {
   stagingIt("keeps cached contacts during session recovery", async () => {
     await invoke("account_forget");
     expect((await invoke<AccountSnapshot>("account_snapshot")).contacts.length).toBeGreaterThan(0);
+    await browser.refresh();
+    await openContacts();
     expect(await $("button=Sign in to sync contacts").isDisplayed()).toBeTrue();
     await completeHostedAuth();
-    await openContacts();
+    await $("button=Download from Phone").waitForDisplayed();
     await syncContacts();
     await assertExpectedContacts(expected);
   }, 180_000);

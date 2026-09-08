@@ -3,6 +3,7 @@
 use keyring::{Entry, Error as KeyringError};
 use serde_json::{Value, json};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use zmanager_core::identity_catalog::{
     FileTzapIdentityCatalogStore, TzapIdentityCatalogStore, TzapSecretMaterialStore, TzapSecretPurpose, TzapSecretRef, TzapSecretStoreError,
     load_inventory_from_catalog, store_inventory_as_catalog,
@@ -14,6 +15,15 @@ use zmanager_tzap_hosted::auth_client::{TzapAuthError, TzapBearerToken, TzapSess
 
 const SERVICE_NAME: &str = "org.tzap.zmanager.identity";
 const SESSION_ENVIRONMENT_KEY: &str = "session-environment";
+
+fn session_storage_account_key(account_key: &str) -> String {
+    if std::env::var("ZMANAGER_GUI_TEST_MODE").as_deref() == Ok("1") {
+        static TEST_SESSION_SCOPE: OnceLock<String> = OnceLock::new();
+        let scope = TEST_SESSION_SCOPE.get_or_init(|| format!("gui-test-{}", std::process::id()));
+        return format!("{account_key}:{scope}");
+    }
+    account_key.to_owned()
+}
 
 #[derive(Debug, Clone)]
 pub struct NativeTzapSecretStore {
@@ -100,7 +110,8 @@ impl NativeTzapSecretStore {
     }
 
     fn session_environment_entry(&self, account_key: &str) -> Result<Entry, TzapAuthError> {
-        Entry::new(SERVICE_NAME, &format!("{}:{}:{}", self.account_scope, SESSION_ENVIRONMENT_KEY, account_key))
+        let storage_account_key = session_storage_account_key(account_key);
+        Entry::new(SERVICE_NAME, &format!("{}:{}:{}", self.account_scope, SESSION_ENVIRONMENT_KEY, storage_account_key))
             .map_err(|_| TzapAuthError::Storage { message: "Session environment keyring entry failed".to_owned() })
     }
 
@@ -171,7 +182,8 @@ impl TzapSessionStore for NativeTzapSecretStore {
         });
         let bytes = serde_json::to_vec(&json_value).map_err(|e| TzapAuthError::Storage { message: format!("Serialize failed: {}", e) })?;
 
-        let entry = Entry::new(SERVICE_NAME, &format!("{}:session:{}", self.account_scope, account_key))
+        let storage_account_key = session_storage_account_key(account_key);
+        let entry = Entry::new(SERVICE_NAME, &format!("{}:session:{}", self.account_scope, storage_account_key))
             .map_err(|_| TzapAuthError::Storage { message: "Keyring entry failed".into() })?;
 
         entry.set_secret(&bytes).map_err(|_| TzapAuthError::Storage { message: "Save to keyring failed".into() })?;
@@ -179,7 +191,8 @@ impl TzapSessionStore for NativeTzapSecretStore {
     }
 
     fn load_session(&self, account_key: &str) -> Option<TzapSessionRecord> {
-        let entry = Entry::new(SERVICE_NAME, &format!("{}:session:{}", self.account_scope, account_key)).ok()?;
+        let storage_account_key = session_storage_account_key(account_key);
+        let entry = Entry::new(SERVICE_NAME, &format!("{}:session:{}", self.account_scope, storage_account_key)).ok()?;
 
         let bytes = entry.get_secret().ok()?;
         let value: Value = serde_json::from_slice(&bytes).ok()?;
@@ -195,7 +208,8 @@ impl TzapSessionStore for NativeTzapSecretStore {
     }
 
     fn clear_session(&mut self, account_key: &str) -> Result<(), TzapAuthError> {
-        let entry = Entry::new(SERVICE_NAME, &format!("{}:session:{}", self.account_scope, account_key))
+        let storage_account_key = session_storage_account_key(account_key);
+        let entry = Entry::new(SERVICE_NAME, &format!("{}:session:{}", self.account_scope, storage_account_key))
             .map_err(|_| TzapAuthError::Storage { message: "Keyring entry failed".into() })?;
 
         match entry.delete_credential() {

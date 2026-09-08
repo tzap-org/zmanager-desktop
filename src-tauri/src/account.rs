@@ -1440,13 +1440,18 @@ fn apply_contact_snapshot_with_shared_core(
     let options = zmanager_core::contact_card::TzapContactCardImportOptions {
         verifier_time_unix_seconds: i64::try_from(now).unwrap_or(i64::MAX),
         official_root_pins: &zmanager_core::trust::OFFICIAL_TZAP_ROOT_PINS,
-        official_root_certificates_der: Vec::new(),
+        official_root_certificates_der: trust::official_tzap_root_certificates_der(),
         custom_trust_root_sha256: Vec::new(),
         custom_trust_root_certificates_der: Vec::new(),
         certificate_profile_options: zmanager_core::trust::TzapCertificateProfileOptions::default(),
         intermediate_resolver,
     };
     let report = zmanager_core::contact_snapshot::apply_contact_snapshot(store, account_key, snapshot, &options, now).map_err(|error| error.to_string())?;
+    if std::env::var("ZMANAGER_GUI_TEST_CONTACT_DIAGNOSTIC").as_deref() == Ok("1") {
+        for failure in &report.failed_contacts {
+            eprintln!("ZMANAGER_GUI_TEST_CONTACT_REJECTED: {}", failure.error);
+        }
+    }
     let mut inventory = store.load_inventory(account_key).map_err(|error| error.to_string())?;
     let mut counts = AccountContactSyncCountsDto::default();
     let mut incoming_ids = std::collections::HashSet::new();
@@ -1739,6 +1744,11 @@ pub fn resolve_tzap_recipient_private_key(
 }
 
 fn account_state_dir(app: &AppHandle) -> Result<PathBuf, CommandErrorDto> {
+    if cfg!(debug_assertions) && std::env::var("ZMANAGER_GUI_TEST_MODE").as_deref() == Ok("1") {
+        if let Some(path) = std::env::var_os("ZMANAGER_GUI_TEST_STATE_DIR") {
+            return Ok(PathBuf::from(path).join("tzap-state"));
+        }
+    }
     app.path().app_data_dir().map(|path| path.join("tzap-state")).map_err(|error| account_error("account_state_path_failed", error))
 }
 
@@ -1749,7 +1759,7 @@ fn verify_contact_card_with_resolver(
     let options = zmanager_core::contact_card::TzapContactCardImportOptions {
         verifier_time_unix_seconds: i64::try_from(current_unix_seconds()).unwrap_or(i64::MAX),
         official_root_pins: &zmanager_core::trust::OFFICIAL_TZAP_ROOT_PINS,
-        official_root_certificates_der: Vec::new(),
+        official_root_certificates_der: trust::official_tzap_root_certificates_der(),
         custom_trust_root_sha256: Vec::new(),
         custom_trust_root_certificates_der: Vec::new(),
         certificate_profile_options: zmanager_core::trust::TzapCertificateProfileOptions::default(),

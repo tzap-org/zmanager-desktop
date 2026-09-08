@@ -7,5 +7,9 @@ set -euo pipefail
 : "${TZAP_DESKTOP_STAGING_CLIENT_ID:?Set the registered desktop staging OAuth client ID in the process environment}"
 : "${DESKTOP_STAGING_EXPECTED_CONTACTS:?Set a redacted phone contact manifest path}"
 
+GUI_TEST_STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/zmanager-desktop-gui-test.XXXXXX")"
+trap 'rm -rf "$GUI_TEST_STATE_DIR"' EXIT
+export ZMANAGER_GUI_TEST_STATE_DIR="$GUI_TEST_STATE_DIR"
+
 npm run tauri build -- --debug --no-bundle --features hosted-online --config src-tauri/tauri.gui.conf.json
 ZMANAGER_GUI_APP_PATH="$(pwd)/src-tauri/target/debug/zmanager-desktop" npm run test:gui:run -- --spec e2e/tauri/staging-contact-sync.spec.ts
