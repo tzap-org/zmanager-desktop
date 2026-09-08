@@ -61,7 +61,7 @@ function isBoundedToken(value: string, min: number, max: number, pattern = /^[A-
 }
 
 export function initializeDeepLinkAdapter(accountController: AccountController): Promise<() => void> {
-  return onOpenUrl((urls) => {
+  const handleUrls = (urls: string[]) => {
     for (const urlStr of urls) {
       const callback = parseHostedAuthCallbackUrl(urlStr);
       if (!callback) {
@@ -71,5 +71,7 @@ export function initializeDeepLinkAdapter(accountController: AccountController):
         console.error("DeepLinkAdapter: Failed to handle auth callback", error);
       });
     }
-  });
+  };
+
+  return onOpenUrl(handleUrls);
 }

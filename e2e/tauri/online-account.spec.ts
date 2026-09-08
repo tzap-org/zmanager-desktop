@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { execFileSync, spawn } from "node:child_process";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { chromium } from "@playwright/test";
 
@@ -19,6 +19,7 @@ const config = onlineFixtureConfig();
 const fixture = config.environment === "local" ? createOnlineFixture() : null;
 const sourceRoot = path.resolve("e2e", "fixtures", "online", "source");
 const runArtifactDir = config.artifactDir;
+const appBinaryPath = process.env.ZMANAGER_GUI_APP_PATH ?? path.resolve("src-tauri", "target", "debug", process.platform === "win32" ? "zmanager-desktop.exe" : "zmanager-desktop");
 
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   return browser.tauri.execute(
@@ -28,10 +29,20 @@ async function invoke<T>(command: string, args?: Record<string, unknown>): Promi
 }
 
 async function openDeepLink(url: string): Promise<void> {
-  const executable = process.platform === "win32" ? "cmd.exe" : process.platform === "darwin" ? "open" : "xdg-open";
-  const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+  if (config.environment === "staging" && process.env.TZAP_E2E_STAGING_CALLBACK_ADAPTER !== "1") {
+    throw new Error("Staging callback delivery requires TZAP_E2E_STAGING_CALLBACK_ADAPTER=1.");
+  }
+  // Windows/Linux deliver a deep link to the running singleton as a process
+  // argument. Passing the real URL to the built executable exercises that
+  // transport without mutating the user's protocol registry/profile.
+  const executable = process.platform === "win32" ? appBinaryPath : process.platform === "darwin" ? "open" : "xdg-open";
+  const args = [url];
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(executable, args, { stdio: "ignore", windowsHide: true });
+    const child = spawn(executable, args, {
+      stdio: "ignore",
+      windowsHide: true,
+      env: { ...process.env, ZMANAGER_GUI_TEST_MODE: "1", ZMANAGER_GUI_TEST_DEEP_LINK: "1" },
+    });
     let settled = false;
     const finish = (error?: Error) => {
       if (settled) return;
@@ -41,10 +52,6 @@ async function openDeepLink(url: string): Promise<void> {
     };
     child.once("error", finish);
     child.once("spawn", () => {
-      // The shell hand-off is intentionally fire-and-forget. On Windows an
-      // unregistered scheme can leave `start` waiting indefinitely, while the
-      // native callback exchange below still provides the deterministic local
-      // assertion path.
       child.unref();
       finish();
     });
@@ -52,33 +59,24 @@ async function openDeepLink(url: string): Promise<void> {
   });
 }
 
-async function completeLocalBrowserAuth(launchUrl: string): Promise<string> {
-  assert(fixture, "local fixture must be available");
+async function completeBrowserAuth(launchUrl: string): Promise<string> {
+  const username = fixture?.username ?? config.username;
+  const password = fixture?.password ?? config.password;
+  assert(username && password, "online browser credentials must be configured");
   const browserSession = await chromium.launch({ channel: "msedge", headless: true });
   try {
     const page = await browserSession.newPage();
     await page.goto(launchUrl, { waitUntil: "domcontentloaded" });
-    await page.locator("input[name=username]").fill(fixture.username);
-    await page.locator("input[name=password]").fill(fixture.password);
+    await page.locator("input[name=username]").fill(username);
+    await page.locator("input[name=password]").fill(password);
     await Promise.all([
       page.waitForLoadState("domcontentloaded"),
       page.locator("button[type=submit]").click(),
     ]);
-    const callback = await page.locator("[data-callback-url]").getAttribute("data-callback-url");
-    assert(callback, "fixture login must return a callback URL");
+    const callbackLink = page.locator("[data-callback-url], a[href^='tzap://'], a[href^='zmanager://']").first();
+    const callback = await callbackLink.getAttribute("data-callback-url") ?? await callbackLink.getAttribute("href");
+    assert(callback, "hosted login must return a tzap:// callback URL");
     await openDeepLink(callback);
-    try {
-      await browser.waitUntil(async () => (await invoke<AccountSnapshotDto>("account_snapshot")).authStatus === "signedIn", { timeout: 2_000 });
-    } catch {
-      const callbackUrl = new URL(callback);
-      await invoke("account_complete_hosted_auth", {
-        request: {
-          state: callbackUrl.searchParams.get("state"),
-          handoffCode: callbackUrl.searchParams.get("handoff_code"),
-          callbackUrl: "tzap://auth/callback",
-        },
-      });
-    }
     return callback;
   } finally {
     await browserSession.close();
@@ -103,6 +101,24 @@ async function startExtract(request: Record<string, unknown>): Promise<void> {
   assert.equal(terminal.status, "completed", JSON.stringify(terminal.latestFailure));
 }
 
+function runReceiverCliExtraction(archivePath: string, destinationPath: string, privateKeyPath: string): void {
+  const configuredCli = process.env.TZAP_E2E_RECEIVER_CLI;
+  const defaultCli = path.resolve("..", "zmanager", "target", "debug", process.platform === "win32" ? "zm.exe" : "zm");
+  if (configuredCli || existsSync(defaultCli)) {
+    execFileSync(configuredCli ?? defaultCli, ["extract", archivePath, "-C", destinationPath, "--recipient-key", privateKeyPath], { stdio: "pipe", windowsHide: true });
+    return;
+  }
+
+  // The receiver is intentionally a separate CLI process/profile. It reads
+  // the fixture's private key directly and never imports that key into the
+  // sender's secure store or archive bundle.
+  execFileSync("cargo", [
+    "run", "--quiet", "--manifest-path", path.resolve("..", "zmanager", "Cargo.toml"),
+    "-p", "zmanager-cli", "--bin", "zm", "--",
+    "extract", archivePath, "-C", destinationPath, "--recipient-key", privateKeyPath,
+  ], { cwd: path.resolve("..", "zmanager"), stdio: "pipe", windowsHide: true });
+}
+
 function evidenceFailure(error: unknown, snapshot: unknown): Error {
   const safe = sanitizeOnlineEvidence({ error: String(error), snapshot, requests: fixture?.requestSummary() ?? [] });
   assertNoSecrets(safe, [config.username, config.password, fixture?.username, fixture?.password]);
@@ -111,8 +127,17 @@ function evidenceFailure(error: unknown, snapshot: unknown): Error {
 
 if (config.environment === "staging") {
   describe("Online TZAP account lifecycle", () => {
-    it("requires the documented staging browser/deep-link adapter", () => {
-      pending("Staging is credential-gated and requires a separately approved browser/deep-link adapter; the deterministic local lane is the automated acceptance path.");
+    it("completes the real staging browser handoff and current-user session", async () => {
+      const launch = await invoke<{ launchUrl: string; state: string; expiresAtUnixSeconds: number }>("account_begin_hosted_auth", {
+        request: { environment: "staging", audience: process.env.TZAP_E2E_AUDIENCE ?? "sign.tzap.org" },
+      });
+      assert.match(launch.launchUrl, /\/auth\/launch\?/u);
+      const callback = await completeBrowserAuth(launch.launchUrl);
+      assert.equal(new URL(callback).protocol, "tzap:");
+      const snapshot = await waitForSignedIn();
+      assert.equal(snapshot.capabilities.auth, "handoff_exchange");
+      const currentUser = await invoke<AccountCurrentUserDto>("account_fetch_current_user");
+      assert.ok(currentUser.publicSignerId);
     });
   });
 } else {
@@ -135,11 +160,11 @@ if (config.environment === "staging") {
     it("proves the real hosted browser handoff and current-user session", async () => {
       try {
         const launch = await invoke<{ launchUrl: string; state: string; expiresAtUnixSeconds: number }>("account_begin_hosted_auth", {
-          request: { environment: config.environment, audience: "sign.tzap.org" },
+          request: { environment: config.environment, audience: process.env.TZAP_E2E_AUDIENCE ?? "sign.tzap.org" },
         });
         assert.match(launch.launchUrl, /\/auth\/launch\?/u);
         assert.equal(new URL(launch.launchUrl).searchParams.get("redirect_uri"), "tzap://auth/callback");
-        const callback = await completeLocalBrowserAuth(launch.launchUrl);
+        const callback = await completeBrowserAuth(launch.launchUrl);
         assert.equal(new URL(callback).protocol, "tzap:");
         const snapshot = await waitForSignedIn();
         assert.equal(snapshot.capabilities.auth, "handoff_exchange");
@@ -159,9 +184,13 @@ if (config.environment === "staging") {
         const hosted = result.snapshot.certificates.find((certificate) => certificate.identityType === "hosted");
         assert(hosted, "enrollment must add a hosted certificate");
         assert.equal(hosted.state, "active");
+        assert.equal(hosted.assuranceLevel, "oauth_verified_email");
         assert.match(hosted.certificateSha256, /^sha256:[0-9a-f]{64}$/u);
         assert.ok(hosted.certificateId);
         assert.ok(hosted.notAfterUnixSeconds > Math.floor(Date.now() / 1000));
+        assert.equal(result.snapshot.defaultSigningIdentityId, hosted.identityId);
+        const reopened = await invoke<AccountSnapshotDto>("account_snapshot");
+        assert.ok(reopened.certificates.some((certificate) => certificate.identityId === hosted.identityId && certificate.state === "active"));
       } catch (error) {
         throw evidenceFailure(error, await invoke<AccountSnapshotDto>("account_snapshot"));
       }
@@ -176,27 +205,26 @@ if (config.environment === "staging") {
 
     it("syncs signed hosted contacts, rejects malformed cards, and applies removals", async () => {
       const first = await invoke<AccountContactSyncResultDto>("account_sync_contacts");
-      let contactDiagnostics: Record<string, string> = {};
-      if (first.counts.imported < 2 && fixture) {
-        contactDiagnostics = Object.fromEntries(await Promise.all(fixture.contactCards.map(async ({ name, card }) => {
-          try {
-            await invoke("account_inspect_contact_card", { request: { contactCard: card } });
-            return [name, "accepted"] as const;
-          } catch (error) {
-            return [name, String(error)] as const;
-          }
-        })));
-      }
-      assert.ok(first.counts.imported + first.counts.updated >= 2, JSON.stringify({ counts: first.counts, contactDiagnostics }));
+      assert.ok(first.counts.imported + first.counts.updated >= 2, JSON.stringify(first.counts));
       assert.ok(first.counts.rejected >= 1, JSON.stringify(first.counts));
       assert.equal(first.counts.statusRefreshFailed, 0, JSON.stringify(first.counts));
       assert.ok(first.snapshot.contacts.length >= 2);
+      assert.ok(first.snapshot.contacts.some((contact) => contact.displayName === "Receiver Contact A"));
+      assert.ok(first.snapshot.contacts.some((contact) => contact.displayName === "Receiver Contact B"));
+
+      const repeat = await invoke<AccountContactSyncResultDto>("account_sync_contacts");
+      assert.equal(repeat.counts.imported, 0, JSON.stringify(repeat.counts));
+      assert.equal(repeat.counts.updated, 0, JSON.stringify(repeat.counts));
+      assert.equal(repeat.counts.removed, 0, JSON.stringify(repeat.counts));
 
       await fixture?.setContactSnapshotVersion(2);
       const second = await invoke<AccountContactSyncResultDto>("account_sync_contacts");
       assert.ok(second.counts.updated >= 1, JSON.stringify(second.counts));
       assert.ok(second.counts.removed >= 1, JSON.stringify(second.counts));
       assert.ok(second.counts.rejected >= 1, JSON.stringify(second.counts));
+      assert.ok(second.snapshot.contacts.some((contact) => contact.displayName === "Receiver Contact A (updated)"));
+      assert.ok(second.snapshot.contacts.some((contact) => contact.displayName === "Receiver Contact C"));
+      assert.ok(!second.snapshot.contacts.some((contact) => contact.displayName === "Receiver Contact B"));
     });
 
     it("creates, verifies, extracts, and hashes a signed portable archive", async () => {
@@ -219,6 +247,19 @@ if (config.environment === "staging") {
       await startExtract({ archivePath, destinationPath: extractedRoot, password: null, recipientKeyId: null, overwrite: "replace", destinationCollisionStrategy: "refuse", entryPaths: null, stripComponents: 0, tzapRestorePolicy: "content", tzapAllowDegraded: false, tzapAllowAbsoluteSymlinks: false, ignoreSymlinks: false });
       assertHashManifestEqual(sourceManifest, path.join(extractedRoot, path.basename(sourceRoot)));
       writeArchiveEvidence({ artifactDir: runArtifactDir, archivePath, sourceManifest, signerCertificateSha256: hosted.certificateSha256, runId: process.env.TZAP_E2E_RUN_ID ?? "unknown" });
+
+      const contact = (await invoke<AccountSnapshotDto>("account_snapshot")).contacts.find((candidate) => candidate.displayName.startsWith("Receiver Contact A"));
+      assert(contact, "contact A must remain selectable after contact sync");
+      const contactArchivePath = path.join(runArtifactDir, "signed-contact-a.tzap");
+      await startCreate({
+        sources: [sourceRoot], destinationPath: contactArchivePath, format: "tzap", cleanSource: false,
+        replaceExisting: true, preserveMetadata: true,
+        tzapCertificates: { signingSelection: { mode: "enrolledIdentity", signingIdentityId: hosted.identityId }, recipientSelection: { recipientKeyIds: [], contactRecipientIds: [contact.contactId], oneTimeCertificatePaths: [] } },
+      });
+      const receiverExtractedRoot = path.join(runArtifactDir, "receiver-contact-a-extracted");
+      runReceiverCliExtraction(contactArchivePath, receiverExtractedRoot, fixture!.receiverPrivateKeyPath);
+      assertHashManifestEqual(sourceManifest, path.join(receiverExtractedRoot, path.basename(sourceRoot)));
+      writeArchiveEvidence({ artifactDir: runArtifactDir, archivePath: contactArchivePath, sourceManifest, signerCertificateSha256: hosted.certificateSha256, recipientFingerprint: contact.recipientPublicKeyFingerprint, runId: process.env.TZAP_E2E_RUN_ID ?? "unknown" });
     });
 
     it("rejects unsafe TZAP option combinations at the command boundary", async () => {
@@ -235,6 +276,40 @@ if (config.environment === "staging") {
       assert.equal(online.certificateSha256, offline.certificateSha256);
       assert.ok(online.statusCheck);
       assert.ok(online.statusThisUpdateUnixSeconds);
+      assert.equal(online.signatureCheck, offline.signatureCheck);
+      assert.equal(online.certificateTime, offline.certificateTime);
+
+      assert(fixture);
+      const cachedBeforeStop = (await invoke<AccountSnapshotDto>("account_snapshot")).contacts;
+      const requestCountBeforeOffline = fixture.requestSummary().length;
+      await fixture.stop();
+      const cachedAfterStop = (await invoke<AccountSnapshotDto>("account_snapshot")).contacts;
+      assert.deepEqual(cachedAfterStop, cachedBeforeStop, "offline mode must preserve the last trusted contact cache");
+      const unavailable = await invoke<VerifyTzapCertificateResponse>("verify_tzap_certificate", { request: { archivePath, validateTrust: true, trustedCaCertificatePaths: [fixture.rootCertificatePath], trustedSystemRoots: false, includeOfficialTzapRoot: false, checkCurrentStatus: true, environment: config.environment } });
+      assert.equal(unavailable.statusCheck, "status_unavailable", JSON.stringify(unavailable));
+      assert.equal(fixture.requestSummary().length, requestCountBeforeOffline, "offline verification must not issue a status request");
+      await fixture.start();
+
+      await fixture.setStatus("revoked");
+      const revoked = await invoke<VerifyTzapCertificateResponse>("verify_tzap_certificate", { request: { archivePath, validateTrust: true, trustedCaCertificatePaths: [fixture.rootCertificatePath], trustedSystemRoots: false, includeOfficialTzapRoot: false, checkCurrentStatus: true, environment: config.environment } });
+      assert.equal(revoked.statusCheck, "revoked", JSON.stringify(revoked));
+      assert.ok(revoked.statusRevokedAtUnixSeconds);
+
+      await fixture.setStatus("mismatch");
+      const mismatch = await invoke<VerifyTzapCertificateResponse>("verify_tzap_certificate", { request: { archivePath, validateTrust: true, trustedCaCertificatePaths: [fixture.rootCertificatePath], trustedSystemRoots: false, includeOfficialTzapRoot: false, checkCurrentStatus: true, environment: config.environment } });
+      assert.equal(mismatch.statusCheck, "status_unavailable", JSON.stringify(mismatch));
+      assert.match(mismatch.statusReason ?? "", /does not match/u);
+      await fixture.setStatus("valid");
+
+      const tamperedArchivePath = path.join(runArtifactDir, "signed-portable-tampered.tzap");
+      const tamperedBytes = readFileSync(archivePath);
+      // The terminal locator is intentionally outside the signed archive
+      // commitment. Flip a byte in the data region so the archive remains
+      // structurally addressable but the RootAuth commitment fails.
+      tamperedBytes[128] ^= 0xff;
+      writeFileSync(tamperedArchivePath, tamperedBytes);
+      const tampered = await invoke<VerifyTzapCertificateResponse>("verify_tzap_certificate", { request: { archivePath: tamperedArchivePath, validateTrust: true, trustedCaCertificatePaths: [fixture.rootCertificatePath], trustedSystemRoots: false, includeOfficialTzapRoot: false, checkCurrentStatus: false, environment: config.environment } });
+      assert.notEqual(tampered.signatureCheck, "ok", JSON.stringify(tampered));
     });
   });
 }

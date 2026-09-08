@@ -91,7 +91,7 @@ export const config: WebdriverIO.Config = {
     // The repository app may already be open while GUI tests run locally.
     // Debug-only test mode disables the normal macOS singleton registration
     // for this spawned process, without changing release behavior.
-    env: { ZMANAGER_GUI_TEST_MODE: "1" },
+    env: { ZMANAGER_GUI_TEST_MODE: "1", ZMANAGER_GUI_TEST_DEEP_LINK: "1" },
   }]],
   capabilities: [tauriCapabilities],
   framework: "jasmine",

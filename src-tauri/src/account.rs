@@ -854,7 +854,7 @@ fn take_matching_pending_auth(runtime: &AccountRuntime, expected_state: &str) ->
 }
 
 #[tauri::command]
-pub fn account_fetch_current_user(app: AppHandle, runtime: State<'_, AccountRuntime>) -> Result<AccountCurrentUserDto, CommandErrorDto> {
+pub fn account_fetch_current_user(_app: AppHandle, runtime: State<'_, AccountRuntime>) -> Result<AccountCurrentUserDto, CommandErrorDto> {
     require_hosted_online_enabled()?;
     expire_session_if_needed(&runtime);
     let (session, environment_str) = {
@@ -878,13 +878,8 @@ pub fn account_fetch_current_user(app: AppHandle, runtime: State<'_, AccountRunt
 
     match user_result {
         Ok(user) => {
-            {
-                let mut state = runtime.0.lock().expect("account runtime lock poisoned");
-                state.cached_user = Some(user.clone());
-            }
-            if let Ok(root) = account_state_dir(&app) {
-                let _ = sync_contact_snapshot(&root, &runtime);
-            }
+            let mut state = runtime.0.lock().expect("account runtime lock poisoned");
+            state.cached_user = Some(user.clone());
             Ok(AccountCurrentUserDto {
                 display_name: user.display_name,
                 public_signer_id: user.public_signer_id,
@@ -1371,11 +1366,6 @@ pub fn account_sync_contacts(app: AppHandle, runtime: State<'_, AccountRuntime>)
     Ok(AccountContactSyncResultDto { snapshot: snapshot_at(&root, &runtime)?, last_successful_sync_at: current_unix_seconds(), counts })
 }
 
-pub fn sync_contact_snapshot(root: &Path, runtime: &AccountRuntime) -> Result<AccountContactSyncCountsDto, CommandErrorDto> {
-    let _lifecycle_guard = runtime.2.lock().expect("account lifecycle lock poisoned");
-    sync_contact_snapshot_inner(root, runtime)
-}
-
 fn sync_contact_snapshot_inner(root: &Path, runtime: &AccountRuntime) -> Result<AccountContactSyncCountsDto, CommandErrorDto> {
     expire_session_if_needed(runtime);
     let (session, environment_str) = {
@@ -1478,11 +1468,10 @@ fn apply_contact_snapshot_with_shared_core(
         .filter(|contact| contact.source == "phone_sync")
         .map(|contact| contact.contact_id.clone())
         .collect::<std::collections::HashSet<_>>();
+    let existing_contacts = before.contacts.iter().map(|contact| (contact.contact_id.clone(), contact.clone())).collect::<std::collections::HashMap<_, _>>();
     let custom_trust_root_certificates_der = fixture_root_certificates().unwrap_or_default();
-    let custom_trust_root_sha256 = custom_trust_root_certificates_der
-        .iter()
-        .map(|certificate| zmanager_core::trust::certificate_sha256_identifier_for_der(certificate))
-        .collect();
+    let custom_trust_root_sha256 =
+        custom_trust_root_certificates_der.iter().map(|certificate| zmanager_core::trust::certificate_sha256_identifier_for_der(certificate)).collect();
     let options = zmanager_core::contact_card::TzapContactCardImportOptions {
         verifier_time_unix_seconds: i64::try_from(now).unwrap_or(i64::MAX),
         official_root_pins: &zmanager_core::trust::OFFICIAL_TZAP_ROOT_PINS,
@@ -1493,23 +1482,19 @@ fn apply_contact_snapshot_with_shared_core(
         intermediate_resolver,
     };
     let report = zmanager_core::contact_snapshot::apply_contact_snapshot(store, account_key, snapshot, &options, now).map_err(|error| error.to_string())?;
-    let mut inventory = store.load_inventory(account_key).map_err(|error| error.to_string())?;
     let mut counts = AccountContactSyncCountsDto::default();
-    let mut incoming_ids = std::collections::HashSet::new();
-    for entry in &snapshot.contacts {
-        if let Ok(contact_id) = entry.resolved_contact_id() {
-            incoming_ids.insert(contact_id);
+    let incoming_ids = report.restored_contacts.iter().map(|contact| contact.contact_id.clone()).collect::<std::collections::HashSet<_>>();
+    for restored in &report.restored_contacts {
+        match existing_contacts.get(&restored.contact_id) {
+            Some(previous) if contact_sync_record_changed(previous, restored) => counts.updated = counts.updated.saturating_add(1),
+            Some(_) => {}
+            None => counts.imported = counts.imported.saturating_add(1),
         }
     }
-    let restored_ids = report.restored_contacts.iter().map(|contact| contact.contact_id.clone()).collect::<std::collections::HashSet<_>>();
+    let mut inventory = store.load_inventory(account_key).map_err(|error| error.to_string())?;
     for contact in &mut inventory.contacts {
-        if restored_ids.contains(&contact.contact_id) {
+        if incoming_ids.contains(&contact.contact_id) {
             contact.source = "phone_sync".to_owned();
-            if existing_phone_ids.contains(&contact.contact_id) {
-                counts.updated = counts.updated.saturating_add(1);
-            } else {
-                counts.imported = counts.imported.saturating_add(1);
-            }
         }
     }
     inventory.contacts.retain(|contact| contact.source != "phone_sync" || incoming_ids.contains(&contact.contact_id));
@@ -1525,6 +1510,21 @@ fn apply_contact_snapshot_with_shared_core(
     }
     store.save_inventory(account_key, inventory).map_err(|error| error.to_string())?;
     Ok(counts)
+}
+
+fn contact_sync_record_changed(
+    previous: &zmanager_core::local_identity_store::TzapContactRecord,
+    current: &zmanager_core::local_identity_store::TzapContactRecord,
+) -> bool {
+    previous.contact_id != current.contact_id
+        || previous.display_name != current.display_name
+        || previous.signing_certificate_sha256 != current.signing_certificate_sha256
+        || previous.recipient_public_key_fingerprint != current.recipient_public_key_fingerprint
+        || previous.trust_anchor_type != current.trust_anchor_type
+        || previous.contact_card_payload != current.contact_card_payload
+        || previous.accepted_at_unix_seconds != current.accepted_at_unix_seconds
+        || previous.local_alias != current.local_alias
+        || previous.card != current.card
 }
 
 fn record_contact_rejection(counts: &mut AccountContactSyncCountsDto, reason: &str) {

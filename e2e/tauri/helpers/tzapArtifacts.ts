@@ -47,7 +47,7 @@ export function writeArchiveEvidence(args: {
   recipientFingerprint?: string;
   runId: string;
 }): { manifestPath: string; checksumPath: string } {
-  const receiverDir = path.join(args.artifactDir, "receiver-contact-a");
+  const receiverDir = path.join(args.artifactDir, args.recipientFingerprint ? "receiver-contact-a" : "portable");
   mkdirSync(receiverDir, { recursive: true });
   const volumes = collectArchiveVolumes(args.archivePath);
   const manifest = {
@@ -57,8 +57,9 @@ export function writeArchiveEvidence(args: {
     recipientFingerprint: args.recipientFingerprint ?? null,
     sourceFileCount: Object.keys(args.sourceManifest).length,
   };
-  const manifestPath = path.join(receiverDir, "signed-for-contact-a.manifest.json");
-  const checksumPath = path.join(receiverDir, "signed-for-contact-a.sha256");
+  const evidenceName = args.recipientFingerprint ? "signed-for-contact-a" : "signed-portable";
+  const manifestPath = path.join(receiverDir, `${evidenceName}.manifest.json`);
+  const checksumPath = path.join(receiverDir, `${evidenceName}.sha256`);
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   writeFileSync(checksumPath, `${volumes.map((volume) => `${sha256File(volume)}  ${path.basename(volume)}`).join("\n")}\n`);
   return { manifestPath, checksumPath };

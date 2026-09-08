@@ -23,6 +23,7 @@ export type OnlineFixture = Readonly<{
   username: string;
   password: string;
   rootCertificatePath: string;
+  receiverPrivateKeyPath: string;
   contactCards: ReadonlyArray<{ name: string; card: Record<string, unknown> }>;
   contactSnapshotVersion: number;
   start(): Promise<void>;
@@ -374,7 +375,11 @@ function createFixture(): OnlineFixture {
         }
       } else if (request.method === "GET" && url.pathname.startsWith("/v1/status/certificates/by-fingerprint/")) {
         if (state.statusMode === "unavailable") { status = 503; sendJson(response, status, { error: "status_unavailable" }); }
-        else { const record = [...state.certificates.values()][0]; sendJson(response, 200, record ? statusBody(record, state.statusMode) : { status: "unknown_certificate" }); }
+        else {
+          const requestedFingerprint = decodeURIComponent(url.pathname.slice("/v1/status/certificates/by-fingerprint/".length));
+          const record = [...state.certificates.values()].find((candidate) => candidate.certificateSha256 === requestedFingerprint);
+          sendJson(response, 200, record ? statusBody(record, state.statusMode) : { status: "unknown_certificate", query: { certificate_sha256: requestedFingerprint } });
+        }
       } else if (request.method === "GET" && url.pathname === "/fixture/root.pem") {
         sendPem(response, 200, readFileSync(ca.rootPem));
       } else if (request.method === "POST" && url.pathname === "/test/control") {
@@ -399,6 +404,7 @@ function createFixture(): OnlineFixture {
     username: state.username,
     password: state.password,
     rootCertificatePath,
+    receiverPrivateKeyPath: contactAKey,
     contactCards: Object.entries(contacts).map(([name, contact]) => ({ name, card: contact.card })),
     get contactSnapshotVersion() { return state.contactSnapshotVersion; },
     async start() {
@@ -414,16 +420,12 @@ function createFixture(): OnlineFixture {
       await new Promise<void>((resolveStop) => state.server!.close(() => resolveStop()));
       state.server = null;
     },
-    async setStatus(mode: FixtureStatusMode) { await postControl({ statusMode: mode }); },
-    async setContactSnapshotVersion(version: 1 | 2) { await postControl({ contactSnapshotVersion: version }); },
+    async setStatus(mode: FixtureStatusMode) { state.statusMode = mode; },
+    async setContactSnapshotVersion(version: 1 | 2) { state.contactSnapshotVersion = version; },
     requestSummary() { return state.requests.map((request) => ({ ...request })); },
     redact(value: unknown) { return sanitize(value); },
   } satisfies OnlineFixture;
 
-  async function postControl(_body: Record<string, unknown>): Promise<void> {
-    // Replaced by the returned object's closure below. This declaration only
-    // keeps the control methods easy to read in the object literal.
-  }
 }
 
 async function readForm(request: IncomingMessage): Promise<Record<string, string>> {
@@ -446,7 +448,7 @@ function certificatePayload(record: CertificateRecord): Record<string, unknown> 
     leaf_certificate_der: base64Url(record.leafDer),
     intermediate_chain_der: [base64Url(record.intermediateDer), base64Url(record.rootDer)],
     issuer_certificate_sha256: record.issuerCertificateSha256,
-    issuer_key_identifier: "AQIDBA",
+    issuer_key_identifier: record.issuerKeyIdentifier,
     serial_number: record.serialNumber,
     certificate_sha256: record.certificateSha256,
     not_before_unix_seconds: nowSeconds() - 60,

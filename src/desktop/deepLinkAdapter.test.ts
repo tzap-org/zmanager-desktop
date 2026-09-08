@@ -45,7 +45,9 @@ describe("parseHostedAuthCallbackUrl", () => {
 });
 
 describe("initializeDeepLinkAdapter", () => {
-  beforeEach(() => onOpenUrl.mockReset());
+  beforeEach(() => {
+    onOpenUrl.mockReset();
+  });
 
   it("forwards every validated callback result", async () => {
     let listener: ((urls: string[]) => void) | undefined;
