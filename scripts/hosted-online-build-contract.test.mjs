@@ -74,13 +74,24 @@ test("Windows build entry points keep local E2E on staging and production explic
   assert.match(standaloneRunner, /onlineExitCode[\s\S]*release-artifact-smoke\.ts/u);
   assert.match(releaseDriver, /observeWindowsDefaultBrowserNavigation/u);
   assert.match(releaseDriver, /openRegisteredProtocol/u);
+  assert.match(releaseDriver, /countWindowsInstalledApplicationProcesses/u);
+  assert.match(releaseDriver, /warm callback must be forwarded to one installed application instance/u);
+  assert.match(releaseDriver, /cold callback must leave one installed application instance/u);
   assert.match(releaseDriver, /captureHostedCallback/u);
   assert.match(releaseDriver, /AssertIdentityAbsent/u);
+  assert.match(releaseDriver, /AssertRetirementComplete/u);
   assert.match(releaseDriver, /TZAP_E2E_FORCE_SESSION_EXPIRED/u);
+  assert.match(releaseDriver, /delete process\.env\.TZAP_E2E_FORCE_SESSION_EXPIRED[\s\S]*stopWindowsInstalledApplication\(appPath\)[\s\S]*startWindowsInstalledApplication\(appPath\)[\s\S]*signInThroughInstalledApplication/u);
   assert.match(releaseDriver, /windows-uia-account-action\.ps1/u);
   assert.doesNotMatch(releaseDriver, /account_complete_hosted_auth/u);
   assert.doesNotMatch(accountSource, /with_reqwest\(intermediate_cache, Some\(config\.hosted_account_base_url/u);
   assert.match(accountSource, /TzapOnlineIntermediateResolver::new\(intermediate_cache, Some\(config\.hosted_account_base_url/u);
   assert.match(uiaDriver, /UIAutomationClient/u);
+  assert.match(uiaDriver, /AssertRetirementComplete/u);
+  assert.match(uiaDriver, /Retirement completed/u);
+  assert.ok(
+    releaseDriver.indexOf('assert.equal(observed.origin, "https://staging.tzap.org")') < releaseDriver.indexOf('mark("environmentSelection", "passed"'),
+    "environment selection must only pass after the observed launch origin is validated",
+  );
   assert.match(wdioConfig, /\[A-Za-z0-9_.~-\]\+=\)\[\^&\\s#\]/u);
 });

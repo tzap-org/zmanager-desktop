@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("OpenAccount", "SignIn", "Enroll", "OpenDevice", "Retire", "ConfirmRetire", "ConfirmNative", "OpenCertificates", "AssertIdentityPresent", "AssertIdentityAbsent", "AssertSignedIn", "SignOut", "DeleteIdentity", "ConfirmDelete", "AssertSignedOut", "EnsureSignedOut")]
+    [ValidateSet("OpenAccount", "SignIn", "Enroll", "OpenDevice", "Retire", "ConfirmRetire", "AssertRetirementComplete", "ConfirmNative", "OpenCertificates", "AssertIdentityPresent", "AssertIdentityAbsent", "AssertSignedIn", "SignOut", "DeleteIdentity", "ConfirmDelete", "AssertSignedOut", "EnsureSignedOut")]
     [string]$Action,
     [int]$TimeoutSeconds = 30
 )
@@ -132,6 +132,29 @@ function Assert-NoButton {
     throw $FailureMessage
 }
 
+function Assert-AccessibleText {
+    param([string]$Pattern, [string]$FailureMessage)
+
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $windows = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $windowCondition)
+        foreach ($window in $windows) {
+            if ($window.Current.Name -notmatch "ZManager") { continue }
+            $controls = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+            foreach ($control in $controls) {
+                try {
+                    if (-not $control.Current.IsOffscreen -and $control.Current.Name -match $Pattern) {
+                        return
+                    }
+                } catch {
+                    # The WebView2 accessibility tree can change while React renders.
+                }
+            }
+        }
+        Start-Sleep -Milliseconds 250
+    }
+    throw $FailureMessage
+}
+
 switch ($Action) {
     "OpenAccount" { Invoke-Button -Pattern "^TZAP Account$" }
     "SignIn" { Invoke-Button -Pattern "^Sign in to (enroll|manage)$" }
@@ -139,6 +162,9 @@ switch ($Action) {
     "OpenDevice" { Invoke-Button -Pattern "^Device$" }
     "Retire" { Invoke-Button -Pattern "^Retire Hosted Device$" }
     "ConfirmRetire" { Invoke-Button -Pattern "^Confirm Retire$" }
+    "AssertRetirementComplete" {
+        Assert-AccessibleText -Pattern "^Retirement completed$" -FailureMessage "Installed Account UI did not confirm completed hosted-device retirement."
+    }
     "ConfirmNative" { Invoke-NativeConfirmation }
     "OpenCertificates" { Invoke-Button -Pattern "^Certificates$" }
     "AssertIdentityPresent" {

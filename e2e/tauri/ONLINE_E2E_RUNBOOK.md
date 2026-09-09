@@ -7,6 +7,9 @@ The login helper uses a separate Playwright browser session after Windows UI
 Automation observes the user's configured default browser. Production and
 local fixtures are not allowed.
 
+The installed-app design and acceptance criteria are maintained in
+[REAL_STANDALONE_E2E_TEST_DESIGN.md](../../docs/REAL_STANDALONE_E2E_TEST_DESIGN.md).
+
 ## Windows
 
 From the repository root:
@@ -61,9 +64,10 @@ or LocalSend transport test.
 
 Each run receives a unique `TZAP_E2E_RUN_ID`, isolated desktop state root,
 secure-store namespace, and public evidence artifact directory. The runner
-refuses local and production environments, requires staging credentials, keeps
-destructive actions disabled by default, writes failure screenshots/task
-summaries, redacts secrets from evidence, and writes receiver-bundle hash
-evidence beside the archive.
+refuses local and production environments, requires staging credentials, and
+performs destructive cleanup against the disposable staging identity: hosted
+device retirement must report completed before the local identity is deleted.
+It writes failure screenshots/task summaries, redacts secrets from evidence,
+and writes receiver-bundle hash evidence beside the archive.
 Set `TZAP_E2E_KEEP_ARTIFACTS=1` to retain a successful review bundle; failed
 runs retain their failure evidence for diagnosis.

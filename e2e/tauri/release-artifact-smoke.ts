@@ -5,7 +5,7 @@ import path from "node:path";
 import { chromium } from "@playwright/test";
 
 import { captureHostedCallback } from "./helpers/hostedCallback.ts";
-import { observeWindowsDefaultBrowserNavigation, openRegisteredProtocol, startWindowsInstalledApplication, stopWindowsInstalledApplication } from "./helpers/registeredProtocol.ts";
+import { countWindowsInstalledApplicationProcesses, observeWindowsDefaultBrowserNavigation, openRegisteredProtocol, startWindowsInstalledApplication, stopWindowsInstalledApplication } from "./helpers/registeredProtocol.ts";
 
 const appPath = process.env.ZMANAGER_GUI_APP_PATH;
 const username = process.env.TZAP_E2E_USERNAME;
@@ -82,13 +82,29 @@ async function completeBrowserAuth(launchUrl: string): Promise<string> {
   }
 }
 
-async function signInThroughInstalledApplication(): Promise<void> {
+async function signInThroughInstalledApplication(options: { allowAlreadyCompleted?: boolean } = {}): Promise<void> {
+  const completionOffset = options.allowAlreadyCompleted && existsSync(logPath) ? statSync(logPath).size : 0;
   const browserObservation = observeWindowsDefaultBrowserNavigation("https://staging.tzap.org");
   await runUiAction("SignIn");
-  const observed = await browserObservation;
-  assert.ok(["/auth/launch", "/auth/login"].includes(observed.path), `unexpected staging auth path: ${observed.path}`);
-  const callback = await completeBrowserAuth(observed.launchUrl);
-  await openRegisteredProtocol(callback);
+  const browserFlow = browserObservation.then(async (observed) => {
+    assert.ok(["/auth/launch", "/auth/login"].includes(observed.path), `unexpected staging auth path: ${observed.path}`);
+    const callback = await completeBrowserAuth(observed.launchUrl);
+    await openRegisteredProtocol(callback);
+    await waitForLog(completionOffset, ["\"name\":\"hostedAuthCompleted\""]);
+  });
+  if (!options.allowAlreadyCompleted) {
+    await browserFlow;
+    return;
+  }
+
+  // A re-authentication after forced expiry can reuse an already authenticated
+  // Edge session and complete before UI Automation observes a distinct address
+  // bar value. The app's new hostedAuthCompleted event is the authoritative
+  // success signal for this cleanup-only re-authentication.
+  await Promise.race([
+    browserFlow,
+    waitForLog(completionOffset, ["\"name\":\"hostedAuthCompleted\""])
+  ]);
 }
 
 async function waitForLog(offset: number, predicates: string[], timeoutMs = 60_000): Promise<void> {
@@ -108,7 +124,6 @@ async function main(): Promise<void> {
   assert(appPath, "installed release executable path is required");
   assert(username && password, "staging browser credentials are required");
   mkdirSync(artifactDir, { recursive: true });
-  mark("environmentSelection", "passed");
   let completed = false;
   try {
     await startWindowsInstalledApplication(appPath);
@@ -118,6 +133,7 @@ async function main(): Promise<void> {
     const observed = await browserObservation;
     assert.equal(observed.origin, "https://staging.tzap.org");
     assert.ok(["/auth/launch", "/auth/login"].includes(observed.path), `unexpected staging auth path: ${observed.path}`);
+    mark("environmentSelection", "passed", `${observed.origin}${observed.path}`);
     mark("oauthLaunch", "passed", `${observed.origin}${observed.path}@${observed.observedAtUnixMs}`);
     mark("tauriOpener", "passed");
 
@@ -126,10 +142,11 @@ async function main(): Promise<void> {
     assert.equal(callbackUrl.protocol, "tzap:");
     assert.equal(callbackUrl.host, "auth");
     assert.equal(callbackUrl.pathname, "/callback");
-    mark("login", "passed", `${callbackUrl.origin}${callbackUrl.pathname}`);
+    mark("login", "passed", `${callbackUrl.protocol}//${callbackUrl.host}${callbackUrl.pathname}`);
     const exchangeOffset = existsSync(logPath) ? statSync(logPath).size : 0;
     await openRegisteredProtocol(callback);
     await waitForLog(exchangeOffset, ["\"name\":\"hostedAuthCallbackObserved\"", "\"name\":\"hostedAuthCompleted\""]);
+    assert.equal(await countWindowsInstalledApplicationProcesses(appPath), 1, "warm callback must be forwarded to one installed application instance");
     mark("protocolRegistration", "passed");
     mark("warmCallback", "passed");
     mark("sessionExchange", "passed");
@@ -167,6 +184,7 @@ async function main(): Promise<void> {
     const coldCallbackOffset = existsSync(logPath) ? statSync(logPath).size : 0;
     await openRegisteredProtocol(coldCallback);
     await waitForLog(coldCallbackOffset, ["\"name\":\"hostedAuthCallbackObserved\"", "\"name\":\"hostedAuthCompleted\""]);
+    assert.equal(await countWindowsInstalledApplicationProcesses(appPath), 1, "cold callback must leave one installed application instance");
     mark("coldCallback", "passed");
 
     await stopWindowsInstalledApplication(appPath);
@@ -187,17 +205,21 @@ async function main(): Promise<void> {
       await runUiAction("AssertSignedOut");
     } finally {
       delete process.env.TZAP_E2E_FORCE_SESSION_EXPIRED;
+      await stopWindowsInstalledApplication(appPath).catch(() => undefined);
     }
 
     // The Device tab is intentionally unavailable while signed out. Re-authenticate
     // after the forced-expiry assertion so cleanup can retire the hosted device.
     const cleanupOffset = existsSync(logPath) ? statSync(logPath).size : 0;
-    await signInThroughInstalledApplication();
+    await startWindowsInstalledApplication(appPath);
+    await runUiAction("OpenAccount");
+    await signInThroughInstalledApplication({ allowAlreadyCompleted: true });
     await waitForLog(cleanupOffset, ["\"name\":\"hostedAuthCompleted\""]);
     await runUiAction("AssertSignedIn");
     await runUiAction("OpenDevice");
     await runUiAction("Retire");
     await runUiAction("ConfirmRetire");
+    await runUiAction("AssertRetirementComplete");
     await runUiAction("OpenCertificates");
     await runUiAction("EnsureSignedOut");
     await runUiAction("DeleteIdentity");
