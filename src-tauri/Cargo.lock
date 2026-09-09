@@ -186,7 +186,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 [[package]]
 name = "apfs"
 version = "0.2.4"
-source = "git+https://github.com/frankmanzhu/dpp?branch=zmanager-integration#05cc5125c18eae1fd8ea5a20d3cb704cd9e118b2"
+source = "git+https://github.com/frankmanzhu/dpp?branch=zmanager-integration#c8d0a29a6b4e36e6a1c3dc7bef82533d7e0c733f"
 dependencies = [
  "byteorder",
  "thiserror 2.0.19",
@@ -991,7 +991,7 @@ dependencies = [
  "cap-primitives",
  "cap-std",
  "io-lifetimes 3.0.1",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1008,7 +1008,7 @@ dependencies = [
  "maybe-owned",
  "rustix",
  "rustix-linux-procfs",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
  "winx",
 ]
 
@@ -1830,7 +1830,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1931,7 +1931,7 @@ dependencies = [
 [[package]]
 name = "dpp"
 version = "0.4.2"
-source = "git+https://github.com/frankmanzhu/dpp?branch=zmanager-integration#05cc5125c18eae1fd8ea5a20d3cb704cd9e118b2"
+source = "git+https://github.com/frankmanzhu/dpp?branch=zmanager-integration#c8d0a29a6b4e36e6a1c3dc7bef82533d7e0c733f"
 dependencies = [
  "apfs",
  "hfsplus",
@@ -2120,7 +2120,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2736,7 +2736,7 @@ dependencies = [
  "gobject-sys 0.21.5",
  "libc",
  "system-deps 7.0.8",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2990,7 +2990,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 [[package]]
 name = "hfsplus"
 version = "0.2.4"
-source = "git+https://github.com/frankmanzhu/dpp?branch=zmanager-integration#05cc5125c18eae1fd8ea5a20d3cb704cd9e118b2"
+source = "git+https://github.com/frankmanzhu/dpp?branch=zmanager-integration#c8d0a29a6b4e36e6a1c3dc7bef82533d7e0c733f"
 dependencies = [
  "byteorder",
  "thiserror 2.0.19",
@@ -3747,7 +3747,6 @@ checksum = "92daf443525c4cce67b150400bc2316076100ce0b3686209eb8cf3c31612e6f0"
 [[package]]
 name = "localsend-rs"
 version = "0.1.2"
-source = "git+https://github.com/frankmanzhu/localsend-rs.git?rev=08e337e#08e337e2921f5fcc639cb49cee359c7ba9bdc0e4"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -4064,7 +4063,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.19",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -4158,7 +4157,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4711,7 +4710,7 @@ dependencies = [
 [[package]]
 name = "pbzx"
 version = "0.3.1"
-source = "git+https://github.com/frankmanzhu/dpp?branch=zmanager-integration#05cc5125c18eae1fd8ea5a20d3cb704cd9e118b2"
+source = "git+https://github.com/frankmanzhu/dpp?branch=zmanager-integration#c8d0a29a6b4e36e6a1c3dc7bef82533d7e0c733f"
 dependencies = [
  "byteorder",
  "thiserror 2.0.19",
@@ -5369,7 +5368,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -6063,7 +6062,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -6773,10 +6772,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -7221,7 +7220,7 @@ dependencies = [
  "png 0.18.1",
  "serde",
  "thiserror 2.0.19",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7335,7 +7334,7 @@ dependencies = [
 [[package]]
 name = "udif"
 version = "0.3.4"
-source = "git+https://github.com/frankmanzhu/dpp?branch=zmanager-integration#05cc5125c18eae1fd8ea5a20d3cb704cd9e118b2"
+source = "git+https://github.com/frankmanzhu/dpp?branch=zmanager-integration#c8d0a29a6b4e36e6a1c3dc7bef82533d7e0c733f"
 dependencies = [
  "base64 0.22.1",
  "byteorder",
@@ -7357,7 +7356,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7857,7 +7856,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -8454,8 +8453,9 @@ dependencies = [
 [[package]]
 name = "xara"
 version = "0.3.2"
-source = "git+https://github.com/frankmanzhu/dpp?branch=zmanager-integration#05cc5125c18eae1fd8ea5a20d3cb704cd9e118b2"
+source = "git+https://github.com/frankmanzhu/dpp?branch=zmanager-integration#c8d0a29a6b4e36e6a1c3dc7bef82533d7e0c733f"
 dependencies = [
+ "base64 0.22.1",
  "byteorder",
  "flate2",
  "quick-xml 0.37.5",
