@@ -20,6 +20,11 @@ Set-Location $repoRoot
 
 $env:ZMANAGER_TZAP_BUILD_ENV = $Environment
 $env:VITE_TZAP_BUILD_ENV = $Environment
+if ($Environment -eq "staging") {
+    $env:ZMANAGER_TZAP_SERVER_BASE_URL = "https://staging.tzap.org"
+} else {
+    Remove-Item Env:ZMANAGER_TZAP_SERVER_BASE_URL -ErrorAction SilentlyContinue
+}
 Write-Host "Hosted account build environment: $Environment"
 
 $vcpkgPackages = @("zlib", "bzip2", "liblzma", "zstd", "lz4", "openssl")

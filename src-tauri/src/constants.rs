@@ -2,6 +2,19 @@ pub const DESKTOP_SHELL_NAME: &str = "ZManager";
 pub const CORE_DEPENDENCY: &str = "zmanager-core";
 pub const PLATFORM_STRATEGY: &str = "One shared Windows/Linux shell with isolated platform integration modules.";
 
+/// The hosted service origin is compiled into staging builds. Runtime
+/// preferences and callback metadata must never be able to retarget those
+/// builds to another hosted service.
+pub const TZAP_SERVER_BASE_URL: &str = match option_env!("ZMANAGER_TZAP_SERVER_BASE_URL") {
+    Some(value) if !value.is_empty() => value,
+    // Unconfigured local/test builds retain the historical staging default.
+    // Production builds are always compiled through the build entry points,
+    // which set ZMANAGER_TZAP_BUILD_ENV=prod and therefore cannot use this
+    // value for a staging request.
+    None => "https://staging.tzap.org",
+    Some(_) => "https://staging.tzap.org",
+};
+
 pub const COMMAND_HEALTHCHECK: &str = "healthcheck";
 pub const COMMAND_PROJECT_CONTRACT: &str = "project_contract";
 pub const COMMAND_START_ARCHIVE_INDEX: &str = "start_archive_index";

@@ -434,15 +434,25 @@ const DEFAULT_HOSTED_CERT_VALIDITY_SECONDS: u64 = 90 * 24 * 60 * 60;
 fn hosted_service_base_urls(environment: TzapHostedAuthEnvironment) -> (String, String) {
     match environment {
         TzapHostedAuthEnvironment::Local => ("http://localhost:8787".to_owned(), "http://localhost:8787".to_owned()),
-        TzapHostedAuthEnvironment::Staging => ("https://staging.tzap.org".to_owned(), "https://staging.tzap.org".to_owned()),
+        TzapHostedAuthEnvironment::Staging => (crate::constants::TZAP_SERVER_BASE_URL.to_owned(), crate::constants::TZAP_SERVER_BASE_URL.to_owned()),
         TzapHostedAuthEnvironment::Prod => (SIGN_TZAP_BASE_URL.to_owned(), LOGIN_TZAP_BASE_URL.to_owned()),
     }
+}
+
+fn hosted_auth_config(environment: TzapHostedAuthEnvironment, client_id: &str) -> TzapHostedAuthLaunchConfig {
+    let mut config = TzapHostedAuthLaunchConfig::for_environment(environment, client_id, REDIRECT_URI);
+    if matches!(environment, TzapHostedAuthEnvironment::Staging) {
+        config.hosted_auth_base_url = crate::constants::TZAP_SERVER_BASE_URL.to_owned();
+        config.hosted_account_base_url = crate::constants::TZAP_SERVER_BASE_URL.to_owned();
+    }
+    config
 }
 
 fn pending_auth_environment(auth_base_url: Option<&str>) -> Result<String, CommandErrorDto> {
     match auth_base_url {
         Some("http://localhost:8787") => Ok("local".to_owned()),
         Some("https://staging.tzap.org") => Ok("staging".to_owned()),
+        Some(value) if option_env!("ZMANAGER_TZAP_BUILD_ENV") == Some("staging") && value == crate::constants::TZAP_SERVER_BASE_URL => Ok("staging".to_owned()),
         Some("https://login.tzap.org") => Ok("prod".to_owned()),
         _ => Err(account_error("account_auth_callback_failed", "Pending hosted sign-in environment was invalid")),
     }
@@ -785,7 +795,7 @@ pub fn account_begin_hosted_auth(
     let environment_str = request.environment.as_deref().unwrap_or("prod");
     let environment = hosted_environment(environment_str)?;
     let client_id = hosted_client_id(environment)?;
-    let mut config = TzapHostedAuthLaunchConfig::for_environment(environment, client_id, REDIRECT_URI);
+    let mut config = hosted_auth_config(environment, client_id);
     config.requested_audience = requested_audience.to_owned();
     let launch_url = config.launch_url(&pending).map_err(|error| account_error("account_auth_launch_failed", error))?;
     let root = account_state_dir(&app)?;
@@ -841,7 +851,8 @@ pub fn account_complete_hosted_auth(
 
     let environment = hosted_environment(&environment_str)?;
     let client_id = hosted_client_id(environment)?;
-    let config = TzapHostedAuthLaunchConfig::for_environment(environment, client_id, REDIRECT_URI);
+    let config = hosted_auth_config(environment, client_id);
+    crate::hosted_transport::ensure_hosted_request_url(&config.hosted_auth_base_url).map_err(|e| account_error("account_http_client_failed", e))?;
     let _ = crate::hosted_transport::HostedHttpTransport::new().map_err(|e| account_error("account_http_client_failed", e))?;
     // The exchange response is created and consumed entirely inside Rust. It
     // is never accepted from, serialized into, or emitted by the deep-link
@@ -936,7 +947,7 @@ pub fn account_fetch_current_user(_app: AppHandle, runtime: State<'_, AccountRun
 
     let environment = hosted_environment(&environment_str)?;
     let client_id = hosted_client_id(environment)?;
-    let config = TzapHostedAuthLaunchConfig::for_environment(environment, client_id, REDIRECT_URI);
+    let config = hosted_auth_config(environment, client_id);
 
     let user_result = fetch_current_user_for_audience(&transport, &config.hosted_account_base_url, &session, &session.audience);
 
@@ -1448,7 +1459,7 @@ fn sync_contact_snapshot_inner(root: &Path, runtime: &AccountRuntime) -> Result<
 
     let environment = hosted_environment(&environment_str)?;
     let client_id = hosted_client_id(environment)?;
-    let config = TzapHostedAuthLaunchConfig::for_environment(environment, client_id, REDIRECT_URI);
+    let config = hosted_auth_config(environment, client_id);
     let backup_client = TzapBackupClient::new(&config.hosted_account_base_url, &transport);
 
     let backup_record = match backup_client.fetch_contact_backup(&session) {
@@ -1481,7 +1492,8 @@ fn sync_contact_snapshot_inner(root: &Path, runtime: &AccountRuntime) -> Result<
     let original_catalog = ensure_catalog(root, runtime)?;
     let mut identity_store = NativeTzapLocalIdentityStore::new(root, ACCOUNT_KEY).map_err(|error| account_error("account_identity_store_failed", error))?;
     let intermediate_cache = zmanager_core::trust::TzapIntermediateCache::new(root.join("intermediates"));
-    let intermediate_resolver = TzapOnlineIntermediateResolver::with_reqwest(intermediate_cache, Some(config.hosted_account_base_url.clone()));
+    let intermediate_transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|error| account_error("account_http_client_failed", error))?;
+    let intermediate_resolver = TzapOnlineIntermediateResolver::new(intermediate_cache, Some(config.hosted_account_base_url.clone()), intermediate_transport);
     let mut counts = match apply_contact_snapshot_with_shared_core(&mut identity_store, ACCOUNT_KEY, &snapshot, now, Some(&intermediate_resolver)) {
         Ok(counts) => counts,
         Err(error) => {
@@ -2111,7 +2123,10 @@ fn is_hosted_assurance_level(value: &str) -> bool {
 fn expire_session_if_needed(runtime: &AccountRuntime) {
     let should_expire = {
         let state = runtime.0.lock().expect("account runtime lock poisoned");
-        state.session.as_ref().is_some_and(|session| session.expires_at_unix_seconds <= current_unix_seconds())
+        let forced_for_staging_e2e = option_env!("ZMANAGER_TZAP_BUILD_ENV") == Some("staging")
+            && std::env::var("ZMANAGER_GUI_TEST_MODE").as_deref() == Ok("1")
+            && std::env::var("TZAP_E2E_FORCE_SESSION_EXPIRED").as_deref() == Ok("1");
+        forced_for_staging_e2e || state.session.as_ref().is_some_and(|session| session.expires_at_unix_seconds <= current_unix_seconds())
     };
     if !should_expire {
         return;
@@ -2280,6 +2295,16 @@ mod tests {
         assert_eq!(hosted_environment("prod").unwrap(), TzapHostedAuthEnvironment::Prod);
         let error = hosted_environment("production").expect_err("unknown environments must not silently select production");
         assert_eq!(error.code, "invalid_request");
+    }
+
+    #[test]
+    fn staging_service_urls_are_taken_from_the_compiled_server_constant() {
+        let (sign_base_url, account_base_url) = hosted_service_base_urls(TzapHostedAuthEnvironment::Staging);
+        assert_eq!(sign_base_url, crate::constants::TZAP_SERVER_BASE_URL);
+        assert_eq!(account_base_url, crate::constants::TZAP_SERVER_BASE_URL);
+        let config = hosted_auth_config(TzapHostedAuthEnvironment::Staging, "client");
+        assert_eq!(config.hosted_auth_base_url, crate::constants::TZAP_SERVER_BASE_URL);
+        assert_eq!(config.hosted_account_base_url, crate::constants::TZAP_SERVER_BASE_URL);
     }
 
     #[test]

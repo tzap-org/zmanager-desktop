@@ -1,8 +1,21 @@
 use reqwest::blocking::Client;
 use std::time::Duration;
+use url::Url;
 use zmanager_tzap_hosted::auth_client::{TzapAuthError, TzapAuthHttpMethod, TzapAuthHttpRequest, TzapAuthHttpResponse, TzapAuthHttpTransport};
 
 const DESKTOP_USER_AGENT: &str = concat!("ZManager-Desktop/", env!("CARGO_PKG_VERSION"));
+
+pub fn ensure_hosted_request_url(base_url: &str) -> Result<(), String> {
+    if option_env!("ZMANAGER_TZAP_BUILD_ENV") != Some("staging") {
+        return Ok(());
+    }
+
+    let requested = Url::parse(base_url).map_err(|_| "Hosted service URL was invalid".to_owned())?;
+    let expected = Url::parse(crate::constants::TZAP_SERVER_BASE_URL).map_err(|_| "Compiled hosted service URL was invalid".to_owned())?;
+    let same_origin =
+        requested.scheme() == expected.scheme() && requested.host() == expected.host() && requested.port_or_known_default() == expected.port_or_known_default();
+    if same_origin { Ok(()) } else { Err("Hosted request was blocked because its origin does not match the compiled staging server".to_owned()) }
+}
 
 pub struct HostedHttpTransport {
     client: Client,
@@ -29,6 +42,7 @@ impl HostedHttpTransport {
 
 impl TzapAuthHttpTransport for HostedHttpTransport {
     fn send(&self, request: &TzapAuthHttpRequest) -> Result<TzapAuthHttpResponse, TzapAuthError> {
+        ensure_hosted_request_url(&request.url).map_err(|message| TzapAuthError::Transport { message })?;
         let method = match request.method {
             TzapAuthHttpMethod::Get => reqwest::Method::GET,
             TzapAuthHttpMethod::Post => reqwest::Method::POST,
@@ -74,6 +88,11 @@ mod tests {
 
     #[test]
     fn hosted_transport_identifies_the_desktop_client() {
+        if option_env!("ZMANAGER_TZAP_BUILD_ENV") == Some("staging") {
+            // The staging guard intentionally rejects the local test server;
+            // the origin guard itself is covered by the test below.
+            return;
+        }
         let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
         let address = listener.local_addr().expect("test listener should expose an address");
         let server = std::thread::spawn(move || {
@@ -98,5 +117,20 @@ mod tests {
             .expect("test request should succeed");
         assert_eq!(response.status_code, 200);
         server.join().expect("test server should finish");
+    }
+
+    #[test]
+    fn non_staging_builds_do_not_reject_local_transport_tests() {
+        if option_env!("ZMANAGER_TZAP_BUILD_ENV") != Some("staging") {
+            assert!(ensure_hosted_request_url("http://127.0.0.1:8787").is_ok());
+        }
+    }
+
+    #[test]
+    fn staging_builds_reject_origins_that_are_not_compiled_into_the_artifact() {
+        if option_env!("ZMANAGER_TZAP_BUILD_ENV") == Some("staging") {
+            assert!(ensure_hosted_request_url(crate::constants::TZAP_SERVER_BASE_URL).is_ok());
+            assert!(ensure_hosted_request_url("https://sign.tzap.org").is_err());
+        }
     }
 }

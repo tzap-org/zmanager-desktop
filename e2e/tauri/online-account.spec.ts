@@ -9,6 +9,7 @@ import type {
   AccountSnapshotDto,
   VerifyTzapCertificateResponse,
 } from "../../src/api/types";
+import { captureHostedCallback } from "./helpers/hostedCallback.ts";
 import { countWindowsInstalledApplicationProcesses, observeWindowsDefaultBrowserNavigation, openRegisteredProtocol, runWindowsAccountUiAction, startWindowsInstalledApplication, stopWindowsInstalledApplication } from "./helpers/registeredProtocol.ts";
 import { runJobInTaskWindow } from "./helpers/archiveCommands.ts";
 import { assertHashManifestEqual, assertNoSecrets, hashTree, writeArchiveEvidence } from "./helpers/tzapArtifacts.ts";
@@ -69,7 +70,6 @@ async function completeBrowserAuth(launchUrl: string, dispatchCallback = true): 
   const browserSession = await chromium.launch({ channel: "msedge", headless: true });
   try {
     const page = await browserSession.newPage();
-    let attemptedCallback: string | null = null;
     let productionRequest: string | null = null;
     const productionHosts = new Set(["login.tzap.org", "sign.tzap.org", "account.tzap.org"]);
     await page.route("**/*", async (route) => {
@@ -81,14 +81,6 @@ async function completeBrowserAuth(launchUrl: string, dispatchCallback = true): 
       }
       await route.continue();
     });
-    page.on("request", (request) => {
-      try {
-        const url = new URL(request.url());
-        if (url.protocol === "tzap:" && url.pathname === "/auth/callback") attemptedCallback = request.url();
-      } catch {
-        // Ignore ordinary HTTP requests.
-      }
-    });
     await page.goto(launchUrl, { waitUntil: "domcontentloaded" });
     assert.equal(productionRequest, null, `staging browser attempted production TZAP traffic: ${productionRequest}`);
     const usernameInput = page.locator("input[name=username], input[name=email], input[type=email]").first();
@@ -97,18 +89,13 @@ async function completeBrowserAuth(launchUrl: string, dispatchCallback = true): 
     await passwordInput.waitFor({ state: "visible", timeout: 15_000 });
     await usernameInput.fill(username);
     await passwordInput.fill(password);
+    const callbackPromise = captureHostedCallback(page);
     await Promise.all([
       page.waitForLoadState("domcontentloaded").catch(() => undefined),
       page.locator("button[type=submit]").click(),
     ]);
 
-    let callback: string | null = attemptedCallback;
-    if (!callback) {
-      const callbackLink = page.locator("[data-callback-url], a[href^='tzap://'], a[href^='zmanager://']").first();
-      await callbackLink.waitFor({ state: "attached", timeout: 15_000 });
-      callback = await callbackLink.getAttribute("data-callback-url") ?? await callbackLink.getAttribute("href");
-    }
-    assert(callback, "hosted login must return a tzap:// callback URL");
+    const callback = await callbackPromise;
     if (dispatchCallback) await openDeepLink(callback);
     return callback;
   } finally {
@@ -163,6 +150,16 @@ async function clearTestIdentityMaterial(): Promise<boolean> {
     }
     try {
       await invoke("account_forget");
+    } catch {
+      cleanupComplete = false;
+    }
+    try {
+      const finalSnapshot = await invoke<AccountSnapshotDto>("account_snapshot");
+      cleanupComplete = cleanupComplete
+        && finalSnapshot.authStatus !== "signedIn"
+        && finalSnapshot.pendingState === null
+        && finalSnapshot.certificates.length === 0
+        && finalSnapshot.recipientKeys.length === 0;
     } catch {
       cleanupComplete = false;
     }
@@ -297,6 +294,12 @@ describe("Online TZAP account lifecycle", () => {
     await invoke("account_forget");
     const launchUrl = await clickHostedSignInAndObserveBrowser();
     const callback = await completeBrowserAuth(launchUrl, false);
+    const wrongStateCallback = new URL(callback);
+    wrongStateCallback.searchParams.set("state", "wrong-state-1234567890");
+    await openDeepLink(wrongStateCallback.toString());
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    const pendingAfterWrongState = await invoke<AccountSnapshotDto>("account_snapshot");
+    assert.equal(pendingAfterWrongState.authStatus, "pending", "a mismatched callback state must not consume the pending flow");
     const logPath = path.join(path.dirname(process.env.ZMANAGER_GUI_APP_PATH), "logs", "zmanager-diagnostics.log");
     const callbackLogOffset = existsSync(logPath) ? statSync(logPath).size : 0;
     await stopWindowsInstalledApplication(process.env.ZMANAGER_GUI_APP_PATH);
@@ -348,5 +351,15 @@ describe("Online TZAP account lifecycle", () => {
     });
     recordBoundary("coldCallback", "passed");
     recordBoundary("persistence", "passed");
+
+    process.env.TZAP_E2E_FORCE_SESSION_EXPIRED = "1";
+    try {
+      await stopWindowsInstalledApplication(process.env.ZMANAGER_GUI_APP_PATH);
+      await startWindowsInstalledApplication(process.env.ZMANAGER_GUI_APP_PATH);
+      await runWindowsAccountUiAction("OpenAccount");
+      await runWindowsAccountUiAction("AssertSignedOut");
+    } finally {
+      delete process.env.TZAP_E2E_FORCE_SESSION_EXPIRED;
+    }
   });
 });

@@ -30,12 +30,15 @@ test("Windows build entry points keep local E2E on staging and production explic
   const onlineSpec = readFileSync(resolve(repositoryRoot, "e2e/tauri/online-account.spec.ts"), "utf8");
   const wdioConfig = readFileSync(resolve(repositoryRoot, "wdio.conf.ts"), "utf8");
   const releaseDriver = readFileSync(resolve(repositoryRoot, "e2e/tauri/release-artifact-smoke.ts"), "utf8");
+  const accountSource = readFileSync(resolve(repositoryRoot, "src-tauri/src/account.rs"), "utf8");
   const uiaDriver = readFileSync(resolve(repositoryRoot, "scripts/windows-uia-account-action.ps1"), "utf8");
 
   assert.match(batch, /if not defined BUILD_ENV set "BUILD_ENV=staging"/u);
   assert.match(batch, /-Environment "%BUILD_ENV%"/u);
   assert.match(staticBuild, /ValidateSet\("staging", "prod"\)[\s\S]*?Environment = "staging"/u);
   assert.match(staticBuild, /VITE_TZAP_BUILD_ENV = \$Environment/u);
+  assert.match(staticBuild, /ZMANAGER_TZAP_SERVER_BASE_URL = "https:\/\/staging\.tzap\.org"/u);
+  assert.match(prepare, /ZMANAGER_TZAP_SERVER_BASE_URL = "https:\/\/staging\.tzap\.org"/u);
   assert.match(prepare, /ValidateSet\("staging", "prod"\)[\s\S]*?Environment = "staging"/u);
   assert.match(prepare, /-Environment \$Environment/u);
   assert.match(packageWorkflow, /Run staging Windows standalone E2E[\s\S]*?test-windows-standalone-staging\.ps1/u);
@@ -50,6 +53,7 @@ test("Windows build entry points keep local E2E on staging and production explic
   assert.match(standaloneRunner, /test-windows-protocol-registration\.ps1/u);
   assert.match(standaloneRunner, /uninstall\.exe/u);
   assert.match(standaloneRunner, /zmanager-diagnostics\.log/u);
+  assert.match(standaloneRunner, /artifact-metadata\.json/u);
   assert.doesNotMatch(standaloneRunner, /test-windows-protocol-registration\.ps1[\s\S]{0,200}\$LASTEXITCODE/u);
   assert.doesNotMatch(standaloneRunner, /tauri\.gui\.conf\.json/u);
   assert.match(browserObserver, /UIAutomationClient/u);
@@ -62,11 +66,18 @@ test("Windows build entry points keep local E2E on staging and production explic
   assert.match(onlineSpec, /stopWindowsInstalledApplication/u);
   assert.match(onlineSpec, /countWindowsInstalledApplicationProcesses/u);
   assert.match(onlineSpec, /openRegisteredProtocol\(url\)/u);
+  assert.match(onlineSpec, /wrong-state-1234567890/u);
+  assert.match(onlineSpec, /TZAP_E2E_FORCE_SESSION_EXPIRED/u);
   assert.doesNotMatch(onlineSpec, /spawn\(/u);
   assert.match(releaseDriver, /observeWindowsDefaultBrowserNavigation/u);
   assert.match(releaseDriver, /openRegisteredProtocol/u);
+  assert.match(releaseDriver, /captureHostedCallback/u);
+  assert.match(releaseDriver, /AssertIdentityAbsent/u);
+  assert.match(releaseDriver, /TZAP_E2E_FORCE_SESSION_EXPIRED/u);
   assert.match(releaseDriver, /windows-uia-account-action\.ps1/u);
   assert.doesNotMatch(releaseDriver, /account_complete_hosted_auth/u);
+  assert.doesNotMatch(accountSource, /with_reqwest\(intermediate_cache, Some\(config\.hosted_account_base_url/u);
+  assert.match(accountSource, /TzapOnlineIntermediateResolver::new\(intermediate_cache, Some\(config\.hosted_account_base_url/u);
   assert.match(uiaDriver, /UIAutomationClient/u);
   assert.match(wdioConfig, /\[A-Za-z0-9_.~-\]\+=\)\[\^&\\s#\]/u);
 });

@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("OpenAccount", "SignIn", "Enroll", "OpenDevice", "Retire", "ConfirmRetire", "ConfirmNative", "OpenCertificates", "AssertIdentityPresent", "AssertSignedIn", "SignOut", "DeleteIdentity", "ConfirmDelete", "AssertSignedOut", "EnsureSignedOut")]
+    [ValidateSet("OpenAccount", "SignIn", "Enroll", "OpenDevice", "Retire", "ConfirmRetire", "ConfirmNative", "OpenCertificates", "AssertIdentityPresent", "AssertIdentityAbsent", "AssertSignedIn", "SignOut", "DeleteIdentity", "ConfirmDelete", "AssertSignedOut", "EnsureSignedOut")]
     [string]$Action,
     [int]$TimeoutSeconds = 30
 )
@@ -123,6 +123,15 @@ function Assert-Button {
     throw $FailureMessage
 }
 
+function Assert-NoButton {
+    param([string]$Pattern, [string]$FailureMessage)
+    while ([DateTime]::UtcNow -lt $deadline) {
+        if ($null -eq (Find-Button -Pattern $Pattern)) { return }
+        Start-Sleep -Milliseconds 250
+    }
+    throw $FailureMessage
+}
+
 switch ($Action) {
     "OpenAccount" { Invoke-Button -Pattern "^TZAP Account$" }
     "SignIn" { Invoke-Button -Pattern "^Sign in to (enroll|manage)$" }
@@ -134,6 +143,9 @@ switch ($Action) {
     "OpenCertificates" { Invoke-Button -Pattern "^Certificates$" }
     "AssertIdentityPresent" {
         Assert-Button -Pattern "^Delete identity$" -FailureMessage "Installed Account UI did not expose the persisted certificate identity."
+    }
+    "AssertIdentityAbsent" {
+        Assert-NoButton -Pattern "^Delete identity$" -FailureMessage "Installed Account UI still exposes a certificate identity after cleanup."
     }
     "AssertSignedIn" {
         Assert-Button -Pattern "^Sign Out$" -FailureMessage "Installed Account UI did not expose the persisted signed-in state."

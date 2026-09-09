@@ -68,6 +68,7 @@ foreach ($name in @("TZAP_DESKTOP_STAGING_CLIENT_ID", "TZAP_E2E_USERNAME", "TZAP
 
 $env:ZMANAGER_TZAP_BUILD_ENV = "staging"
 $env:VITE_TZAP_BUILD_ENV = "staging"
+$env:ZMANAGER_TZAP_SERVER_BASE_URL = "https://staging.tzap.org"
 $env:TZAP_E2E_ENV = "staging"
 $env:TZAP_E2E_STAGING_CALLBACK_ADAPTER = "1"
 Write-Host "Hosted account standalone E2E environment: staging"
@@ -230,7 +231,20 @@ try {
         $installedExe = $installedExeItem.FullName
     }
 
-    & (Join-Path $PSScriptRoot "test-windows-protocol-registration.ps1") -ExecutablePath $installedExe
+    $protocolEvidencePath = Join-Path $artifactRoot "protocol-registration.txt"
+    & (Join-Path $PSScriptRoot "test-windows-protocol-registration.ps1") -ExecutablePath $installedExe *>&1 | Tee-Object -FilePath $protocolEvidencePath
+
+    $installedVersion = (Get-Item -LiteralPath $installedExe).VersionInfo.FileVersion
+    [pscustomobject]@{
+        runId = $runId
+        environment = "staging"
+        architecture = $resolvedArchitecture
+        configuration = $configuration
+        productName = $product.productName
+        productVersion = $product.version
+        installedExecutable = [IO.Path]::GetFileName($installedExe)
+        installedFileVersion = $installedVersion
+    } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $artifactRoot "artifact-metadata.json")
 
     $env:ZMANAGER_GUI_APP_PATH = (Resolve-Path -LiteralPath $installedExe).Path
     Write-Host "Running staging $configuration standalone E2E against installed application: $env:ZMANAGER_GUI_APP_PATH"
@@ -266,7 +280,7 @@ try {
         Write-Error "Standalone NSIS uninstaller was not found under $installDir."
         $exitCode = 1
     }
-    if ($artifactDirectoryManaged -and -not $KeepArtifacts -and $exitCode -eq 0 -and (Test-Path -LiteralPath $artifactRoot)) {
+    if (-not $KeepArtifacts -and $exitCode -eq 0 -and (Test-Path -LiteralPath $artifactRoot)) {
         Remove-Item -LiteralPath $artifactRoot -Recurse -Force
     } else {
         Write-Host "Standalone E2E artifacts: $artifactRoot"

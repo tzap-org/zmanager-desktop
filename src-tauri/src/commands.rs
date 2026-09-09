@@ -848,7 +848,7 @@ fn hosted_status_base_url(environment: Option<&str>) -> Result<&'static str, Com
     crate::account::ensure_build_environment_allows(requested_environment)?;
     match requested_environment {
         "local" => Ok("http://localhost:8787"),
-        "staging" => Ok("https://staging.tzap.org"),
+        "staging" => Ok(crate::constants::TZAP_SERVER_BASE_URL),
         "prod" => Ok(SIGN_TZAP_BASE_URL),
         _ => Err(CommandErrorDto::invalid_request("Unsupported hosted environment")),
     }
@@ -2145,7 +2145,7 @@ mod tests {
     fn hosted_status_base_url_is_allow_listed_by_environment() {
         assert_eq!(hosted_status_base_url(None).unwrap(), SIGN_TZAP_BASE_URL);
         assert_eq!(hosted_status_base_url(Some("local")).unwrap(), "http://localhost:8787");
-        assert_eq!(hosted_status_base_url(Some("staging")).unwrap(), "https://staging.tzap.org");
+        assert_eq!(hosted_status_base_url(Some("staging")).unwrap(), crate::constants::TZAP_SERVER_BASE_URL);
         assert!(hosted_status_base_url(Some("unknown")).is_err());
     }
 

@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { chromium } from "@playwright/test";
 
+import { captureHostedCallback } from "./helpers/hostedCallback.ts";
 import { observeWindowsDefaultBrowserNavigation, openRegisteredProtocol, startWindowsInstalledApplication, stopWindowsInstalledApplication } from "./helpers/registeredProtocol.ts";
 
 const appPath = process.env.ZMANAGER_GUI_APP_PATH;
@@ -25,6 +26,18 @@ function runUiAction(action: string): Promise<void> {
     ], { stdio: ["ignore", "ignore", "ignore"], windowsHide: true });
     child.once("error", reject);
     child.once("close", (code) => code === 0 ? resolve() : reject(new Error(`Windows UI Automation action failed: ${action}`)));
+  });
+}
+
+function captureFailureScreen(): Promise<void> {
+  return new Promise((resolve) => {
+    const child = spawn("powershell.exe", [
+      "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+      path.resolve("scripts", "capture-windows-installed-ui.ps1"),
+      "-OutputPath", path.join(artifactDir, "failure-screen.png"),
+    ], { stdio: "ignore", windowsHide: true });
+    child.once("close", () => resolve());
+    child.once("error", () => resolve());
   });
 }
 
@@ -58,20 +71,12 @@ async function completeBrowserAuth(launchUrl: string): Promise<string> {
     }
     await usernameInput.fill(username);
     await passwordInput.fill(password);
-    const callbackRequest = new Promise<string>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error("staging login did not emit a native callback request")), 30_000);
-      page.on("request", (request) => {
-        const callback = request.url();
-        if (!callback.startsWith("tzap://auth/callback?")) return;
-        clearTimeout(timeout);
-        resolve(callback);
-      });
-    });
+    const callbackPromise = captureHostedCallback(page);
     await Promise.all([
       page.waitForLoadState("domcontentloaded").catch(() => undefined),
       page.locator("button[type=submit]").click(),
     ]);
-    return await callbackRequest;
+    return await callbackPromise;
   } finally {
     await browserSession.close();
   }
@@ -95,8 +100,9 @@ async function main(): Promise<void> {
   assert(username && password, "staging browser credentials are required");
   mkdirSync(artifactDir, { recursive: true });
   mark("environmentSelection", "passed");
-  await startWindowsInstalledApplication(appPath);
+  let completed = false;
   try {
+    await startWindowsInstalledApplication(appPath);
     await runUiAction("OpenAccount");
     const browserObservation = observeWindowsDefaultBrowserNavigation("https://staging.tzap.org");
     await runUiAction("SignIn");
@@ -143,6 +149,10 @@ async function main(): Promise<void> {
     const coldObserved = await coldObservationPromise;
     assert.ok(["/auth/launch", "/auth/login"].includes(coldObserved.path), `unexpected staging auth path: ${coldObserved.path}`);
     const coldCallback = await completeBrowserAuth(coldObserved.launchUrl);
+    const wrongStateCallback = new URL(coldCallback);
+    wrongStateCallback.searchParams.set("state", "wrong-state-1234567890");
+    await openRegisteredProtocol(wrongStateCallback.toString());
+    await runUiAction("AssertSignedOut");
 
     await stopWindowsInstalledApplication(appPath);
     const coldCallbackOffset = existsSync(logPath) ? statSync(logPath).size : 0;
@@ -160,6 +170,16 @@ async function main(): Promise<void> {
     await runUiAction("AssertIdentityPresent");
     mark("persistence", "passed");
 
+    process.env.TZAP_E2E_FORCE_SESSION_EXPIRED = "1";
+    try {
+      await stopWindowsInstalledApplication(appPath);
+      await startWindowsInstalledApplication(appPath);
+      await runUiAction("OpenAccount");
+      await runUiAction("AssertSignedOut");
+    } finally {
+      delete process.env.TZAP_E2E_FORCE_SESSION_EXPIRED;
+    }
+
     await runUiAction("OpenDevice");
     await runUiAction("Retire");
     await runUiAction("ConfirmRetire");
@@ -167,8 +187,12 @@ async function main(): Promise<void> {
     await runUiAction("EnsureSignedOut");
     await runUiAction("DeleteIdentity");
     await runUiAction("ConfirmDelete");
+    await runUiAction("AssertIdentityAbsent");
+    await runUiAction("AssertSignedOut");
     mark("cleanup", "passed");
+    completed = true;
   } finally {
+    if (!completed) await captureFailureScreen();
     await stopWindowsInstalledApplication(appPath).catch(() => undefined);
   }
 }
