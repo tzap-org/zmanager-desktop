@@ -92,7 +92,7 @@ try {
 
     Invoke-GateStep "Windows static package build" {
         $buildScript = Join-Path $repoRoot "scripts/build-windows-static.ps1"
-        & powershell -ExecutionPolicy Bypass -File $buildScript -Architecture $resolvedArchitecture
+        & powershell -ExecutionPolicy Bypass -File $buildScript -Environment prod -Architecture $resolvedArchitecture
         if ($LASTEXITCODE -ne 0) {
             throw "Windows static package build failed with exit code $LASTEXITCODE."
         }

@@ -100,8 +100,11 @@ jobs:
       - name: Prepare Windows build environment
         if: matrix.flavor == 'windows'
         shell: pwsh
+        env:
+          TZAP_DESKTOP_STAGING_CLIENT_ID: ${{ secrets.TZAP_DESKTOP_STAGING_CLIENT_ID }}
         run: |
           .\scripts\prepare-windows-static-build.ps1 `
+            -Environment staging `
             -Architecture ${{ matrix.arch }} `
             -InstallMissing `
             -InstallNodeModules
@@ -111,10 +114,16 @@ jobs:
         shell: pwsh
         run: .\scripts\ensure-sibling-repos.ps1
 
-      - name: Run native Windows GUI tests
+      - name: Run staging Windows standalone E2E
         if: matrix.flavor == 'windows'
         shell: pwsh
-        run: .\scripts\test-windows-gui.ps1 -Architecture ${{ matrix.arch }}
+        env:
+          TZAP_DESKTOP_STAGING_CLIENT_ID: ${{ secrets.TZAP_DESKTOP_STAGING_CLIENT_ID }}
+          TZAP_E2E_USERNAME: ${{ secrets.TZAP_E2E_USERNAME }}
+          TZAP_E2E_PASSWORD: ${{ secrets.TZAP_E2E_PASSWORD }}
+          TZAP_E2E_ENV: staging
+          TZAP_E2E_STAGING_CALLBACK_ADAPTER: '1'
+        run: .\scripts\test-windows-standalone-staging.ps1 -Architecture ${{ matrix.arch }}
 
       # ---- Linux DEB (Ubuntu) ----
       - name: Install Ubuntu build dependencies
@@ -283,6 +292,7 @@ jobs:
           CARGO_TARGET_DIR: ${{ runner.temp }}\zmbuild
         run: |
           .\scripts\prepare-windows-static-build.ps1 `
+            -Environment prod `
             -Architecture ${{ matrix.arch }} `
             -InstallMissing `
             -InstallNodeModules `

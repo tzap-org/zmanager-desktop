@@ -21,6 +21,7 @@ import {
   type AppPreferences,
   type FormatCreateDefaults,
 } from "../../../app/preferences";
+import { FIXED_TZAP_BUILD_ENVIRONMENT } from "../../../app/tzapEnvironment";
 import { createFormatCapabilities, supportedCreateFormats } from "../../../app/createFormatCapabilities";
 import {
   formatVolumeSize,
@@ -1724,6 +1725,7 @@ function AdvancedPage({
 }) {
   const actions = useZManagerActions();
   const isOfficialRelease = !import.meta.env.DEV;
+  const fixedEnvironment = FIXED_TZAP_BUILD_ENVIRONMENT;
 
   return (
     <div className={PREFERENCE_PAGE_CLASS} hidden={!active}>
@@ -1736,8 +1738,10 @@ function AdvancedPage({
         <div className={SETTING_ROW_CLASS}>
           <label>TZAP Server Environment</label>
           <div className={SETTING_CONTROL_CLASS}>
-            {isOfficialRelease ? (
-              <p className={SETTING_DESCRIPTION_CLASS}>Production</p>
+            {fixedEnvironment || isOfficialRelease ? (
+              <p className={SETTING_DESCRIPTION_CLASS}>
+                {(fixedEnvironment ?? "prod") === "staging" ? "Staging" : "Production"}
+              </p>
             ) : (
               <>
                 <Select

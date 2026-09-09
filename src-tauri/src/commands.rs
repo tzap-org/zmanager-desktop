@@ -844,7 +844,9 @@ fn archive_verification_response(
 }
 
 fn hosted_status_base_url(environment: Option<&str>) -> Result<&'static str, CommandErrorDto> {
-    match environment.unwrap_or("prod") {
+    let requested_environment = environment.unwrap_or("prod");
+    crate::account::ensure_build_environment_allows(requested_environment)?;
+    match requested_environment {
         "local" => Ok("http://localhost:8787"),
         "staging" => Ok("https://staging.tzap.org"),
         "prod" => Ok(SIGN_TZAP_BASE_URL),

@@ -21,7 +21,7 @@ function loadOnlineE2eEnvFile(): void {
     const [, key, rawValue] = match;
     const value = rawValue.replace(/^['"]|['"]$/gu, "");
     values.set(key, value);
-    if (key.startsWith("TZAP_E2E_") && process.env[key] === undefined) {
+    if ((key.startsWith("TZAP_E2E_") || key === "TZAP_DESKTOP_STAGING_CLIENT_ID") && process.env[key] === undefined) {
       process.env[key] = value;
     }
   }
@@ -40,15 +40,12 @@ function loadOnlineE2eEnvFile(): void {
 
 function prepareOnlineE2eProcessEnvironment(): void {
   loadOnlineE2eEnvFile();
-  const environment = (process.env.TZAP_E2E_ENV ?? "local").toLowerCase();
-  if (!["local", "staging"].includes(environment)) {
-    throw new Error("TZAP_E2E_ENV must be local or staging; production is never allowed for the native E2E runner.");
+  const environment = (process.env.TZAP_E2E_ENV ?? "staging").toLowerCase();
+  if (environment !== "staging") {
+    throw new Error("TZAP_E2E_ENV must be staging; local fixtures and production are not allowed for the native E2E runner.");
   }
-  if (environment === "staging" && (!process.env.TZAP_E2E_USERNAME || !process.env.TZAP_E2E_PASSWORD)) {
+  if (!process.env.TZAP_E2E_USERNAME || !process.env.TZAP_E2E_PASSWORD) {
     throw new Error("TZAP_E2E_USERNAME and TZAP_E2E_PASSWORD are required for staging E2E runs.");
-  }
-  if (process.env.TZAP_E2E_ALLOW_DESTRUCTIVE === "1" && environment !== "staging") {
-    throw new Error("TZAP_E2E_ALLOW_DESTRUCTIVE=1 is only permitted for staging runs.");
   }
 
   const runId = process.env.TZAP_E2E_RUN_ID ?? `${new Date().toISOString().replace(/[-:.TZ]/gu, "")}-${randomUUID()}`;
@@ -64,8 +61,6 @@ function prepareOnlineE2eProcessEnvironment(): void {
   process.env.TZAP_E2E_ARTIFACT_DIR = artifactDir;
   process.env.TZAP_E2E_ACCOUNT_STATE_ROOT = stateRoot;
   process.env.TZAP_E2E_SECURE_STORE_NAMESPACE = `e2e-${runId}`;
-  process.env.TZAP_E2E_FIXTURE_ROOT_CERT = join(artifactDir, "fixture-root.pem");
-  process.env.TZAP_E2E_ALLOW_PRODUCTION = "0";
 }
 
 function redactFailureText(value: unknown): string {
@@ -123,7 +118,6 @@ export const config: WebdriverIO.Config = {
       TZAP_E2E_ENV: process.env.TZAP_E2E_ENV!,
       TZAP_E2E_ACCOUNT_STATE_ROOT: process.env.TZAP_E2E_ACCOUNT_STATE_ROOT!,
       TZAP_E2E_SECURE_STORE_NAMESPACE: process.env.TZAP_E2E_SECURE_STORE_NAMESPACE!,
-      TZAP_E2E_FIXTURE_ROOT_CERT: process.env.TZAP_E2E_FIXTURE_ROOT_CERT!,
     },
   }]],
   capabilities: [tauriCapabilities],

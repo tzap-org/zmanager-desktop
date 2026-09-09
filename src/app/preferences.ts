@@ -20,6 +20,7 @@ import {
 } from "./i18n/locale";
 import type { ExtractOverwritePolicy, ExtractPathMode, TzapRestorePolicy } from "./extractFlow";
 import { DEFAULT_VOLUME_SIZE_PRESETS, normalizeVolumeSizePresets } from "./volumeSizePresets";
+import { resolveTzapEnvironment, type TzapEnvironment } from "./tzapEnvironment";
 
 export type DefaultOutputLocation = "sourceFolder" | "customFolder";
 export type DefaultExtractionBehavior = "askEveryTime" | "extractHere" | "extractToFolder";
@@ -76,7 +77,7 @@ export type AppPreferences = {
   flatViewDefault: boolean;
   tableSortKey: ArchiveSortKey;
   tableSortAscending: boolean;
-  tzapEnvironment: "prod" | "staging";
+  tzapEnvironment: TzapEnvironment;
   lanShareAlias: string;
   lanShareEnableReceiving: boolean;
   lanShareReceiveFolderPath: string;
@@ -190,7 +191,7 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   flatViewDefault: false,
   tableSortKey: "name",
   tableSortAscending: true,
-  tzapEnvironment: "prod",
+  tzapEnvironment: resolveTzapEnvironment(null),
   lanShareAlias: "",
   lanShareEnableReceiving: true,
   lanShareReceiveFolderPath: "",
@@ -502,7 +503,7 @@ export function loadAppPreferences(storage = resolvePreferenceStorage()): AppPre
       storage.getItem(PREFERENCE_KEYS.tableSortAscending),
       DEFAULT_APP_PREFERENCES.tableSortAscending,
     ),
-    tzapEnvironment: (storage.getItem(PREFERENCE_KEYS.tzapEnvironment) as "prod" | "staging") || DEFAULT_APP_PREFERENCES.tzapEnvironment,
+    tzapEnvironment: resolveTzapEnvironment(storage.getItem(PREFERENCE_KEYS.tzapEnvironment)),
     lanShareAlias: storage.getItem(PREFERENCE_KEYS.lanShareAlias) ?? DEFAULT_APP_PREFERENCES.lanShareAlias,
     lanShareEnableReceiving: storedBool(
       storage.getItem(PREFERENCE_KEYS.lanShareEnableReceiving),
@@ -579,6 +580,7 @@ export function preferencesWithPatch(
   return {
     ...preferences,
     ...patch,
+    tzapEnvironment: resolveTzapEnvironment(patch.tzapEnvironment),
     createFormatDefaults: normalizeCreateFormatDefaults(
       patch.createFormatDefaults ?? preferences.createFormatDefaults,
     ),

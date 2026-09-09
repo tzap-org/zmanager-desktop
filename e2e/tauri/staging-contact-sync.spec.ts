@@ -1,7 +1,7 @@
 import { chromium as playwrightChromium, type Page } from "@playwright/test";
-import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { openRegisteredProtocol } from "./helpers/registeredProtocol.ts";
 
 type HostedAuthLaunch = Readonly<{
   launchUrl: string;
@@ -33,7 +33,6 @@ const environment = process.env.DESKTOP_STAGING_ENVIRONMENT ?? "staging";
 const audience = process.env.DESKTOP_STAGING_AUDIENCE ?? "sign.tzap.org";
 const expectedContactsPath = process.env.DESKTOP_STAGING_EXPECTED_CONTACTS;
 const expectedContactsAfterPath = process.env.DESKTOP_STAGING_EXPECTED_CONTACTS_AFTER;
-const appBinaryPath = process.env.ZMANAGER_GUI_APP_PATH ?? path.resolve("src-tauri", "target", "debug", process.platform === "win32" ? "zmanager-desktop.exe" : "zmanager-desktop");
 
 async function invoke<T>(command: string, args: Record<string, unknown> = {}): Promise<T> {
   return browser.tauri.execute(
@@ -96,27 +95,7 @@ async function completeHostedAuth(): Promise<void> {
 }
 
 async function deliverHostedCallback(callbackUrl: string): Promise<void> {
-  const executable = process.platform === "win32" ? appBinaryPath : process.platform === "darwin" ? "open" : "xdg-open";
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(executable, [callbackUrl], {
-      stdio: "ignore",
-      windowsHide: true,
-      env: { ...process.env, ZMANAGER_GUI_TEST_MODE: "1", ZMANAGER_GUI_TEST_DEEP_LINK: "1" },
-    });
-    let settled = false;
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      if (error) reject(error);
-      else resolve();
-    };
-    child.once("error", finish);
-    child.once("spawn", () => {
-      child.unref();
-      finish();
-    });
-    setTimeout(() => finish(), 500);
-  });
+  await openRegisteredProtocol(callbackUrl);
 }
 
 function waitForHostedCallback(page: Page): Promise<string> {

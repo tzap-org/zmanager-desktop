@@ -1,5 +1,7 @@
 [CmdletBinding(PositionalBinding = $false)]
 param(
+    [ValidateSet("staging", "prod")]
+    [string]$Environment = "staging",
     [string]$VcpkgRoot = "C:\vcpkg",
     [string]$PerlBin = "C:\Strawberry\perl\bin",
     [ValidateSet("Auto", "x64", "arm64")]
@@ -15,6 +17,10 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path $PSScriptRoot -Parent
 Set-Location $repoRoot
+
+$env:ZMANAGER_TZAP_BUILD_ENV = $Environment
+$env:VITE_TZAP_BUILD_ENV = $Environment
+Write-Host "Hosted account build environment: $Environment"
 
 $vcpkgPackages = @("zlib", "bzip2", "liblzma", "zstd", "lz4", "openssl")
 
@@ -481,6 +487,7 @@ if ($Build) {
     Invoke-Step "Build Windows artifact" {
         $buildScript = Join-Path $PSScriptRoot "build-windows-static.ps1"
         & $buildScript `
+            -Environment $Environment `
             -VcpkgRoot $VcpkgRoot `
             -PerlBin $script:resolvedPerlBin `
             -Architecture $resolvedArchitecture `

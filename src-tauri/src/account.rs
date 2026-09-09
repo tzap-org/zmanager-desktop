@@ -68,7 +68,22 @@ fn hosted_session_audience(value: Option<&str>) -> Result<&'static str, CommandE
     }
 }
 
+pub(crate) fn ensure_build_environment_allows(value: &str) -> Result<(), CommandErrorDto> {
+    let Some(compiled_environment) = (match option_env!("ZMANAGER_TZAP_BUILD_ENV") {
+        None => Ok(None),
+        Some("staging") => Ok(Some("staging")),
+        Some("prod") => Ok(Some("prod")),
+        Some(_) => Err(CommandErrorDto::invalid_request("Unsupported compiled hosted environment")),
+    })?
+    else {
+        return Ok(());
+    };
+
+    if value == compiled_environment { Ok(()) } else { Err(CommandErrorDto::invalid_request("Requested hosted environment does not match this build")) }
+}
+
 fn hosted_environment(value: &str) -> Result<TzapHostedAuthEnvironment, CommandErrorDto> {
+    ensure_build_environment_allows(value)?;
     match value {
         "local" => Ok(TzapHostedAuthEnvironment::Local),
         "staging" => Ok(TzapHostedAuthEnvironment::Staging),

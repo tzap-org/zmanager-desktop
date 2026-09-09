@@ -1,4 +1,6 @@
 param(
+    [ValidateSet("staging", "prod")]
+    [string]$Environment = "staging",
     [string]$VcpkgRoot = "C:\vcpkg",
     [string]$PerlBin = "C:\Strawberry\perl\bin",
     [ValidateSet("Auto", "x64", "arm64")]
@@ -16,6 +18,13 @@ $repoRoot = Split-Path $PSScriptRoot -Parent
 Set-Location $repoRoot
 . (Join-Path $PSScriptRoot "windows-install-location.ps1")
 . (Join-Path $PSScriptRoot "windows-package-artifact.ps1")
+
+# The frontend and Rust compiler both inherit these values. The frontend fixes
+# the visible environment and the native command boundary rejects requests for
+# a different environment after compilation.
+$env:ZMANAGER_TZAP_BUILD_ENV = $Environment
+$env:VITE_TZAP_BUILD_ENV = $Environment
+Write-Host "Hosted account build environment: $Environment"
 
 # Respect CARGO_TARGET_DIR so build artifacts land in a short path
 # (avoids Windows MAX_PATH issues with deeply nested build outputs).

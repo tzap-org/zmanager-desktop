@@ -54,6 +54,17 @@ try {
         (Join-Path $testRoot "aarch64-pc-windows-msvc\release\zmanager-desktop.exe") `
         $releaseExecutable `
         "The packaged executable must use the architecture-specific Cargo target directory."
+
+    $debugInstaller = Get-ZManagerNsisInstallerPath `
+        -CargoTargetDir $testRoot `
+        -Architecture "arm64" `
+        -ProductName "zmanager-desktop" `
+        -ProductVersion $productVersion `
+        -Configuration "debug"
+    Assert-Equal `
+        (Join-Path $testRoot "aarch64-pc-windows-msvc\debug\bundle\nsis\zmanager-desktop_${productVersion}_arm64-setup.exe") `
+        $debugInstaller `
+        "The standalone E2E installer must resolve from the architecture-specific debug directory."
 } finally {
     if (Test-Path -LiteralPath $testRoot) {
         $resolvedTestRoot = (Resolve-Path -LiteralPath $testRoot).Path

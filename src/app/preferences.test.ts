@@ -11,6 +11,7 @@ import {
   type AppPreferences,
 } from "./preferences";
 import { PREFERENCE_KEYS, type PreferenceStorage } from "./preferenceStorage";
+import { resolveTzapEnvironment } from "./tzapEnvironment";
 
 function memoryStorage(initial: Record<string, string> = {}): PreferenceStorage & { values: Map<string, string> } {
   const values = new Map(Object.entries(initial));
@@ -27,6 +28,12 @@ function memoryStorage(initial: Record<string, string> = {}): PreferenceStorage 
 }
 
 describe("preferences helpers", () => {
+  it("keeps a fixed build environment authoritative over stored values", () => {
+    expect(resolveTzapEnvironment("staging", "prod")).toBe("prod");
+    expect(resolveTzapEnvironment("prod", "staging")).toBe("staging");
+    expect(resolveTzapEnvironment("unexpected", null)).toBe("prod");
+  });
+
   it("returns macOS-aligned safe defaults when storage is unavailable", () => {
     expect(loadAppPreferences(null)).toEqual(DEFAULT_APP_PREFERENCES);
   });

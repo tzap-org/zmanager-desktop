@@ -1,6 +1,28 @@
 @echo off
 setlocal enabledelayedexpansion
 
+:: Local builds default to staging so an ordinary build cannot accidentally
+:: generate hosted-account traffic against production. Production remains an
+:: explicit choice: build.bat prod.
+set "BUILD_ENV=%~1"
+if not defined BUILD_ENV set "BUILD_ENV=staging"
+if /I not "%BUILD_ENV%"=="staging" if /I not "%BUILD_ENV%"=="prod" (
+    echo Error: Unsupported build environment "%BUILD_ENV%".
+    echo Usage: build.bat [staging^|prod]
+    exit /b 2
+)
+if not "%~2"=="" (
+    echo Error: Unexpected argument "%~2".
+    echo Usage: build.bat [staging^|prod]
+    exit /b 2
+)
+if not "%~3"=="" (
+    echo Error: Unexpected argument "%~3".
+    echo Usage: build.bat [staging^|prod]
+    exit /b 2
+)
+echo Hosted account build environment: %BUILD_ENV%
+
 :: Get the root directory of the repository (parent of the scripts folder)
 set "REPO_ROOT=%~dp0.."
 for %%I in ("%REPO_ROOT%") do set "REPO_ROOT=%%~fI"
@@ -50,7 +72,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo [4/4] Running static Windows build and installation...
-powershell -ExecutionPolicy Bypass -File "%REPO_ROOT%\scripts\build-windows-static.ps1" -InstallClang -Install
+powershell -ExecutionPolicy Bypass -File "%REPO_ROOT%\scripts\build-windows-static.ps1" -Environment "%BUILD_ENV%" -InstallClang -Install
 if %ERRORLEVEL% neq 0 (
     echo Error: Build or installation failed.
     exit /b 1

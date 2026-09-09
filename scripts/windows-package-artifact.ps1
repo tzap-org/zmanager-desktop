@@ -20,8 +20,26 @@ function Get-ZManagerWindowsReleaseDirectory {
         [string]$Architecture
     )
 
+    return Get-ZManagerWindowsBuildDirectory `
+        -CargoTargetDir $CargoTargetDir `
+        -Architecture $Architecture `
+        -Configuration "release"
+}
+
+function Get-ZManagerWindowsBuildDirectory {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$CargoTargetDir,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("debug", "release")]
+        [string]$Configuration,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("x64", "arm64")]
+        [string]$Architecture
+    )
+
     $targetTriple = Get-ZManagerWindowsTargetTriple -Architecture $Architecture
-    return Join-Path $CargoTargetDir "$targetTriple\release"
+    return Join-Path $CargoTargetDir "$targetTriple\$Configuration"
 }
 
 function Get-ZManagerReleaseExecutablePath {
@@ -49,14 +67,17 @@ function Get-ZManagerNsisInstallerPath {
         [Parameter(Mandatory = $true)]
         [string]$ProductName,
         [Parameter(Mandatory = $true)]
-        [string]$ProductVersion
+        [string]$ProductVersion,
+        [ValidateSet("debug", "release")]
+        [string]$Configuration = "release"
     )
 
-    $releaseDir = Get-ZManagerWindowsReleaseDirectory `
+    $buildDir = Get-ZManagerWindowsBuildDirectory `
         -CargoTargetDir $CargoTargetDir `
-        -Architecture $Architecture
+        -Architecture $Architecture `
+        -Configuration $Configuration
     $installerName = "$ProductName`_$ProductVersion`_$Architecture-setup.exe"
-    return Join-Path $releaseDir "bundle\nsis\$installerName"
+    return Join-Path $buildDir "bundle\nsis\$installerName"
 }
 
 function Resolve-ZManagerNsisInstaller {
@@ -69,14 +90,17 @@ function Resolve-ZManagerNsisInstaller {
         [Parameter(Mandatory = $true)]
         [string]$ProductName,
         [Parameter(Mandatory = $true)]
-        [string]$ProductVersion
+        [string]$ProductVersion,
+        [ValidateSet("debug", "release")]
+        [string]$Configuration = "release"
     )
 
     $installerPath = Get-ZManagerNsisInstallerPath `
         -CargoTargetDir $CargoTargetDir `
         -Architecture $Architecture `
         -ProductName $ProductName `
-        -ProductVersion $ProductVersion
+        -ProductVersion $ProductVersion `
+        -Configuration $Configuration
     if (-not (Test-Path -LiteralPath $installerPath -PathType Leaf)) {
         throw "Current NSIS installer was not found: $installerPath"
     }

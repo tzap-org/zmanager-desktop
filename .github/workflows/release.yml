@@ -240,6 +240,7 @@ jobs:
           ZMANAGER_BUILD_NUMBER: ${{ env.ZMANAGER_RELEASE_BUILD_NUMBER }}
         run: |
           .\scripts\prepare-windows-static-build.ps1 `
+            -Environment prod `
             -Architecture ${{ matrix.arch }} `
             -InstallMissing `
             -InstallNodeModules `
