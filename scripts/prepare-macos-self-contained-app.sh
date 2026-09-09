@@ -49,7 +49,7 @@ info["NSAppDataUsageDescription"] = (
 info["CFBundleURLTypes"] = [{
     "CFBundleTypeRole": "Viewer",
     "CFBundleURLName": "org.tzap-org.zmanager.shell-request",
-    "CFBundleURLSchemes": ["zmanager"],
+    "CFBundleURLSchemes": ["zmanager", "tzap"],
 }]
 info["CFBundleDocumentTypes"] = [{
     "CFBundleTypeName": group["displayKey"],

@@ -7,6 +7,7 @@
   "appGroupIdentifier": "group.org.tzap-org.zmanager",
   "teamIdentifier": "9PMA523YY4",
   "urlScheme": "zmanager",
+  "urlSchemes": ["zmanager", "tzap"],
   "urlTypeIdentifier": "org.tzap-org.zmanager.shell-request",
   "exportedUTTypeTzap": "org.tzap-org.zmanager.tzap",
   "minimumMacOSVersion": "14.0"

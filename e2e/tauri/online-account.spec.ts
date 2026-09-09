@@ -10,7 +10,7 @@ import type {
   VerifyTzapCertificateResponse,
 } from "../../src/api/types";
 import { captureHostedCallback } from "./helpers/hostedCallback.ts";
-import { countWindowsInstalledApplicationProcesses, observeWindowsDefaultBrowserNavigation, openRegisteredProtocol, runWindowsAccountUiAction } from "./helpers/registeredProtocol.ts";
+import { countInstalledApplicationProcesses, observeDefaultBrowserNavigation, openRegisteredProtocol, runWindowsAccountUiAction } from "./helpers/registeredProtocol.ts";
 import { runJobInTaskWindow } from "./helpers/archiveCommands.ts";
 import { assertHashManifestEqual, assertNoSecrets, hashTree, writeArchiveEvidence } from "./helpers/tzapArtifacts.ts";
 
@@ -48,7 +48,7 @@ async function clickHostedSignInFromUi(): Promise<void> {
 }
 
 async function clickHostedSignInAndObserveBrowser(): Promise<string> {
-  const observation = observeWindowsDefaultBrowserNavigation("https://staging.tzap.org");
+  const observation = observeDefaultBrowserNavigation("https://staging.tzap.org");
   await clickHostedSignInFromUi();
   const observed = await observation;
   assert.equal(observed.origin, "https://staging.tzap.org");
@@ -245,7 +245,7 @@ describe("Online TZAP account lifecycle", () => {
     recordBoundary("protocolRegistration", "passed");
     recordBoundary("warmCallback", "passed");
     recordBoundary("sessionExchange", "passed");
-    assert.equal(await countWindowsInstalledApplicationProcesses(process.env.ZMANAGER_GUI_APP_PATH!), 1, "warm callback must be forwarded to one installed application instance");
+    assert.equal(await countInstalledApplicationProcesses(process.env.ZMANAGER_GUI_APP_PATH!), 1, "warm callback must be forwarded to one installed application instance");
     assert.equal(snapshot.capabilities.auth, "handoff_exchange");
     const currentUser = await invoke<AccountCurrentUserDto>("account_fetch_current_user");
     assertNoSecrets({ launch: launchUrl.origin, callback: callbackUrl.origin, snapshot, currentUser }, [username, password]);

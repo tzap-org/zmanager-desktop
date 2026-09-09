@@ -67,7 +67,7 @@ test("Windows build entry points keep local E2E on staging and production explic
   assert.match(browserObserver, /ObservedAtUnixMs/u);
   assert.match(browserObserver, /production_host_observed/u);
   assert.match(protocolProbe, /tzap\\shell\\open\\command/u);
-  assert.match(onlineSpec, /countWindowsInstalledApplicationProcesses/u);
+  assert.match(onlineSpec, /countInstalledApplicationProcesses/u);
   assert.match(onlineSpec, /openRegisteredProtocol\(url\)/u);
   assert.match(onlineSpec, /callbackUrl\.pathname, "\/callback"/u);
   assert.doesNotMatch(onlineSpec, /spawn\(/u);

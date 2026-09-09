@@ -90,7 +90,7 @@ if not str(info.get("NSAppDataUsageDescription", "")).strip():
 if info.get("CFBundleURLTypes") != [{
     "CFBundleTypeRole": "Viewer",
     "CFBundleURLName": "org.tzap-org.zmanager.shell-request",
-    "CFBundleURLSchemes": ["zmanager"],
+    "CFBundleURLSchemes": ["zmanager", "tzap"],
 }]:
     errors.append("URL scheme declarations differ from the canonical identity")
 expected_documents = [{

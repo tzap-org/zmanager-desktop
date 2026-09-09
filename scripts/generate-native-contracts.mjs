@@ -952,6 +952,13 @@ ${windowsActions.map((action) => `            Self::${action.rustCase} => w!(${J
         }
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn native_verb(self) -> &'static str {
+        match self {
+${windowsActions.map((action) => `            Self::${action.rustCase} => ${JSON.stringify(action.nativeVerb)},`).join("\n")}
+        }
+    }
+
     pub(crate) fn shell_action(self) -> ShellActionKind {
         match self {
 ${windowsActions.map((action) => `            Self::${action.rustCase} => ShellActionKind::${action.rustCase},`).join("\n")}

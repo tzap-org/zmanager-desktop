@@ -844,7 +844,8 @@ fn archive_verification_response(
 }
 
 fn hosted_status_base_url(environment: Option<&str>) -> Result<&'static str, CommandErrorDto> {
-    let requested_environment = environment.unwrap_or("prod");
+    let default_environment = if option_env!("ZMANAGER_TZAP_BUILD_ENV") == Some("staging") { "staging" } else { "prod" };
+    let requested_environment = environment.unwrap_or(default_environment);
     crate::account::ensure_build_environment_allows(requested_environment)?;
     match requested_environment {
         "local" => Ok("http://localhost:8787"),
@@ -2143,9 +2144,19 @@ mod tests {
 
     #[test]
     fn hosted_status_base_url_is_allow_listed_by_environment() {
-        assert_eq!(hosted_status_base_url(None).unwrap(), SIGN_TZAP_BASE_URL);
-        assert_eq!(hosted_status_base_url(Some("local")).unwrap(), "http://localhost:8787");
+        match option_env!("ZMANAGER_TZAP_BUILD_ENV") {
+            Some("staging") => assert_eq!(hosted_status_base_url(None).unwrap(), crate::constants::TZAP_SERVER_BASE_URL),
+            _ => assert_eq!(hosted_status_base_url(None).unwrap(), SIGN_TZAP_BASE_URL),
+        }
         assert_eq!(hosted_status_base_url(Some("staging")).unwrap(), crate::constants::TZAP_SERVER_BASE_URL);
+        match option_env!("ZMANAGER_TZAP_BUILD_ENV") {
+            Some("staging") => assert!(hosted_status_base_url(Some("local")).is_err()),
+            Some("prod") => {
+                assert!(hosted_status_base_url(Some("local")).is_err());
+                assert!(hosted_status_base_url(Some("staging")).is_err());
+            }
+            _ => assert_eq!(hosted_status_base_url(Some("local")).unwrap(), "http://localhost:8787"),
+        }
         assert!(hosted_status_base_url(Some("unknown")).is_err());
     }
 

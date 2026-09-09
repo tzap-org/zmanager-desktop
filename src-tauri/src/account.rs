@@ -507,9 +507,6 @@ fn map_lifecycle_error(error: TzapCertificateLifecycleError) -> CommandErrorDto 
         TzapCertificateLifecycleError::RenewalPendingApproval => account_error("approval_required", "Certificate renewal is awaiting device approval"),
         TzapCertificateLifecycleError::DeviceLinkagePending => account_error("device_linkage_pending", "Device linkage is pending"),
         TzapCertificateLifecycleError::DeviceLinkageConflict => account_error("device_linkage_conflict", "Device linkage conflicts with the selected account"),
-        TzapCertificateLifecycleError::RevocationSyncFailed => {
-            account_error("account_lifecycle_revocation_sync_failed", "Hosted device revocation could not be synchronized")
-        }
         TzapCertificateLifecycleError::ActiveCertificateExists => {
             account_error("active_certificate_exists", "The hosted service already has an active certificate for this device")
         }
@@ -2293,9 +2290,22 @@ mod tests {
 
     #[test]
     fn hosted_environment_is_allow_listed_without_falling_back_to_production() {
-        assert_eq!(hosted_environment("local").unwrap(), TzapHostedAuthEnvironment::Local);
         assert_eq!(hosted_environment("staging").unwrap(), TzapHostedAuthEnvironment::Staging);
-        assert_eq!(hosted_environment("prod").unwrap(), TzapHostedAuthEnvironment::Prod);
+        match option_env!("ZMANAGER_TZAP_BUILD_ENV") {
+            Some("staging") => {
+                assert!(hosted_environment("local").is_err());
+                assert!(hosted_environment("prod").is_err());
+            }
+            Some("prod") => {
+                assert!(hosted_environment("local").is_err());
+                assert!(hosted_environment("staging").is_err());
+                assert_eq!(hosted_environment("prod").unwrap(), TzapHostedAuthEnvironment::Prod);
+            }
+            _ => {
+                assert_eq!(hosted_environment("local").unwrap(), TzapHostedAuthEnvironment::Local);
+                assert_eq!(hosted_environment("prod").unwrap(), TzapHostedAuthEnvironment::Prod);
+            }
+        }
         let error = hosted_environment("production").expect_err("unknown environments must not silently select production");
         assert_eq!(error.code, "invalid_request");
     }
@@ -2451,7 +2461,6 @@ mod tests {
         let cases = [
             (TzapCertificateLifecycleError::ActiveCertificateExists, "active_certificate_exists"),
             (TzapCertificateLifecycleError::DeviceLinkagePending, "device_linkage_pending"),
-            (TzapCertificateLifecycleError::RevocationSyncFailed, "account_lifecycle_revocation_sync_failed"),
             (TzapCertificateLifecycleError::CertificateNotFound, "account_certificate_not_found"),
             (TzapCertificateLifecycleError::CertificateNotRenewable, "account_certificate_not_renewable"),
             (TzapCertificateLifecycleError::RenewalTargetMismatch, "account_renewal_target_mismatch"),

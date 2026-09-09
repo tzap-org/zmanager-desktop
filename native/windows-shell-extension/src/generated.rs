@@ -122,6 +122,23 @@ impl ExplorerAction {
         }
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn native_verb(self) -> &'static str {
+        match self {
+            Self::Open => "OpenArchive",
+            Self::Compress => "AddToArchive",
+            Self::CompressZip => "AddToZip",
+            Self::CompressTzap => "AddToTzap",
+            Self::CompressSevenZ => "AddToSevenZ",
+            Self::CompressTarZst => "AddToTzst",
+            Self::CompressTarGz => "AddToTgz",
+            Self::CompressShareOnLan => "CompressShareOnLan",
+            Self::ShareOnLan => "ShareOnLan",
+            Self::ExtractHere => "ExtractHere",
+            Self::ExtractToFolder => "ExtractToFolder",
+        }
+    }
+
     pub(crate) fn shell_action(self) -> ShellActionKind {
         match self {
             Self::Open => ShellActionKind::Open,

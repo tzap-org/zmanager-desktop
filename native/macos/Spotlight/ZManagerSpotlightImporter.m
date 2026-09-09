@@ -64,7 +64,8 @@ static NSString *ZMSummaryJSON(NSString *path) {
     memcpy(pathBuffer.data, pathBytes, pathLength);
     pathBuffer.len = (uint64_t)pathLength;
     RustBuffer result = uniffi_zmanager_ffi_fn_func_tzappublicmetadatadisplaysummary(pathBuffer, &callStatus);
-    ffi_zmanager_ffi_rustbuffer_free(pathBuffer, &callStatus);
+    // UniFFI consumes the input RustBuffer when the function is called. Do
+    // not free pathBuffer here; freeing it again aborts mdworker on macOS.
     if (callStatus.code != 0) {
         if (callStatus.errorBuf.data != NULL) {
             ffi_zmanager_ffi_rustbuffer_free(callStatus.errorBuf, &callStatus);

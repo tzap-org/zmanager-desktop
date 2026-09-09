@@ -51,6 +51,11 @@ test("macOS linkers include SystemConfiguration for system proxy support", () =>
   );
 });
 
+test("macOS native FFI targets include hosted TZAP metadata support", () => {
+  const nativeBuild = readFileSync(resolve(root, "scripts/build-macos-native-targets.sh"), "utf8");
+  assert.match(nativeBuild, /cargo build --release --features tzap-online --target/);
+});
+
 test("macOS artifact packaging reports and validates every post-build boundary", () => {
   const build = readFileSync(resolve(root, "scripts/build-macos.sh"), "utf8");
 
@@ -61,6 +66,13 @@ test("macOS artifact packaging reports and validates every post-build boundary",
   assert.match(build, /Staged macOS application is incomplete/);
   assert.match(build, /macOS ZIP was not created/);
   assert.match(build, /macOS DMG was not created/);
+});
+
+test("macOS application bundles claim both native URL schemes", () => {
+  const prepare = readFileSync(resolve(root, "scripts/prepare-macos-self-contained-app.sh"), "utf8");
+  const releaseGate = readFileSync(resolve(root, "scripts/release-gate-macos.sh"), "utf8");
+  assert.match(prepare, /CFBundleURLSchemes.*\["zmanager", "tzap"\]/s);
+  assert.match(releaseGate, /CFBundleURLSchemes.*\["zmanager", "tzap"\]/s);
 });
 
 test("release packaging scripts validate Rust in the release profile", () => {
