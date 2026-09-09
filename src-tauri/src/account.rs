@@ -35,6 +35,7 @@ use zmanager_tzap_hosted::local_identity_store::{TzapLocalIdentityStore, TzapSig
 use zmanager_tzap_hosted::reqwest_transport::exchange_handoff_code_for_audience;
 use zmanager_tzap_hosted::status_client::{TzapBulkStatusLookup, TzapStatusClient, TzapStatusResponse, classify_contact_status};
 use zmanager_tzap_hosted::trust::{self, TzapCertificateProfileOptions};
+use zmanager_tzap_hosted::tzap_service_auth::{clear_pending_auth, load_pending_auth, load_pending_auth_metadata, save_pending_auth};
 
 use crate::error::{CommandErrorDto, ErrorSeverityDto};
 use crate::secure_store::{NativeTzapLocalIdentityStore, NativeTzapSecretStore};
@@ -354,6 +355,10 @@ impl AccountRuntime {
             Arc::new(Mutex::new(())),
         )
     }
+
+    pub fn initial_auth_status(&self) -> String {
+        self.0.lock().expect("account runtime lock poisoned").auth_status.clone()
+    }
 }
 
 struct OfficialEnrollmentCertificateValidator;
@@ -434,6 +439,15 @@ fn hosted_service_base_urls(environment: TzapHostedAuthEnvironment) -> (String, 
     }
 }
 
+fn pending_auth_environment(auth_base_url: Option<&str>) -> Result<String, CommandErrorDto> {
+    match auth_base_url {
+        Some("http://localhost:8787") => Ok("local".to_owned()),
+        Some("https://staging.tzap.org") => Ok("staging".to_owned()),
+        Some("https://login.tzap.org") => Ok("prod".to_owned()),
+        _ => Err(account_error("account_auth_callback_failed", "Pending hosted sign-in environment was invalid")),
+    }
+}
+
 fn active_hosted_session(runtime: &AccountRuntime) -> Result<(TzapSessionRecord, String), CommandErrorDto> {
     expire_session_if_needed(runtime);
     let state = runtime.0.lock().expect("account runtime lock poisoned");
@@ -505,7 +519,11 @@ fn lifecycle_result(
 }
 
 #[tauri::command]
-pub fn account_enroll_certificate(app: AppHandle, runtime: State<'_, AccountRuntime>) -> Result<AccountLifecycleResultDto, CommandErrorDto> {
+pub fn account_enroll_certificate(
+    app: AppHandle,
+    runtime: State<'_, AccountRuntime>,
+    diagnostics: State<'_, crate::diagnostics::DiagnosticLog>,
+) -> Result<AccountLifecycleResultDto, CommandErrorDto> {
     let _lifecycle_guard = runtime.2.lock().expect("account lifecycle lock poisoned");
     require_hosted_online_enabled()?;
     let root = account_state_dir(&app)?;
@@ -544,7 +562,14 @@ pub fn account_enroll_certificate(app: AppHandle, runtime: State<'_, AccountRunt
         &label,
     );
     match result {
-        Ok(_) => lifecycle_result(&app, &runtime, "complete", Vec::new(), Vec::new()),
+        Ok(_) => {
+            let _ = diagnostics.record(
+                "account",
+                "hostedCertificateEnrolled",
+                crate::diagnostics::fields([("outcome", serde_json::Value::String("complete".to_owned()))]),
+            );
+            lifecycle_result(&app, &runtime, "complete", Vec::new(), Vec::new())
+        }
         Err(error) => {
             if matches!(error, TzapCertificateLifecycleError::Auth(TzapAuthError::HttpStatus { status_code: 401 })) {
                 clear_hosted_session(&runtime, "expired");
@@ -748,6 +773,7 @@ pub fn account_snapshot(
 
 #[tauri::command]
 pub fn account_begin_hosted_auth(
+    app: AppHandle,
     request: AccountBeginHostedAuthRequest,
     runtime: State<'_, AccountRuntime>,
 ) -> Result<AccountHostedAuthLaunchDto, CommandErrorDto> {
@@ -762,6 +788,8 @@ pub fn account_begin_hosted_auth(
     let mut config = TzapHostedAuthLaunchConfig::for_environment(environment, client_id, REDIRECT_URI);
     config.requested_audience = requested_audience.to_owned();
     let launch_url = config.launch_url(&pending).map_err(|error| account_error("account_auth_launch_failed", error))?;
+    let root = account_state_dir(&app)?;
+    save_pending_auth(&root, &pending, &config).map_err(|_error| account_error("account_auth_launch_failed", "Unable to persist pending hosted sign-in"))?;
     let response =
         AccountHostedAuthLaunchDto { launch_url, state: pending.state.clone(), expires_at_unix_seconds: now.saturating_add(AUTH_HANDOFF_LIFETIME_SECONDS) };
     let mut state = runtime.0.lock().expect("account runtime lock poisoned");
@@ -777,12 +805,21 @@ pub fn account_complete_hosted_auth(
     app: AppHandle,
     request: AccountCompleteHostedAuthRequest,
     runtime: State<'_, AccountRuntime>,
+    diagnostics: State<'_, crate::diagnostics::DiagnosticLog>,
 ) -> Result<AccountSnapshotDto, CommandErrorDto> {
     require_hosted_online_enabled()?;
     let now = current_unix_seconds();
     let request_state = request.state.clone();
+    let root = account_state_dir(&app)?;
     let pending = {
-        let state = runtime.0.lock().expect("account runtime lock poisoned");
+        let mut state = runtime.0.lock().expect("account runtime lock poisoned");
+        if state.pending.is_none() {
+            let restored = load_pending_auth(&root).map_err(|_| account_error("account_auth_callback_failed", "No hosted sign-in is pending"))?;
+            let metadata = load_pending_auth_metadata(&root);
+            state.pending_audience = metadata.requested_audience.unwrap_or_else(|| SESSION_AUDIENCE_SIGN_TZAP.to_owned());
+            state.pending_environment = Some(pending_auth_environment(metadata.auth_base_url.as_deref())?);
+            state.pending = Some(restored);
+        }
         state.pending.clone().ok_or_else(|| CommandErrorDto::invalid_request("No hosted sign-in is pending"))?
     };
 
@@ -819,6 +856,7 @@ pub fn account_complete_hosted_auth(
         requested_audience,
     )
     .map_err(|error| account_error("account_auth_callback_failed", error))?;
+    clear_pending_auth(&root).map_err(|_| account_error("account_auth_callback_failed", "Unable to clear pending hosted sign-in"))?;
 
     let callback = TzapHostedAuthCallback {
         state: request_state.clone(),
@@ -848,13 +886,21 @@ pub fn account_complete_hosted_auth(
     };
     let mut state = runtime.0.lock().expect("account runtime lock poisoned");
     state.session = Some(session);
-    state.environment = environment_str;
+    state.environment = environment_str.clone();
     state.pending_environment = None;
     state.cached_user = None;
     state.auth_status = "signedIn".to_string();
     drop(state);
 
-    let root = account_state_dir(&app)?;
+    let _ = diagnostics.record(
+        "account",
+        "hostedAuthCompleted",
+        crate::diagnostics::fields([
+            ("environment", serde_json::Value::String(environment_str.clone())),
+            ("authStatus", serde_json::Value::String("signedIn".to_owned())),
+        ]),
+    );
+
     let catalog = ensure_catalog(&root, &runtime)?;
     snapshot_from_catalog(&runtime, catalog)
 }
@@ -942,6 +988,7 @@ pub fn account_apply_hosted_callback(request: AccountHostedAuthCallbackRequest, 
 #[tauri::command]
 pub fn account_forget(app: AppHandle, runtime: State<'_, AccountRuntime>) -> Result<AccountSnapshotDto, CommandErrorDto> {
     let root = account_state_dir(&app)?;
+    let _ = clear_pending_auth(&root);
     // Forgetting the hosted-account association must not discard local signing
     // or recipient material. Destructive secret wiping is a separate action.
     let catalog = ensure_catalog(&root, &runtime)?;
@@ -1802,7 +1849,10 @@ pub fn resolve_tzap_recipient_private_key(
 }
 
 fn account_state_dir(app: &AppHandle) -> Result<PathBuf, CommandErrorDto> {
-    if cfg!(debug_assertions) && std::env::var("ZMANAGER_GUI_TEST_MODE").as_deref() == Ok("1") {
+    if option_env!("ZMANAGER_TZAP_BUILD_ENV") == Some("staging")
+        && std::env::var("ZMANAGER_GUI_TEST_MODE").as_deref() == Ok("1")
+        && std::env::var("TZAP_E2E_ENV").as_deref() == Ok("staging")
+    {
         if let Some(path) = std::env::var_os("ZMANAGER_GUI_TEST_STATE_DIR") {
             return Ok(PathBuf::from(path).join("tzap-state"));
         }
@@ -1810,7 +1860,7 @@ fn account_state_dir(app: &AppHandle) -> Result<PathBuf, CommandErrorDto> {
             let root = PathBuf::from(root);
             if root.is_absolute() {
                 if GUI_TEST_ACCOUNT_STATE_INITIALIZED.get().is_none() {
-                    if root.exists() {
+                    if root.exists() && std::env::var("TZAP_E2E_ACCOUNT_STATE_ROOT_REUSE").as_deref() != Ok("1") {
                         let mut entries = std::fs::read_dir(&root).map_err(|error| account_error("account_state_path_failed", error))?;
                         if entries.next().transpose().map_err(|error| account_error("account_state_path_failed", error))?.is_some() {
                             return Err(account_error("account_state_path_failed", "TZAP_E2E_ACCOUNT_STATE_ROOT must be a fresh per-run directory"));
@@ -2346,6 +2396,26 @@ mod tests {
         let (restored, environment) = restore_session_environment(Some(session), None);
         assert!(restored.is_none());
         assert_eq!(environment, "prod");
+    }
+
+    #[test]
+    fn expired_hosted_session_is_cleared_before_snapshot_use() {
+        let runtime = AccountRuntime::new();
+        runtime.0.lock().unwrap().session = Some(TzapSessionRecord {
+            audience: SESSION_AUDIENCE_SIGN_TZAP.to_owned(),
+            access_token: zmanager_tzap_hosted::auth_client::TzapBearerToken::new("test-token").unwrap(),
+            expires_at_unix_seconds: 0,
+            identity_assurance: zmanager_tzap_hosted::trust::TzapIdentityAssurance::OauthVerifiedEmail,
+            selected_org_id: None,
+            login_session_id: None,
+        });
+
+        expire_session_if_needed(&runtime);
+
+        let state = runtime.0.lock().unwrap();
+        assert_eq!(state.auth_status, "expired");
+        assert!(state.session.is_none());
+        assert_eq!(state.environment, "prod");
     }
 
     #[test]

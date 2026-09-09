@@ -700,7 +700,7 @@ mod tests {
         let request = build_auto_extract_request(&config, received_path).expect("zip should be a recognized archive format");
 
         assert_eq!(request.archive_path, "/tmp/zmanager-lan-received/vacation-photos.zip");
-        assert_eq!(request.destination_path, "/tmp/zmanager-lan-received/vacation-photos");
+        assert_eq!(request.destination_path, config.receive_folder.join("vacation-photos").to_string_lossy());
         assert_eq!(request.destination_collision_strategy, DestinationCollisionStrategyDto::Rename);
         assert_eq!(request.overwrite, OverwritePolicyDto::Rename);
         assert!(request.password.is_none());

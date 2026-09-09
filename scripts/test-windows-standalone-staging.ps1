@@ -7,6 +7,7 @@ param(
     [string]$Triplet = "",
     [switch]$InstallMissing,
     [switch]$InstallNodeModules,
+    [switch]$ReleaseArtifact,
     [switch]$KeepArtifacts
 )
 
@@ -137,7 +138,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Dot-sourcing preserves the imported MSVC/vcpkg/OpenSSL environment for the
-# Tauri build and the WDIO process that follows it.
+# Tauri build and the standalone driver that follows it.
 . (Join-Path $PSScriptRoot "setup-windows-static-env.ps1") `
     -VcpkgRoot $VcpkgRoot `
     -PerlBin $PerlBin `
@@ -179,17 +180,27 @@ New-Item -ItemType Directory -Force -Path $artifactRoot | Out-Null
 
 $env:TZAP_E2E_RUN_ID = $runId
 $env:TZAP_E2E_ARTIFACT_DIR = $artifactRoot
+$stateRoot = Join-Path $artifactRoot "desktop-state"
+New-Item -ItemType Directory -Force -Path $stateRoot | Out-Null
+$secureStoreNamespace = "e2e-$([regex]::Replace($runId, '[^A-Za-z0-9_-]', '-'))"
+$env:TZAP_E2E_ACCOUNT_STATE_ROOT = $stateRoot
+$env:TZAP_E2E_ACCOUNT_STATE_ROOT_REUSE = "1"
+$env:TZAP_E2E_SECURE_STORE_NAMESPACE = $secureStoreNamespace.Substring(0, [Math]::Min(128, $secureStoreNamespace.Length))
 $env:TZAP_E2E_KEEP_ARTIFACTS = if ($KeepArtifacts) { "1" } else { "0" }
 $env:ZMANAGER_GUI_TEST_MODE = "1"
 $env:ZMANAGER_GUI_TEST_DEEP_LINK = "1"
+$env:TZAP_E2E_RELEASE_ARTIFACT = if ($ReleaseArtifact) { "1" } else { "0" }
 
 $installerPath = $null
 $installedExe = Join-Path $installDir "zmanager-desktop.exe"
 $exitCode = 1
 
 try {
-    Write-Host "Building the normal staging product configuration: $targetTriple"
-    & $node.Source $tauriCli build --debug --ci --no-sign --bundles nsis --config $tauriConfigPath --target $targetTriple
+    $configuration = if ($ReleaseArtifact) { "release" } else { "debug" }
+    $buildArgs = @("build", "--ci", "--no-sign", "--bundles", "nsis", "--config", $tauriConfigPath, "--target", $targetTriple)
+    if (-not $ReleaseArtifact) { $buildArgs += "--debug" }
+    Write-Host "Building the staging $configuration product configuration: $targetTriple"
+    & $node.Source $tauriCli @buildArgs
     if ($LASTEXITCODE -ne 0) {
         throw "Staging standalone Tauri build failed with exit code $LASTEXITCODE."
     }
@@ -198,7 +209,7 @@ try {
         -Architecture $resolvedArchitecture `
         -ProductName $product.productName `
         -ProductVersion $product.version `
-        -Configuration "debug"
+        -Configuration $configuration
 
     New-Item -ItemType Directory -Force -Path $installDir | Out-Null
     Write-Host "Installing staging standalone artifact: $installDir"
@@ -219,10 +230,16 @@ try {
         $installedExe = $installedExeItem.FullName
     }
 
+    & (Join-Path $PSScriptRoot "test-windows-protocol-registration.ps1") -ExecutablePath $installedExe
+
     $env:ZMANAGER_GUI_APP_PATH = (Resolve-Path -LiteralPath $installedExe).Path
-    Write-Host "Running staging E2E against installed application: $env:ZMANAGER_GUI_APP_PATH"
+    Write-Host "Running staging $configuration standalone E2E against installed application: $env:ZMANAGER_GUI_APP_PATH"
     $npm = Get-Command "npm.cmd" -ErrorAction Stop
-    & $npm.Source run test:gui:run
+    if ($ReleaseArtifact) {
+        & $npm.Source exec -- tsx e2e/tauri/release-artifact-smoke.ts
+    } else {
+        & $npm.Source run test:gui:run
+    }
     $exitCode = $LASTEXITCODE
 } catch {
     Write-Error $_
@@ -230,6 +247,24 @@ try {
 } finally {
     if (Test-Path -LiteralPath $installedExe -PathType Leaf) {
         Stop-InstalledAppProcesses -ExecutablePath $installedExe
+    }
+    $diagnosticLogPath = Join-Path $installDir "logs\zmanager-diagnostics.log"
+    if (Test-Path -LiteralPath $diagnosticLogPath -PathType Leaf) {
+        Copy-Item -LiteralPath $diagnosticLogPath -Destination (Join-Path $artifactRoot "zmanager-diagnostics.log") -Force
+    }
+    $uninstaller = if (Test-Path -LiteralPath $installDir -PathType Container) {
+        Get-ChildItem -LiteralPath $installDir -Recurse -Filter "uninstall.exe" -File | Select-Object -First 1
+    }
+    if ($null -ne $uninstaller -and (Test-Path -LiteralPath $uninstaller.FullName -PathType Leaf)) {
+        $uninstallProcess = Start-Process -FilePath $uninstaller.FullName -ArgumentList @("/S") -Wait -PassThru -WindowStyle Hidden
+        if ($uninstallProcess.ExitCode -ne 0) {
+            Write-Error "Standalone NSIS uninstaller returned exit code $($uninstallProcess.ExitCode)."
+            $exitCode = 1
+        }
+        & (Join-Path $PSScriptRoot "test-windows-protocol-registration.ps1") -ExecutablePath $installedExe -ExpectAbsent
+    } elseif ($null -ne $installerPath) {
+        Write-Error "Standalone NSIS uninstaller was not found under $installDir."
+        $exitCode = 1
     }
     if ($artifactDirectoryManaged -and -not $KeepArtifacts -and $exitCode -eq 0 -and (Test-Path -LiteralPath $artifactRoot)) {
         Remove-Item -LiteralPath $artifactRoot -Recurse -Force

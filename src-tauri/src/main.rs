@@ -52,6 +52,14 @@ fn main() {
     let native_launch_inbox = native_launch_inbox::NativeLaunchInbox::new();
     let startup_args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if let Some(event) = quick_action::hosted_auth_callback_event_from_args(startup_args.clone()) {
+        let _ = diagnostics.record(
+            "launch",
+            "hostedAuthCallbackObserved",
+            diagnostics::fields([
+                ("source", serde_json::Value::String("primaryProcess".to_owned())),
+                ("callbackKind", serde_json::Value::String("tzap".to_owned())),
+            ]),
+        );
         native_launch_inbox.ingest(event).expect("failed to queue hosted auth deep-link callback");
     }
     let launch_instance_mode = quick_action::LaunchInstanceMode::from_startup_env();
@@ -62,6 +70,7 @@ fn main() {
     let job_registry = job_registry::JobRegistry::new();
     let archive_index_registry = archive_index::ArchiveIndexRegistry::with_diagnostics(diagnostics.clone());
     let account_runtime = account::AccountRuntime::new();
+    let initial_account_auth_status = account_runtime.initial_auth_status();
     let native_drag_sessions = native_drag_session::NativeDragSessionRegistry::new();
     let quick_action_launch_coordinator = quick_action::QuickActionLaunchCoordinator::from_startup_state(forwarded_startup_state);
     let single_instance_coordinator = quick_action_launch_coordinator.clone();
@@ -90,6 +99,16 @@ fn main() {
     let builder = if launch_instance_mode.registers_single_instance() {
         builder.plugin(tauri_plugin_single_instance::init(move |_app, argv, _cwd| {
             record_secondary_arguments(&single_instance_diagnostics, &argv);
+            if quick_action::hosted_auth_callback_event_from_args(argv.iter().cloned().map(std::ffi::OsString::from)).is_some() {
+                let _ = single_instance_diagnostics.record(
+                    "launch",
+                    "hostedAuthCallbackObserved",
+                    diagnostics::fields([
+                        ("source", serde_json::Value::String("secondaryProcess".to_owned())),
+                        ("callbackKind", serde_json::Value::String("tzap".to_owned())),
+                    ]),
+                );
+            }
             let state =
                 single_instance_coordinator.ingest_secondary_process_args(argv.into_iter().map(std::ffi::OsString::from).collect(), &single_instance_inbox);
             record_launch_classification(&single_instance_diagnostics, "secondaryProcess", &state);
@@ -100,6 +119,11 @@ fn main() {
     let app = builder
         .setup(move |app| {
             let _ = setup_diagnostics.initialize(app.path().app_log_dir().ok(), platform::prefer_user_diagnostic_log_directory());
+            let _ = setup_diagnostics.record(
+                "account",
+                "accountSessionRestored",
+                diagnostics::fields([("authStatus", serde_json::Value::String(initial_account_auth_status.clone()))]),
+            );
             let emitter_app = app.handle().clone();
             setup_inbox
                 .attach_emitter(std::sync::Arc::new(move |window, event| {

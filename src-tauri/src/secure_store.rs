@@ -17,7 +17,10 @@ const SERVICE_NAME: &str = "org.tzap.zmanager.identity";
 const SESSION_ENVIRONMENT_KEY: &str = "session-environment";
 
 fn session_storage_account_key(account_key: &str) -> String {
-    if std::env::var("ZMANAGER_GUI_TEST_MODE").as_deref() == Ok("1") && std::env::var("TZAP_E2E_SECURE_STORE_NAMESPACE").is_err() {
+    if option_env!("ZMANAGER_TZAP_BUILD_ENV") == Some("staging")
+        && std::env::var("ZMANAGER_GUI_TEST_MODE").as_deref() == Ok("1")
+        && std::env::var("TZAP_E2E_SECURE_STORE_NAMESPACE").is_err()
+    {
         static TEST_SESSION_SCOPE: OnceLock<String> = OnceLock::new();
         let scope = TEST_SESSION_SCOPE.get_or_init(|| format!("gui-test-{}", std::process::id()));
         return format!("{account_key}:{scope}");
@@ -26,7 +29,9 @@ fn session_storage_account_key(account_key: &str) -> String {
 }
 
 fn account_scope() -> String {
-    let test_mode = cfg!(debug_assertions) && std::env::var_os("ZMANAGER_GUI_TEST_MODE").is_some();
+    let test_mode = option_env!("ZMANAGER_TZAP_BUILD_ENV") == Some("staging")
+        && std::env::var("ZMANAGER_GUI_TEST_MODE").as_deref() == Ok("1")
+        && std::env::var("TZAP_E2E_ENV").as_deref() == Ok("staging");
     if test_mode {
         if let Ok(scope) = std::env::var("TZAP_E2E_SECURE_STORE_NAMESPACE") {
             if !scope.is_empty() && scope.len() <= 128 && scope.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')) {

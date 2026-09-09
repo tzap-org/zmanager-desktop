@@ -17,6 +17,7 @@ export function AccountWorkspace({ defaultTab }: AccountWorkspaceProps = {}) {
   const fullSnapshot = useZManagerSnapshot();
   const snapshot = fullSnapshot.account;
   const actions = useZManagerActions();
+  const hostedEnvironment = fullSnapshot.preferences.tzapEnvironment;
 
   const isSignedIn = snapshot.authStatus === "signedIn";
   const initialTab = defaultTab ?? (isSignedIn ? "session" : "certificates");
@@ -48,6 +49,9 @@ export function AccountWorkspace({ defaultTab }: AccountWorkspaceProps = {}) {
                 ? `Authenticated as ${snapshot.displayName || "Signed In Account"}`
                 : "Local offline mode · Encryption & signing identities operational"}
             </p>
+            <span data-account-environment={hostedEnvironment} className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400 dark:text-slate-500">
+              Environment: {hostedEnvironment === "staging" ? "Staging" : "Production"}
+            </span>
           </div>
 
           {/* Header Authentication Action */}

@@ -136,12 +136,40 @@ export function createAccountController(options: AccountControllerOptions) {
     close() { options.workspace.close(); options.publish(); },
     async beginHostedAuth(environment = "prod", audience: AccountHostedAuthAudience = "sign.tzap.org") {
       options.workspace.setBusy(true); options.publish();
+      options.diagnostics?.record({
+        scope: "account",
+        name: "hostedAuthLaunchRequested",
+        fields: { environment, audience },
+      });
       try {
         const launch = await options.beginHostedAuth(environment, audience);
+        const launchUrl = new URL(launch.launchUrl);
+        options.diagnostics?.record({
+          scope: "account",
+          name: "hostedAuthLaunchPrepared",
+          fields: { origin: launchUrl.origin, path: launchUrl.pathname },
+        });
         await options.openUrl(launch.launchUrl);
+        options.diagnostics?.record({
+          scope: "account",
+          name: "hostedAuthLaunchOpened",
+          fields: { origin: launchUrl.origin, path: launchUrl.pathname },
+        });
         options.workspace.setNotice("Hosted sign-in is pending.");
         options.workspace.replace(await options.fetchSnapshot());
       } catch (error) {
+        const diagnosticMessage = options.errorMessage(error)
+          .replace(/https?:\/\/[^\s]+/gu, "<url>")
+          .replace(/([?&][A-Za-z0-9_.~-]+=)[^&\s]*/gu, "$1<redacted>")
+          .slice(0, 160);
+        options.diagnostics?.record({
+          scope: "account",
+          name: "hostedAuthLaunchFailed",
+          fields: {
+            errorType: error instanceof Error ? error.constructor.name : "unknown",
+            errorMessage: diagnosticMessage,
+          },
+        });
         options.workspace.setNotice(options.errorMessage(error));
       } finally { options.workspace.setBusy(false); options.publish(); }
     },

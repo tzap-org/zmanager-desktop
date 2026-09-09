@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { chromium } from "@playwright/test";
 
@@ -9,7 +9,7 @@ import type {
   AccountSnapshotDto,
   VerifyTzapCertificateResponse,
 } from "../../src/api/types";
-import { openRegisteredProtocol } from "./helpers/registeredProtocol.ts";
+import { countWindowsInstalledApplicationProcesses, observeWindowsDefaultBrowserNavigation, openRegisteredProtocol, runWindowsAccountUiAction, startWindowsInstalledApplication, stopWindowsInstalledApplication } from "./helpers/registeredProtocol.ts";
 import { runJobInTaskWindow } from "./helpers/archiveCommands.ts";
 import { assertHashManifestEqual, assertNoSecrets, hashTree, writeArchiveEvidence } from "./helpers/tzapArtifacts.ts";
 
@@ -17,6 +17,11 @@ const sourceRoot = path.resolve("e2e", "fixtures", "online", "source");
 const runArtifactDir = path.resolve(process.env.TZAP_E2E_ARTIFACT_DIR ?? path.join(".tmp", "zmanager-online-e2e"));
 const username = process.env.TZAP_E2E_USERNAME;
 const password = process.env.TZAP_E2E_PASSWORD;
+const boundaryResults: Record<string, { status: "passed" | "failed"; detail?: string }> = {};
+
+function recordBoundary(name: string, status: "passed" | "failed", detail?: string): void {
+  boundaryResults[name] = detail ? { status, detail } : { status };
+}
 
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   return browser.tauri.execute(
@@ -29,7 +34,7 @@ async function clickHostedSignInFromUi(): Promise<void> {
   await $("button[aria-label='TZAP Account']").click();
   const dialog = await $("[role='dialog'][aria-labelledby='account-title']");
   await dialog.waitForDisplayed();
-  const signIn = await dialog.$("button*=Sign in to enroll");
+  const signIn = await dialog.$("button*=Sign in to");
   await signIn.waitForDisplayed();
   await signIn.click();
   await browser.waitUntil(async () => {
@@ -41,6 +46,17 @@ async function clickHostedSignInFromUi(): Promise<void> {
   });
 }
 
+async function clickHostedSignInAndObserveBrowser(): Promise<string> {
+  const observation = observeWindowsDefaultBrowserNavigation("https://staging.tzap.org");
+  await clickHostedSignInFromUi();
+  const observed = await observation;
+  assert.equal(observed.origin, "https://staging.tzap.org");
+  assert.ok(["/auth/launch", "/auth/login"].includes(observed.path), `unexpected staging auth path: ${observed.path}`);
+  assert(observed.launchUrl, "the default-browser observer must return the observed launch URL in memory");
+  assert(observed.observedAtUnixMs > 0, "the default-browser observer must report an observation timestamp");
+  return observed.launchUrl;
+}
+
 async function openDeepLink(url: string): Promise<void> {
   if (process.env.TZAP_E2E_STAGING_CALLBACK_ADAPTER !== "1") {
     throw new Error("Staging callback delivery requires TZAP_E2E_STAGING_CALLBACK_ADAPTER=1.");
@@ -48,7 +64,7 @@ async function openDeepLink(url: string): Promise<void> {
   await openRegisteredProtocol(url);
 }
 
-async function completeBrowserAuth(launchUrl: string): Promise<string> {
+async function completeBrowserAuth(launchUrl: string, dispatchCallback = true): Promise<string> {
   assert(username && password, "staging browser credentials must be configured");
   const browserSession = await chromium.launch({ channel: "msedge", headless: true });
   try {
@@ -93,7 +109,7 @@ async function completeBrowserAuth(launchUrl: string): Promise<string> {
       callback = await callbackLink.getAttribute("data-callback-url") ?? await callbackLink.getAttribute("href");
     }
     assert(callback, "hosted login must return a tzap:// callback URL");
-    await openDeepLink(callback);
+    if (dispatchCallback) await openDeepLink(callback);
     return callback;
   } finally {
     await browserSession.close();
@@ -119,18 +135,57 @@ async function startExtract(request: Record<string, unknown>): Promise<void> {
   assert.equal(terminal.status, "completed", JSON.stringify(terminal.latestFailure));
 }
 
-async function clearTestIdentityMaterial(): Promise<void> {
+async function clearTestIdentityMaterial(): Promise<boolean> {
   try {
     const snapshot = await invoke<AccountSnapshotDto>("account_snapshot");
+    let cleanupComplete = true;
+    if (snapshot.authStatus === "signedIn") {
+      try {
+        const retirement = await invoke<AccountLifecycleResultDto>("account_retire_device");
+        cleanupComplete = retirement.outcome === "complete" && cleanupComplete;
+      } catch {
+        cleanupComplete = false;
+      }
+    }
     for (const identity of snapshot.certificates) {
-      await invoke("account_remove_signing_identity", { request: { id: identity.identityId } }).catch(() => undefined);
+      try {
+        await invoke("account_remove_signing_identity", { request: { id: identity.identityId } });
+      } catch {
+        cleanupComplete = false;
+      }
     }
     for (const key of snapshot.recipientKeys) {
-      await invoke("account_remove_recipient_key", { request: { id: key.keyId } }).catch(() => undefined);
+      try {
+        await invoke("account_remove_recipient_key", { request: { id: key.keyId } });
+      } catch {
+        cleanupComplete = false;
+      }
     }
-    await invoke("account_forget").catch(() => undefined);
+    try {
+      await invoke("account_forget");
+    } catch {
+      cleanupComplete = false;
+    }
+    return cleanupComplete;
   } catch {
-    // The app may already be gone after a native-driver failure.
+    // The WDIO connection is unavailable after the cold-start test replaces
+    // its process. Finish cleanup through the same external Account UI used by
+    // the release-artifact lane so the staging device is still retired.
+    if (process.platform !== "win32" || !process.env.ZMANAGER_GUI_APP_PATH) return false;
+    try {
+      await runWindowsAccountUiAction("OpenAccount");
+      await runWindowsAccountUiAction("OpenDevice");
+      await runWindowsAccountUiAction("Retire");
+      await runWindowsAccountUiAction("ConfirmRetire");
+      await runWindowsAccountUiAction("OpenCertificates");
+      await runWindowsAccountUiAction("EnsureSignedOut");
+      await runWindowsAccountUiAction("DeleteIdentity");
+      await runWindowsAccountUiAction("ConfirmDelete");
+      await runWindowsAccountUiAction("AssertSignedOut");
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 
@@ -148,36 +203,46 @@ function cleanupRunArtifacts(): void {
 describe("Online TZAP account lifecycle", () => {
   beforeAll(() => {
     mkdirSync(runArtifactDir, { recursive: true });
+    recordBoundary("environmentSelection", process.env.TZAP_E2E_ENV === "staging" ? "passed" : "failed", process.env.TZAP_E2E_ENV);
   });
 
   afterAll(async () => {
     try {
-      await clearTestIdentityMaterial();
+      recordBoundary("cleanup", (await clearTestIdentityMaterial()) ? "passed" : "failed");
     } finally {
+      if (process.env.TZAP_E2E_FAILURES === "1") {
+        for (const boundary of ["oauthLaunch", "tauriOpener", "login", "protocolRegistration", "warmCallback", "sessionExchange", "enrollment", "coldCallback", "persistence", "callbackSecurity"]) {
+          if (!boundaryResults[boundary]) recordBoundary(boundary, "failed", "boundary was not reached");
+        }
+      }
+      writeFileSync(path.join(runArtifactDir, "standalone-boundaries.json"), `${JSON.stringify({
+        runId: process.env.TZAP_E2E_RUN_ID ?? "unknown",
+        artifact: process.env.ZMANAGER_GUI_APP_PATH ? path.basename(process.env.ZMANAGER_GUI_APP_PATH) : null,
+        boundaries: boundaryResults,
+      }, null, 2)}\n`);
       cleanupRunArtifacts();
     }
   });
 
   it("completes the real staging browser handoff and current-user session", async () => {
     await invoke("account_forget");
-    await clickHostedSignInFromUi();
-
-    // The UI opener probe above is the boundary under test. A second launch is
-    // obtained for the controlled login browser so the test can complete auth
-    // without relying on the user's interactive browser profile.
-    const launch = await invoke<{ launchUrl: string; state: string; expiresAtUnixSeconds: number }>("account_begin_hosted_auth", {
-      request: { environment: "staging", audience: process.env.TZAP_E2E_AUDIENCE ?? "sign.tzap.org" },
-    });
-    const launchUrl = new URL(launch.launchUrl);
+    const launchUrl = new URL(await clickHostedSignInAndObserveBrowser());
+    recordBoundary("oauthLaunch", "passed", `${launchUrl.origin}${launchUrl.pathname}`);
+    recordBoundary("tauriOpener", "passed");
     assert.equal(launchUrl.origin, "https://staging.tzap.org");
-    assert.equal(launchUrl.pathname, "/auth/launch");
+    assert.ok(["/auth/launch", "/auth/login"].includes(launchUrl.pathname), `unexpected staging auth path: ${launchUrl.pathname}`);
     assert.equal(launchUrl.searchParams.get("redirect_uri"), "tzap://auth/callback");
 
-    const callback = await completeBrowserAuth(launch.launchUrl);
+    const callback = await completeBrowserAuth(launchUrl.toString());
+    recordBoundary("login", "passed");
     const callbackUrl = new URL(callback);
     assert.equal(callbackUrl.protocol, "tzap:");
     assert.equal(callbackUrl.pathname, "/auth/callback");
     const snapshot = await waitForSignedIn();
+    recordBoundary("protocolRegistration", "passed");
+    recordBoundary("warmCallback", "passed");
+    recordBoundary("sessionExchange", "passed");
+    assert.equal(await countWindowsInstalledApplicationProcesses(process.env.ZMANAGER_GUI_APP_PATH!), 1, "warm callback must be forwarded to one installed application instance");
     assert.equal(snapshot.capabilities.auth, "handoff_exchange");
     const currentUser = await invoke<AccountCurrentUserDto>("account_fetch_current_user");
     assertNoSecrets({ launch: launchUrl.origin, callback: callbackUrl.origin, snapshot, currentUser }, [username, password]);
@@ -188,6 +253,12 @@ describe("Online TZAP account lifecycle", () => {
       }),
       "a replayed hosted handoff must be rejected",
     );
+    const invalidCallbackState = callbackUrl.searchParams.get("state") ?? "";
+    await openRegisteredProtocol(`tzap://wrong/callback?state=${encodeURIComponent(invalidCallbackState)}&result=completed&handoff_code=invalid-handoff-code-123456&unexpected=1`);
+    await openRegisteredProtocol(`tzap://auth/callback?state=${encodeURIComponent(invalidCallbackState)}&result=completed&handoff_code=invalid-handoff-code-123456&code=forbidden`);
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    assert.equal((await invoke<AccountSnapshotDto>("account_snapshot")).authStatus, "signedIn", "secret-bearing callbacks must be ignored without changing session state");
+    recordBoundary("callbackSecurity", "passed");
   });
 
   it("enrolls, signs, and verifies the staging flow", async () => {
@@ -197,6 +268,7 @@ describe("Online TZAP account lifecycle", () => {
     assert(hosted, "staging enrollment must produce an active hosted certificate");
     assert.equal(hosted.assuranceLevel, "oauth_verified_email");
     assert.equal(result.snapshot.defaultSigningIdentityId, hosted.identityId);
+    recordBoundary("enrollment", "passed");
 
     const archivePath = path.join(runArtifactDir, "staging-mobile-parity.tzap");
     const sourceManifest = hashTree(sourceRoot);
@@ -218,5 +290,63 @@ describe("Online TZAP account lifecycle", () => {
     assert.equal(online.statusCheck, "fresh_valid", JSON.stringify(online));
     assert.equal(online.verificationState, "verified_with_caveat", JSON.stringify(online));
     writeArchiveEvidence({ artifactDir: runArtifactDir, archivePath, sourceManifest, signerCertificateSha256: hosted.certificateSha256, runId: process.env.TZAP_E2E_RUN_ID ?? "unknown" });
+  });
+
+  it("starts cold from the registered protocol callback and completes the pending exchange", async () => {
+    assert(process.env.ZMANAGER_GUI_APP_PATH, "installed application path is required for cold callback testing");
+    await invoke("account_forget");
+    const launchUrl = await clickHostedSignInAndObserveBrowser();
+    const callback = await completeBrowserAuth(launchUrl, false);
+    const logPath = path.join(path.dirname(process.env.ZMANAGER_GUI_APP_PATH), "logs", "zmanager-diagnostics.log");
+    const callbackLogOffset = existsSync(logPath) ? statSync(logPath).size : 0;
+    await stopWindowsInstalledApplication(process.env.ZMANAGER_GUI_APP_PATH);
+    await openDeepLink(callback);
+
+    await new Promise<void>((resolve, reject) => {
+      const deadline = Date.now() + 60_000;
+      const timer = setInterval(() => {
+        try {
+          const contents = readFileSync(logPath, "utf8").slice(callbackLogOffset);
+          if (contents.includes('"name":"hostedAuthCallbackObserved"') && contents.includes('"name":"hostedAuthCompleted"')) {
+            clearInterval(timer);
+            resolve();
+          } else if (Date.now() >= deadline) {
+            clearInterval(timer);
+            reject(new Error("cold callback did not produce sanitized startup and signed-in diagnostic events"));
+          }
+        } catch (error) {
+          if (Date.now() >= deadline) {
+            clearInterval(timer);
+            reject(error);
+          }
+        }
+      }, 500);
+    });
+
+    await stopWindowsInstalledApplication(process.env.ZMANAGER_GUI_APP_PATH);
+    const restartLogOffset = existsSync(logPath) ? statSync(logPath).size : 0;
+    await startWindowsInstalledApplication(process.env.ZMANAGER_GUI_APP_PATH);
+    await new Promise<void>((resolve, reject) => {
+      const deadline = Date.now() + 60_000;
+      const timer = setInterval(() => {
+        try {
+          const contents = readFileSync(logPath, "utf8").slice(restartLogOffset);
+          if (contents.includes('"name":"accountSessionRestored"')) {
+            clearInterval(timer);
+            resolve();
+          } else if (Date.now() >= deadline) {
+            clearInterval(timer);
+            reject(new Error("restarted installed application did not restore the persisted signed-in session"));
+          }
+        } catch (error) {
+          if (Date.now() >= deadline) {
+            clearInterval(timer);
+            reject(error);
+          }
+        }
+      }, 500);
+    });
+    recordBoundary("coldCallback", "passed");
+    recordBoundary("persistence", "passed");
   });
 });

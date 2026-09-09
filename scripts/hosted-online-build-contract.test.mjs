@@ -14,8 +14,8 @@ test("the product build enables hosted online account sign-in by default", () =>
 
 test("the opener capability includes a scoped default URL permission", () => {
   const capability = JSON.parse(readFileSync(resolve(repositoryRoot, "src-tauri/capabilities/default.json"), "utf8"));
+  assert.ok(capability.permissions.includes("opener:allow-open-url"), "the app must authorize the opener open_url command");
   assert.ok(capability.permissions.includes("opener:allow-default-urls"), "the app must allow the system browser URL scope");
-  assert.ok(!capability.permissions.includes("opener:allow-open-url"), "the app must not grant an unscoped opener URL command");
 });
 
 test("Windows build entry points keep local E2E on staging and production explicit", () => {
@@ -23,8 +23,14 @@ test("Windows build entry points keep local E2E on staging and production explic
   const staticBuild = readFileSync(resolve(repositoryRoot, "scripts/build-windows-static.ps1"), "utf8");
   const prepare = readFileSync(resolve(repositoryRoot, "scripts/prepare-windows-static-build.ps1"), "utf8");
   const packageWorkflow = readFileSync(resolve(repositoryRoot, ".github/workflows/package.yml"), "utf8");
+  const releaseWorkflow = readFileSync(resolve(repositoryRoot, ".github/workflows/release.yml"), "utf8");
   const standaloneRunner = readFileSync(resolve(repositoryRoot, "scripts/test-windows-standalone-staging.ps1"), "utf8");
+  const browserObserver = readFileSync(resolve(repositoryRoot, "scripts/observe-windows-default-browser.ps1"), "utf8");
+  const protocolProbe = readFileSync(resolve(repositoryRoot, "scripts/test-windows-protocol-registration.ps1"), "utf8");
   const onlineSpec = readFileSync(resolve(repositoryRoot, "e2e/tauri/online-account.spec.ts"), "utf8");
+  const wdioConfig = readFileSync(resolve(repositoryRoot, "wdio.conf.ts"), "utf8");
+  const releaseDriver = readFileSync(resolve(repositoryRoot, "e2e/tauri/release-artifact-smoke.ts"), "utf8");
+  const uiaDriver = readFileSync(resolve(repositoryRoot, "scripts/windows-uia-account-action.ps1"), "utf8");
 
   assert.match(batch, /if not defined BUILD_ENV set "BUILD_ENV=staging"/u);
   assert.match(batch, /-Environment "%BUILD_ENV%"/u);
@@ -35,9 +41,32 @@ test("Windows build entry points keep local E2E on staging and production explic
   assert.match(packageWorkflow, /Run staging Windows standalone E2E[\s\S]*?test-windows-standalone-staging\.ps1/u);
   assert.match(packageWorkflow, /Prepare Windows build environment[\s\S]*?-Environment staging/u);
   assert.match(packageWorkflow, /Prepare and build Windows package[\s\S]*?-Environment prod/u);
+  assert.match(packageWorkflow, /staging Windows release-artifact smoke[\s\S]*?test-windows-standalone-staging\.ps1[\s\S]*?-ReleaseArtifact/u);
+  assert.match(releaseWorkflow, /Smoke-test staging release artifact on Windows[\s\S]*?test-windows-standalone-staging\.ps1[\s\S]*?-ReleaseArtifact/u);
   assert.match(standaloneRunner, /tauri\.conf\.json/u);
-  assert.match(standaloneRunner, /--bundles nsis/u);
+  assert.match(standaloneRunner, /(?:--bundles nsis|"--bundles"[\s\S]*?"nsis")/u);
+  assert.match(standaloneRunner, /ReleaseArtifact/u);
+  assert.match(standaloneRunner, /tsx e2e\/tauri\/release-artifact-smoke\.ts/u);
+  assert.match(standaloneRunner, /test-windows-protocol-registration\.ps1/u);
+  assert.match(standaloneRunner, /uninstall\.exe/u);
+  assert.match(standaloneRunner, /zmanager-diagnostics\.log/u);
+  assert.doesNotMatch(standaloneRunner, /test-windows-protocol-registration\.ps1[\s\S]{0,200}\$LASTEXITCODE/u);
   assert.doesNotMatch(standaloneRunner, /tauri\.gui\.conf\.json/u);
+  assert.match(browserObserver, /UIAutomationClient/u);
+  assert.match(browserObserver, /ExpectedOrigin/u);
+  assert.match(browserObserver, /baselineUrls/u);
+  assert.match(browserObserver, /ObservedAtUnixMs/u);
+  assert.match(browserObserver, /production_host_observed/u);
+  assert.match(protocolProbe, /tzap\\shell\\open\\command/u);
+  assert.match(onlineSpec, /starts cold from the registered protocol callback/u);
+  assert.match(onlineSpec, /stopWindowsInstalledApplication/u);
+  assert.match(onlineSpec, /countWindowsInstalledApplicationProcesses/u);
   assert.match(onlineSpec, /openRegisteredProtocol\(url\)/u);
   assert.doesNotMatch(onlineSpec, /spawn\(/u);
+  assert.match(releaseDriver, /observeWindowsDefaultBrowserNavigation/u);
+  assert.match(releaseDriver, /openRegisteredProtocol/u);
+  assert.match(releaseDriver, /windows-uia-account-action\.ps1/u);
+  assert.doesNotMatch(releaseDriver, /account_complete_hosted_auth/u);
+  assert.match(uiaDriver, /UIAutomationClient/u);
+  assert.match(wdioConfig, /\[A-Za-z0-9_.~-\]\+=\)\[\^&\\s#\]/u);
 });

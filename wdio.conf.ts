@@ -68,7 +68,7 @@ function redactFailureText(value: unknown): string {
   for (const secret of [process.env.TZAP_E2E_USERNAME, process.env.TZAP_E2E_PASSWORD]) {
     if (secret) text = text.replaceAll(secret, "<redacted>");
   }
-  return text.replace(/([?&](?:password|handoff_code|code_verifier|access_token|session_token)=)[^&\s]*/giu, "$1<redacted>");
+  return text.replace(/([?&][A-Za-z0-9_.~-]+=)[^&\s#]*/gu, "$1<redacted>");
 }
 
 prepareOnlineE2eProcessEnvironment();
@@ -118,6 +118,7 @@ export const config: WebdriverIO.Config = {
       TZAP_E2E_ENV: process.env.TZAP_E2E_ENV!,
       TZAP_E2E_ACCOUNT_STATE_ROOT: process.env.TZAP_E2E_ACCOUNT_STATE_ROOT!,
       TZAP_E2E_SECURE_STORE_NAMESPACE: process.env.TZAP_E2E_SECURE_STORE_NAMESPACE!,
+      TZAP_E2E_ACCOUNT_STATE_ROOT_REUSE: "1",
     },
   }]],
   capabilities: [tauriCapabilities],

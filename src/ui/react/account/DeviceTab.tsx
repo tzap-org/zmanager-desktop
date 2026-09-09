@@ -1,5 +1,6 @@
 import { Laptop2, AlertTriangle } from "lucide-react";
 import { Button } from "../../components/ui/button";
+import { useState } from "react";
 import { useZManagerActions, useZManagerSnapshot } from "../AppProviders";
 import { InventorySection } from "./InventorySection";
 
@@ -7,6 +8,7 @@ export function DeviceTab() {
   const fullSnapshot = useZManagerSnapshot();
   const snapshot = fullSnapshot.account;
   const actions = useZManagerActions();
+  const [retirementConfirmationOpen, setRetirementConfirmationOpen] = useState(false);
   const hostedEnvironment = fullSnapshot.preferences.tzapEnvironment;
   const canRetireHostedDevice = snapshot.authStatus === "signedIn" && snapshot.capabilities.auth === "handoff_exchange";
   const isRetirementPending = snapshot.lifecycleOperation === "retireDevice"
@@ -93,19 +95,39 @@ export function DeviceTab() {
             </div>
           </div>
 
-          <Button
-            variant="destructive"
-            className="w-full text-xs shadow"
-            disabled={snapshot.busy || !canRetireHostedDevice}
-            onClick={() => {
-              if (window.confirm("Are you sure you want to retire this device? This action cannot be undone.")) {
-                actions.handleAccountIntent({ type: "retireDevice" });
-              }
-            }}
-          >
-            <Laptop2 className="mr-1.5 size-3.5" />
-            {snapshot.busy ? "Retiring Hosted Device…" : canRetireHostedDevice ? "Retire Hosted Device" : "Sign in to retire device"}
-          </Button>
+          {retirementConfirmationOpen ? (
+            <div className="grid gap-3 rounded-lg border border-red-300 bg-red-100/70 p-3 text-xs text-red-950 dark:border-red-800 dark:bg-red-950/50 dark:text-red-100" role="alert">
+              <strong>Retire this hosted device?</strong>
+              <span className="text-[11px] leading-relaxed">This cannot be undone. Affected hosted signing certificates will stop signing; local key material and archives remain available.</span>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  className="h-7 text-[11px]"
+                  disabled={snapshot.busy}
+                  onClick={() => {
+                    setRetirementConfirmationOpen(false);
+                    actions.handleAccountIntent({ type: "retireDevice" });
+                  }}
+                >
+                  Confirm Retire
+                </Button>
+                <Button variant="secondary" size="sm" className="h-7 text-[11px]" onClick={() => setRetirementConfirmationOpen(false)}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button
+              variant="destructive"
+              className="w-full text-xs shadow"
+              disabled={snapshot.busy || !canRetireHostedDevice}
+              onClick={() => setRetirementConfirmationOpen(true)}
+            >
+              <Laptop2 className="mr-1.5 size-3.5" />
+              {snapshot.busy ? "Retiring Hosted Device…" : canRetireHostedDevice ? "Retire Hosted Device" : "Sign in to retire device"}
+            </Button>
+          )}
           {!canRetireHostedDevice ? (
             <p className="text-[11px] leading-relaxed text-red-800/80 dark:text-red-300/80">
               Hosted sign-in is required before the server can retire this device.

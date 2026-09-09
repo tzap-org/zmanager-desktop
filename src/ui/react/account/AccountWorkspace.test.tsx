@@ -36,6 +36,8 @@ describe("AccountWorkspace", () => {
     expect(html).toContain(
       "Local offline mode · Encryption &amp; signing identities operational",
     );
+    expect(html).toContain('data-account-environment="prod"');
+    expect(html).toContain("Environment: Production");
     expect(html).not.toContain("Authentication: launch only");
     expect(html).toContain("Create local self-signed identity");
     expect(html).toContain("Import existing P12/PFX identity");

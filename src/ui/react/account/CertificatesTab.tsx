@@ -11,6 +11,7 @@ export function CertificatesTab() {
   const preferences = fullSnapshot.preferences;
   const actions = useZManagerActions();
   const hostedEnvironment = preferences.tzapEnvironment;
+  const isSignedIn = snapshot.authStatus === "signedIn";
 
   const [identityName, setIdentityName] = useState("TZAP Signing Identity");
   const [identityImportLabel, setIdentityImportLabel] = useState("");
@@ -19,6 +20,7 @@ export function CertificatesTab() {
   const hostedCertificates = snapshot.certificates.filter((certificate) => certificate.identityType === "hosted" && certificate.state === "active");
   const canManageHostedCertificates = snapshot.authStatus === "signedIn" && snapshot.capabilities.enrollment === "available";
   const canLaunchHostedAuth = snapshot.capabilities.auth === "launch_only" || snapshot.capabilities.auth === "handoff_exchange";
+  const showHostedAuthAction = hostedCertificates.length === 0 || (!isSignedIn && canLaunchHostedAuth);
   const formatExpiry = (unixSeconds: number) => unixSeconds > 0
     ? new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date(unixSeconds * 1000))
     : "Unknown";
@@ -40,7 +42,7 @@ export function CertificatesTab() {
                 Hosted certificates are account-backed and remain usable offline while their cached certificate is valid. A fresh sign-in is required for enrollment and renewal.
               </p>
             </div>
-            {hostedCertificates.length === 0 ? (
+            {showHostedAuthAction ? (
               <Button
                 className="shrink-0 bg-blue-600 text-xs text-white shadow hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-500"
                 disabled={snapshot.busy || (!canManageHostedCertificates && !canLaunchHostedAuth)}
@@ -49,7 +51,9 @@ export function CertificatesTab() {
                   : actions.handleAccountIntent({ type: "beginHostedAuth", environment: hostedEnvironment })}
               >
                 {canManageHostedCertificates ? <Award className="mr-1.5 size-3.5" /> : <ExternalLink className="mr-1.5 size-3.5" />}
-                {canManageHostedCertificates ? "Enroll this device" : canLaunchHostedAuth ? "Sign in to enroll" : "Hosted enrollment unavailable"}
+                {canManageHostedCertificates ? "Enroll this device" : canLaunchHostedAuth
+                  ? hostedCertificates.length > 0 ? "Sign in to manage" : "Sign in to enroll"
+                  : "Hosted enrollment unavailable"}
               </Button>
             ) : null}
           </div>
@@ -60,6 +64,10 @@ export function CertificatesTab() {
                 : canLaunchHostedAuth
                   ? "Enrollment is unavailable until the hosted session is active."
                   : "Hosted enrollment is unavailable until the hosted-auth security and OAuth registration gates are approved."}
+            </p>
+          ) : !isSignedIn && canLaunchHostedAuth ? (
+            <p className="text-[11px] font-medium text-blue-800 dark:text-blue-200">
+              Sign in to manage or renew the hosted identity on this device.
             </p>
           ) : null}
         </section>
