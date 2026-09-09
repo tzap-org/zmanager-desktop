@@ -507,6 +507,9 @@ fn map_lifecycle_error(error: TzapCertificateLifecycleError) -> CommandErrorDto 
         TzapCertificateLifecycleError::RenewalPendingApproval => account_error("approval_required", "Certificate renewal is awaiting device approval"),
         TzapCertificateLifecycleError::DeviceLinkagePending => account_error("device_linkage_pending", "Device linkage is pending"),
         TzapCertificateLifecycleError::DeviceLinkageConflict => account_error("device_linkage_conflict", "Device linkage conflicts with the selected account"),
+        TzapCertificateLifecycleError::RevocationSyncFailed => {
+            account_error("account_lifecycle_revocation_sync_failed", "Hosted device revocation could not be synchronized")
+        }
         TzapCertificateLifecycleError::ActiveCertificateExists => {
             account_error("active_certificate_exists", "The hosted service already has an active certificate for this device")
         }
@@ -2448,6 +2451,7 @@ mod tests {
         let cases = [
             (TzapCertificateLifecycleError::ActiveCertificateExists, "active_certificate_exists"),
             (TzapCertificateLifecycleError::DeviceLinkagePending, "device_linkage_pending"),
+            (TzapCertificateLifecycleError::RevocationSyncFailed, "account_lifecycle_revocation_sync_failed"),
             (TzapCertificateLifecycleError::CertificateNotFound, "account_certificate_not_found"),
             (TzapCertificateLifecycleError::CertificateNotRenewable, "account_certificate_not_renewable"),
             (TzapCertificateLifecycleError::RenewalTargetMismatch, "account_renewal_target_mismatch"),
