@@ -25,6 +25,7 @@ test("Windows build entry points keep local E2E on staging and production explic
   const packageWorkflow = readFileSync(resolve(repositoryRoot, ".github/workflows/package.yml"), "utf8");
   const releaseWorkflow = readFileSync(resolve(repositoryRoot, ".github/workflows/release.yml"), "utf8");
   const standaloneRunner = readFileSync(resolve(repositoryRoot, "scripts/test-windows-standalone-staging.ps1"), "utf8");
+  const standaloneDebugConfig = JSON.parse(readFileSync(resolve(repositoryRoot, "src-tauri/tauri.standalone-debug.conf.json"), "utf8"));
   const browserObserver = readFileSync(resolve(repositoryRoot, "scripts/observe-windows-default-browser.ps1"), "utf8");
   const protocolProbe = readFileSync(resolve(repositoryRoot, "scripts/test-windows-protocol-registration.ps1"), "utf8");
   const onlineSpec = readFileSync(resolve(repositoryRoot, "e2e/tauri/online-account.spec.ts"), "utf8");
@@ -50,6 +51,10 @@ test("Windows build entry points keep local E2E on staging and production explic
   assert.match(standaloneRunner, /(?:--bundles nsis|"--bundles"[\s\S]*?"nsis")/u);
   assert.match(standaloneRunner, /ReleaseArtifact/u);
   assert.match(standaloneRunner, /tsx e2e\/tauri\/release-artifact-smoke\.ts/u);
+  assert.match(standaloneRunner, /test:gui:run -- --spec e2e\/tauri\/online-account\.spec\.ts/u);
+  assert.match(standaloneRunner, /tauri\.standalone-debug\.conf\.json/u);
+  assert.equal(standaloneDebugConfig.app.withGlobalTauri, true);
+  assert.equal(standaloneDebugConfig.build.beforeBuildCommand, "npm run build -- --mode gui");
   assert.match(standaloneRunner, /test-windows-protocol-registration\.ps1/u);
   assert.match(standaloneRunner, /uninstall\.exe/u);
   assert.match(standaloneRunner, /zmanager-diagnostics\.log/u);
@@ -62,13 +67,11 @@ test("Windows build entry points keep local E2E on staging and production explic
   assert.match(browserObserver, /ObservedAtUnixMs/u);
   assert.match(browserObserver, /production_host_observed/u);
   assert.match(protocolProbe, /tzap\\shell\\open\\command/u);
-  assert.match(onlineSpec, /starts cold from the registered protocol callback/u);
-  assert.match(onlineSpec, /stopWindowsInstalledApplication/u);
   assert.match(onlineSpec, /countWindowsInstalledApplicationProcesses/u);
   assert.match(onlineSpec, /openRegisteredProtocol\(url\)/u);
-  assert.match(onlineSpec, /wrong-state-1234567890/u);
-  assert.match(onlineSpec, /TZAP_E2E_FORCE_SESSION_EXPIRED/u);
+  assert.match(onlineSpec, /callbackUrl\.pathname, "\/callback"/u);
   assert.doesNotMatch(onlineSpec, /spawn\(/u);
+  assert.match(standaloneRunner, /onlineExitCode[\s\S]*release-artifact-smoke\.ts/u);
   assert.match(releaseDriver, /observeWindowsDefaultBrowserNavigation/u);
   assert.match(releaseDriver, /openRegisteredProtocol/u);
   assert.match(releaseDriver, /captureHostedCallback/u);

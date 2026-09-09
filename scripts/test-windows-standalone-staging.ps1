@@ -155,6 +155,7 @@ if (-not (Test-Path -LiteralPath $tauriCli -PathType Leaf)) {
 }
 
 $product = Get-Content -LiteralPath $tauriConfigPath -Raw | ConvertFrom-Json
+$standaloneDebugConfigPath = Join-Path $repoRoot "src-tauri\tauri.standalone-debug.conf.json"
 $runId = $env:TZAP_E2E_RUN_ID
 if ([string]::IsNullOrWhiteSpace($runId)) {
     $runId = "standalone-$([Guid]::NewGuid().ToString('N'))"
@@ -198,8 +199,15 @@ $exitCode = 1
 
 try {
     $configuration = if ($ReleaseArtifact) { "release" } else { "debug" }
-    $buildArgs = @("build", "--ci", "--no-sign", "--bundles", "nsis", "--config", $tauriConfigPath, "--target", $targetTriple)
-    if (-not $ReleaseArtifact) { $buildArgs += "--debug" }
+    # Tauri always loads tauri.conf.json as the base configuration. Pass only
+    # the standalone overlay here so its app section is merged into that base
+    # instead of re-supplying the base file as another custom configuration.
+    $buildArgs = @( "build", "--ci", "--no-sign", "--bundles", "nsis" )
+    if (-not $ReleaseArtifact) {
+        $buildArgs += @("--config", $standaloneDebugConfigPath)
+        $buildArgs += "--debug"
+    }
+    $buildArgs += @("--target", $targetTriple)
     Write-Host "Building the staging $configuration product configuration: $targetTriple"
     & $node.Source $tauriCli @buildArgs
     if ($LASTEXITCODE -ne 0) {
@@ -252,9 +260,22 @@ try {
     if ($ReleaseArtifact) {
         & $npm.Source exec -- tsx e2e/tauri/release-artifact-smoke.ts
     } else {
-        & $npm.Source run test:gui:run
+        # WDIO owns the warm account and archive assertions. The installed
+        # artifact smoke owns process-stop/process-restart boundaries because
+        # stopping the app also stops the embedded WebDriver server; a WDIO
+        # session cannot be reused across a cold restart.
+        & $npm.Source run test:gui:run -- --spec e2e/tauri/online-account.spec.ts
+        $onlineExitCode = $LASTEXITCODE
+        if ($onlineExitCode -eq 0) {
+            & $npm.Source exec -- tsx e2e/tauri/release-artifact-smoke.ts
+            $exitCode = $LASTEXITCODE
+        } else {
+            $exitCode = $onlineExitCode
+        }
     }
-    $exitCode = $LASTEXITCODE
+    if ($ReleaseArtifact) {
+        $exitCode = $LASTEXITCODE
+    }
 } catch {
     Write-Error $_
     $exitCode = 1

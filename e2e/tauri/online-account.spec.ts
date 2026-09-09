@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { chromium } from "@playwright/test";
 
@@ -10,7 +10,7 @@ import type {
   VerifyTzapCertificateResponse,
 } from "../../src/api/types";
 import { captureHostedCallback } from "./helpers/hostedCallback.ts";
-import { countWindowsInstalledApplicationProcesses, observeWindowsDefaultBrowserNavigation, openRegisteredProtocol, runWindowsAccountUiAction, startWindowsInstalledApplication, stopWindowsInstalledApplication } from "./helpers/registeredProtocol.ts";
+import { countWindowsInstalledApplicationProcesses, observeWindowsDefaultBrowserNavigation, openRegisteredProtocol, runWindowsAccountUiAction } from "./helpers/registeredProtocol.ts";
 import { runJobInTaskWindow } from "./helpers/archiveCommands.ts";
 import { assertHashManifestEqual, assertNoSecrets, hashTree, writeArchiveEvidence } from "./helpers/tzapArtifacts.ts";
 
@@ -165,9 +165,9 @@ async function clearTestIdentityMaterial(): Promise<boolean> {
     }
     return cleanupComplete;
   } catch {
-    // The WDIO connection is unavailable after the cold-start test replaces
-    // its process. Finish cleanup through the same external Account UI used by
-    // the release-artifact lane so the staging device is still retired.
+    // If the WDIO connection is unavailable, finish cleanup through the same
+    // external Account UI used by the installed-artifact lane so the staging
+    // device is still retired.
     if (process.platform !== "win32" || !process.env.ZMANAGER_GUI_APP_PATH) return false;
     try {
       await runWindowsAccountUiAction("OpenAccount");
@@ -234,7 +234,7 @@ describe("Online TZAP account lifecycle", () => {
     recordBoundary("login", "passed");
     const callbackUrl = new URL(callback);
     assert.equal(callbackUrl.protocol, "tzap:");
-    assert.equal(callbackUrl.pathname, "/auth/callback");
+    assert.equal(callbackUrl.pathname, "/callback");
     const snapshot = await waitForSignedIn();
     recordBoundary("protocolRegistration", "passed");
     recordBoundary("warmCallback", "passed");
@@ -289,77 +289,4 @@ describe("Online TZAP account lifecycle", () => {
     writeArchiveEvidence({ artifactDir: runArtifactDir, archivePath, sourceManifest, signerCertificateSha256: hosted.certificateSha256, runId: process.env.TZAP_E2E_RUN_ID ?? "unknown" });
   });
 
-  it("starts cold from the registered protocol callback and completes the pending exchange", async () => {
-    assert(process.env.ZMANAGER_GUI_APP_PATH, "installed application path is required for cold callback testing");
-    await invoke("account_forget");
-    const launchUrl = await clickHostedSignInAndObserveBrowser();
-    const callback = await completeBrowserAuth(launchUrl, false);
-    const wrongStateCallback = new URL(callback);
-    wrongStateCallback.searchParams.set("state", "wrong-state-1234567890");
-    await openDeepLink(wrongStateCallback.toString());
-    await new Promise((resolve) => setTimeout(resolve, 750));
-    const pendingAfterWrongState = await invoke<AccountSnapshotDto>("account_snapshot");
-    assert.equal(pendingAfterWrongState.authStatus, "pending", "a mismatched callback state must not consume the pending flow");
-    const logPath = path.join(path.dirname(process.env.ZMANAGER_GUI_APP_PATH), "logs", "zmanager-diagnostics.log");
-    const callbackLogOffset = existsSync(logPath) ? statSync(logPath).size : 0;
-    await stopWindowsInstalledApplication(process.env.ZMANAGER_GUI_APP_PATH);
-    await openDeepLink(callback);
-
-    await new Promise<void>((resolve, reject) => {
-      const deadline = Date.now() + 60_000;
-      const timer = setInterval(() => {
-        try {
-          const contents = readFileSync(logPath, "utf8").slice(callbackLogOffset);
-          if (contents.includes('"name":"hostedAuthCallbackObserved"') && contents.includes('"name":"hostedAuthCompleted"')) {
-            clearInterval(timer);
-            resolve();
-          } else if (Date.now() >= deadline) {
-            clearInterval(timer);
-            reject(new Error("cold callback did not produce sanitized startup and signed-in diagnostic events"));
-          }
-        } catch (error) {
-          if (Date.now() >= deadline) {
-            clearInterval(timer);
-            reject(error);
-          }
-        }
-      }, 500);
-    });
-
-    await stopWindowsInstalledApplication(process.env.ZMANAGER_GUI_APP_PATH);
-    const restartLogOffset = existsSync(logPath) ? statSync(logPath).size : 0;
-    await startWindowsInstalledApplication(process.env.ZMANAGER_GUI_APP_PATH);
-    await new Promise<void>((resolve, reject) => {
-      const deadline = Date.now() + 60_000;
-      const timer = setInterval(() => {
-        try {
-          const contents = readFileSync(logPath, "utf8").slice(restartLogOffset);
-          if (contents.includes('"name":"accountSessionRestored"')) {
-            clearInterval(timer);
-            resolve();
-          } else if (Date.now() >= deadline) {
-            clearInterval(timer);
-            reject(new Error("restarted installed application did not restore the persisted signed-in session"));
-          }
-        } catch (error) {
-          if (Date.now() >= deadline) {
-            clearInterval(timer);
-            reject(error);
-          }
-        }
-      }, 500);
-    });
-    recordBoundary("coldCallback", "passed");
-    recordBoundary("persistence", "passed");
-
-    process.env.TZAP_E2E_FORCE_SESSION_EXPIRED = "1";
-    try {
-      await stopWindowsInstalledApplication(process.env.ZMANAGER_GUI_APP_PATH);
-      await startWindowsInstalledApplication(process.env.ZMANAGER_GUI_APP_PATH);
-      await runWindowsAccountUiAction("OpenAccount");
-      await runWindowsAccountUiAction("AssertSignedOut");
-    } finally {
-      delete process.env.TZAP_E2E_FORCE_SESSION_EXPIRED;
-    }
-  });
 });

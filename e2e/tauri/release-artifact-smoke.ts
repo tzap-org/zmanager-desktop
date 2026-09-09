@@ -82,6 +82,15 @@ async function completeBrowserAuth(launchUrl: string): Promise<string> {
   }
 }
 
+async function signInThroughInstalledApplication(): Promise<void> {
+  const browserObservation = observeWindowsDefaultBrowserNavigation("https://staging.tzap.org");
+  await runUiAction("SignIn");
+  const observed = await browserObservation;
+  assert.ok(["/auth/launch", "/auth/login"].includes(observed.path), `unexpected staging auth path: ${observed.path}`);
+  const callback = await completeBrowserAuth(observed.launchUrl);
+  await openRegisteredProtocol(callback);
+}
+
 async function waitForLog(offset: number, predicates: string[], timeoutMs = 60_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -180,6 +189,12 @@ async function main(): Promise<void> {
       delete process.env.TZAP_E2E_FORCE_SESSION_EXPIRED;
     }
 
+    // The Device tab is intentionally unavailable while signed out. Re-authenticate
+    // after the forced-expiry assertion so cleanup can retire the hosted device.
+    const cleanupOffset = existsSync(logPath) ? statSync(logPath).size : 0;
+    await signInThroughInstalledApplication();
+    await waitForLog(cleanupOffset, ["\"name\":\"hostedAuthCompleted\""]);
+    await runUiAction("AssertSignedIn");
     await runUiAction("OpenDevice");
     await runUiAction("Retire");
     await runUiAction("ConfirmRetire");
