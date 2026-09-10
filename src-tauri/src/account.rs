@@ -1522,7 +1522,7 @@ fn sync_contact_snapshot_inner(root: &Path, runtime: &AccountRuntime) -> Result<
 fn rollback_contact_sync_failure(root: &Path, original_catalog: &TzapIdentityCatalog, failure: CommandErrorDto) -> CommandErrorDto {
     let mut catalog_store = FileTzapIdentityCatalogStore::new(root);
     let rollback_result = catalog_store.load_catalog(ACCOUNT_KEY).and_then(|current| {
-        let current = current.ok_or_else(|| zmanager_core::identity_catalog::TzapIdentityCatalogError::InvalidCatalog { field: "account_catalog" })?;
+        let current = current.ok_or(zmanager_core::identity_catalog::TzapIdentityCatalogError::InvalidCatalog { field: "account_catalog" })?;
         catalog_store.save_catalog(ACCOUNT_KEY, Some(current.revision), original_catalog.clone())
     });
     match rollback_result {

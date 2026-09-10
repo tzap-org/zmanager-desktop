@@ -114,8 +114,29 @@ jobs:
         shell: pwsh
         run: .\scripts\ensure-sibling-repos.ps1
 
-      - name: Run staging Windows standalone E2E
+      - name: Check staging E2E credentials
         if: matrix.flavor == 'windows'
+        id: staging_credentials
+        shell: pwsh
+        env:
+          TZAP_DESKTOP_STAGING_CLIENT_ID: ${{ secrets.TZAP_DESKTOP_STAGING_CLIENT_ID }}
+          TZAP_E2E_USERNAME: ${{ secrets.TZAP_E2E_USERNAME }}
+          TZAP_E2E_PASSWORD: ${{ secrets.TZAP_E2E_PASSWORD }}
+        run: |
+          $missing = @()
+          if ([string]::IsNullOrWhiteSpace($env:TZAP_DESKTOP_STAGING_CLIENT_ID)) { $missing += 'TZAP_DESKTOP_STAGING_CLIENT_ID' }
+          if ([string]::IsNullOrWhiteSpace($env:TZAP_E2E_USERNAME)) { $missing += 'TZAP_E2E_USERNAME' }
+          if ([string]::IsNullOrWhiteSpace($env:TZAP_E2E_PASSWORD)) { $missing += 'TZAP_E2E_PASSWORD' }
+          if ($missing.Count -eq 0) {
+            'configured=true' >> $env:GITHUB_OUTPUT
+            Write-Host 'Staging Windows E2E credentials are configured.'
+          } else {
+            'configured=false' >> $env:GITHUB_OUTPUT
+            Write-Warning "Skipping staging Windows E2E; missing repository secrets: $($missing -join ', ')."
+          }
+
+      - name: Run staging Windows standalone E2E
+        if: matrix.flavor == 'windows' && steps.staging_credentials.outputs.configured == 'true'
         shell: pwsh
         env:
           TZAP_DESKTOP_STAGING_CLIENT_ID: ${{ secrets.TZAP_DESKTOP_STAGING_CLIENT_ID }}
@@ -127,7 +148,7 @@ jobs:
         run: .\scripts\test-windows-standalone-staging.ps1 -Architecture ${{ matrix.arch }}
 
       - name: Upload staging standalone E2E evidence
-        if: failure() && matrix.flavor == 'windows'
+        if: failure() && matrix.flavor == 'windows' && steps.staging_credentials.outputs.configured == 'true'
         uses: actions/upload-artifact@v6
         with:
           name: zmanager-standalone-e2e-${{ matrix.arch }}
@@ -135,7 +156,7 @@ jobs:
           path: ${{ runner.temp }}\zmanager-standalone-e2e-${{ github.run_id }}-${{ matrix.arch }}-*
 
       - name: Run staging Windows release-artifact smoke
-        if: matrix.flavor == 'windows'
+        if: matrix.flavor == 'windows' && steps.staging_credentials.outputs.configured == 'true'
         shell: pwsh
         env:
           TZAP_DESKTOP_STAGING_CLIENT_ID: ${{ secrets.TZAP_DESKTOP_STAGING_CLIENT_ID }}
@@ -146,7 +167,7 @@ jobs:
         run: .\scripts\test-windows-standalone-staging.ps1 -Architecture ${{ matrix.arch }} -ReleaseArtifact
 
       - name: Upload staging release-artifact E2E evidence
-        if: failure() && matrix.flavor == 'windows'
+        if: failure() && matrix.flavor == 'windows' && steps.staging_credentials.outputs.configured == 'true'
         uses: actions/upload-artifact@v6
         with:
           name: zmanager-standalone-release-e2e-${{ matrix.arch }}

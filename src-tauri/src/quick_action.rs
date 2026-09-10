@@ -720,13 +720,10 @@ mod tests {
 
     #[test]
     fn hosted_auth_callback_arguments_enter_the_native_inbox_contract() {
-        let event = hosted_auth_callback_event_from_args(
-            [
-                OsString::from("C:/Program Files/ZManager/zmanager-desktop.exe"),
-                OsString::from("tzap://auth/callback?state=state-1234567890&result=completed&handoff_code=handoff-code-1234567890"),
-            ]
-            .into_iter(),
-        )
+        let event = hosted_auth_callback_event_from_args([
+            OsString::from("C:/Program Files/ZManager/zmanager-desktop.exe"),
+            OsString::from("tzap://auth/callback?state=state-1234567890&result=completed&handoff_code=handoff-code-1234567890"),
+        ])
         .expect("callback argument should be recognized");
         assert_eq!(event.kind, NativeInboundEventKind::HostedAuthCallback);
         let NativeInboundPayload::HostedAuthCallback(payload) = event.payload else {

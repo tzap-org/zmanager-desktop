@@ -474,10 +474,10 @@ fn start_create_internal_with_resolver(
     if request.tzap_volume_loss_tolerance.unwrap_or(0) > 0 && requested_volume_size.is_none() && requested_volume_count.is_none() {
         return Err(CommandErrorDto::invalid_request("volume-loss tolerance requires an active split mode"));
     }
-    if let Some(count) = requested_volume_count {
-        if u32::from(request.tzap_volume_loss_tolerance.unwrap_or(0)) >= count {
-            return Err(CommandErrorDto::invalid_request("volume-loss tolerance must be less than volumeCount"));
-        }
+    if let Some(count) = requested_volume_count
+        && u32::from(request.tzap_volume_loss_tolerance.unwrap_or(0)) >= count
+    {
+        return Err(CommandErrorDto::invalid_request("volume-loss tolerance must be less than volumeCount"));
     }
 
     let reservation = if request.replace_existing && request.destination_collision_strategy != DestinationCollisionStrategyDto::Rename {
@@ -878,7 +878,7 @@ pub fn verify_tzap_certificate(request: crate::dto::VerifyTzapCertificateRequest
         let mut status_response = None;
         let status_base_url = hosted_status_base_url(request.environment.as_deref())?;
         let verification = if let Some(signer) = &offline.signer {
-            let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|error| CommandErrorDto::operation_failed(error))?;
+            let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(CommandErrorDto::operation_failed)?;
             let status_client = TzapStatusClient::new(status_base_url, &transport);
             match status_client.status_by_fingerprint(&signer.certificate_sha256_hex) {
                 Ok(status) => {

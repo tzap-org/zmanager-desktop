@@ -32,13 +32,11 @@ fn account_scope() -> String {
     let test_mode = option_env!("ZMANAGER_TZAP_BUILD_ENV") == Some("staging")
         && std::env::var("ZMANAGER_GUI_TEST_MODE").as_deref() == Ok("1")
         && std::env::var("TZAP_E2E_ENV").as_deref() == Ok("staging");
-    if test_mode {
-        if let Ok(scope) = std::env::var("TZAP_E2E_SECURE_STORE_NAMESPACE") {
-            if !scope.is_empty() && scope.len() <= 128 && scope.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')) {
-                return scope;
-            }
-            panic!("TZAP_E2E_SECURE_STORE_NAMESPACE must be a non-empty, separator-free test namespace");
+    if test_mode && let Ok(scope) = std::env::var("TZAP_E2E_SECURE_STORE_NAMESPACE") {
+        if !scope.is_empty() && scope.len() <= 128 && scope.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_')) {
+            return scope;
         }
+        panic!("TZAP_E2E_SECURE_STORE_NAMESPACE must be a non-empty, separator-free test namespace");
     }
     "default".to_owned()
 }
