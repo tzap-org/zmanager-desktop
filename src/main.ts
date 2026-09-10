@@ -20,7 +20,7 @@ if (disposableTaskSurface) {
   document.querySelector<HTMLElement>("#quick-action-loading")?.remove();
 }
 
-if (import.meta.env.MODE === "gui" && !disposableTaskSurface) {
+if (import.meta.env.MODE === "gui") {
   await import("@wdio/tauri-plugin");
 }
 

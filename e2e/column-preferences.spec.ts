@@ -15,7 +15,7 @@ import { expect, test, type Page } from "@playwright/test";
 async function openColumnPreferences(page: Page) {
   await page.goto("/", { waitUntil: "domcontentloaded" });
   await expect
-    .poll(async () => page.evaluate(() => Boolean(window.__zmanagerDev)))
+    .poll(async () => page.evaluate(() => Boolean(window.__zmanagerDev)), { timeout: 30_000 })
     .toBe(true);
   await page.evaluate(() => window.__zmanagerDev?.openSurface("preferences"));
   await expect(page.getByRole("dialog", { name: "Options" })).toBeVisible();

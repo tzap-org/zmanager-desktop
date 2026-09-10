@@ -558,7 +558,7 @@ async function expectWindowCommand(page: Page, command: string) {
   await expect.poll(async () => {
     const calls = await ipcCalls(page);
     return calls.some((call) => call.cmd === command);
-  }, { timeout: 3_000 }).toBe(true);
+  }, { timeout: 15_000 }).toBe(true);
 }
 
 

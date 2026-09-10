@@ -103,6 +103,8 @@ test("CI gates staging-only native GUI lanes and injects their credentials", () 
   const packageWorkflow = readFileSync(resolve(repositoryRoot, ".github/workflows/package.yml"), "utf8");
   const linuxGuiRunner = readFileSync(resolve(repositoryRoot, "scripts/test-linux-gui.sh"), "utf8");
   const credentialCheck = readFileSync(resolve(repositoryRoot, "scripts/check-staging-e2e-credentials.mjs"), "utf8");
+  const mainEntry = readFileSync(resolve(repositoryRoot, "src/main.ts"), "utf8");
+  const wdioConfig = readFileSync(resolve(repositoryRoot, "wdio.conf.ts"), "utf8");
 
   assert.match(packageWorkflow, /name: Check staging E2E credentials[\s\S]*?id: staging_credentials[\s\S]*?TZAP_DESKTOP_STAGING_CLIENT_ID: \$\{\{ secrets\.TZAP_DESKTOP_STAGING_CLIENT_ID \}\}[\s\S]*?TZAP_E2E_USERNAME: \$\{\{ secrets\.TZAP_E2E_USERNAME \}\}[\s\S]*?TZAP_E2E_PASSWORD: \$\{\{ secrets\.TZAP_E2E_PASSWORD \}\}[\s\S]*?check-staging-e2e-credentials\.mjs/u);
   assert.match(packageWorkflow, /name: Run native macOS GUI tests[\s\S]*?if: matrix\.flavor == 'macos' && steps\.staging_credentials\.outputs\.configured == 'true'[\s\S]*?TZAP_E2E_STAGING_CALLBACK_ADAPTER: '1'/u);
@@ -113,4 +115,7 @@ test("CI gates staging-only native GUI lanes and injects their credentials", () 
   assert.match(linuxGuiRunner, /export VITE_TZAP_BUILD_ENV=staging/u);
   assert.match(linuxGuiRunner, /export ZMANAGER_TZAP_BUILD_ENV=staging/u);
   assert.match(linuxGuiRunner, /export ZMANAGER_TZAP_SERVER_BASE_URL=https:\/\/staging\.tzap\.org/u);
+  assert.match(mainEntry, /if \(import\.meta\.env\.MODE === "gui"\) \{[\s\S]*?await import\("@wdio\/tauri-plugin"\)/u);
+  assert.doesNotMatch(mainEntry, /MODE === "gui" && !disposableTaskSurface/u);
+  assert.match(wdioConfig, /TZAP_E2E_STAGING_CALLBACK_ADAPTER: process\.env\.TZAP_E2E_STAGING_CALLBACK_ADAPTER/u);
 });
