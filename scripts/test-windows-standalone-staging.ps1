@@ -147,6 +147,12 @@ if ($LASTEXITCODE -ne 0) {
     -Triplet $Triplet `
     -InstallClang:$InstallMissing
 
+$shellExtensionBuild = Join-Path $PSScriptRoot "build-windows-shell-extension.ps1"
+& powershell -ExecutionPolicy Bypass -File $shellExtensionBuild -Architecture $resolvedArchitecture
+if ($LASTEXITCODE -ne 0) {
+    throw "Windows shell extension build failed with exit code $LASTEXITCODE."
+}
+
 $node = Get-Command "node.exe" -ErrorAction Stop
 $tauriCli = Join-Path $repoRoot "node_modules\@tauri-apps\cli\tauri.js"
 $tauriConfigPath = Join-Path $repoRoot "src-tauri\tauri.conf.json"

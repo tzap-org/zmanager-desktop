@@ -5,6 +5,6 @@
     "withGlobalTauri": true
   },
   "build": {
-    "beforeBuildCommand": "npm run build -- --mode gui"
+    "beforeBuildCommand": "npm run build:gui"
   }
 }

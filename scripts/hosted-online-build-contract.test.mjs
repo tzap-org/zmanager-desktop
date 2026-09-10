@@ -25,6 +25,7 @@ test("Windows build entry points keep local E2E on staging and production explic
   const packageWorkflow = readFileSync(resolve(repositoryRoot, ".github/workflows/package.yml"), "utf8");
   const releaseWorkflow = readFileSync(resolve(repositoryRoot, ".github/workflows/release.yml"), "utf8");
   const standaloneRunner = readFileSync(resolve(repositoryRoot, "scripts/test-windows-standalone-staging.ps1"), "utf8");
+  const packageManifest = JSON.parse(readFileSync(resolve(repositoryRoot, "package.json"), "utf8"));
   const standaloneDebugConfig = JSON.parse(readFileSync(resolve(repositoryRoot, "src-tauri/tauri.standalone-debug.conf.json"), "utf8"));
   const browserObserver = readFileSync(resolve(repositoryRoot, "scripts/observe-windows-default-browser.ps1"), "utf8");
   const protocolProbe = readFileSync(resolve(repositoryRoot, "scripts/test-windows-protocol-registration.ps1"), "utf8");
@@ -53,8 +54,10 @@ test("Windows build entry points keep local E2E on staging and production explic
   assert.match(standaloneRunner, /tsx e2e\/tauri\/release-artifact-smoke\.ts/u);
   assert.match(standaloneRunner, /test:gui:run -- --spec e2e\/tauri\/online-account\.spec\.ts/u);
   assert.match(standaloneRunner, /tauri\.standalone-debug\.conf\.json/u);
+  assert.match(standaloneRunner, /build-windows-shell-extension\.ps1[\s\S]*-Architecture \$resolvedArchitecture/u);
   assert.equal(standaloneDebugConfig.app.withGlobalTauri, true);
-  assert.equal(standaloneDebugConfig.build.beforeBuildCommand, "npm run build -- --mode gui");
+  assert.equal(standaloneDebugConfig.build.beforeBuildCommand, "npm run build:gui");
+  assert.equal(packageManifest.scripts["build:gui"], "npm run check:generated-contracts && npm run check:types && vite build --mode gui && node scripts/check-quick-action-bundle.mjs");
   assert.match(standaloneRunner, /test-windows-protocol-registration\.ps1/u);
   assert.match(standaloneRunner, /uninstall\.exe/u);
   assert.match(standaloneRunner, /zmanager-diagnostics\.log/u);
