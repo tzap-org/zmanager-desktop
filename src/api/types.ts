@@ -889,6 +889,7 @@ export type LocalSendDiscoverRequest = {
   port?: number;
   https?: boolean;
   timeoutMs?: number;
+  interfaceIps?: string[];
 };
 
 export type LocalSendStartReceiverRequest = {
