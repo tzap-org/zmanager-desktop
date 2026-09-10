@@ -343,8 +343,8 @@ const COMMAND_WRAPPERS = [
   },
   {
     command: "localsend_discover",
-    request: { alias: "ZManager Desktop", timeoutMs: 3000, interfaceIps: [] },
-    call: () => api.runLocalSendDiscover({ alias: "ZManager Desktop", timeoutMs: 3000, interfaceIps: [] }),
+    request: { alias: "ZManager Desktop", timeoutMs: 3000 },
+    call: () => api.runLocalSendDiscover({ alias: "ZManager Desktop", timeoutMs: 3000 }),
   },
   {
     command: "enqueue_share",

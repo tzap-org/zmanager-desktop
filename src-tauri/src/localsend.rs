@@ -356,8 +356,6 @@ pub struct LocalSendDiscoverRequestDto {
     pub https: bool,
     #[serde(default = "default_discover_timeout_ms")]
     pub timeout_ms: u64,
-    #[serde(default)]
-    pub interface_ips: Vec<String>,
 }
 
 fn default_discover_timeout_ms() -> u64 {
@@ -471,8 +469,11 @@ pub async fn localsend_discover(
 ) -> Result<Vec<LocalSendDeviceInfoDto>, CommandErrorDto> {
     let local_send = state.inner().clone();
     tokio::task::spawn_blocking(move || {
-        let LocalSendDiscoverRequestDto { alias, port, https, timeout_ms, interface_ips } = request;
-        let request = zmanager_localsend::DiscoverRequest { alias: local_send.advertised_alias(&alias), port, https, timeout_ms, interface_ips };
+        let LocalSendDiscoverRequestDto { alias, port, https, timeout_ms } = request;
+        // An empty list preserves the desktop request contract while letting
+        // zmanager-localsend resolve the local interfaces through its official
+        // discovery path.
+        let request = zmanager_localsend::DiscoverRequest { alias: local_send.advertised_alias(&alias), port, https, timeout_ms, interface_ips: Vec::new() };
         local_send.registry.discover(request).map(|devices| devices.into_iter().map(Into::into).collect()).map_err(map_localsend_error)
     })
     .await
