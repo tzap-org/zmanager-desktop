@@ -6,6 +6,7 @@ import { chromium } from "@playwright/test";
 
 import { captureHostedCallback } from "./helpers/hostedCallback.ts";
 import { countWindowsInstalledApplicationProcesses, observeWindowsDefaultBrowserNavigation, openRegisteredProtocol, startWindowsInstalledApplication, stopWindowsInstalledApplication } from "./helpers/registeredProtocol.ts";
+import { retryAsync } from "../../src/desktop/retry";
 
 const appPath = process.env.ZMANAGER_GUI_APP_PATH;
 const username = process.env.TZAP_E2E_USERNAME;
@@ -13,6 +14,7 @@ const password = process.env.TZAP_E2E_PASSWORD;
 const artifactDir = path.resolve(process.env.TZAP_E2E_ARTIFACT_DIR ?? path.join(".tmp", "zmanager-release-artifact-smoke"));
 const logPath = appPath ? path.join(path.dirname(appPath), "logs", "zmanager-diagnostics.log") : "";
 const boundaries: Record<string, { status: "passed" | "failed"; detail?: string }> = {};
+const retirementAttempts = 3;
 
 function mark(name: string, status: "passed" | "failed", detail?: string): void {
   boundaries[name] = detail ? { status, detail } : { status };
@@ -27,6 +29,14 @@ function runUiAction(action: string): Promise<void> {
     child.once("error", reject);
     child.once("close", (code) => code === 0 ? resolve() : reject(new Error(`Windows UI Automation action failed: ${action}`)));
   });
+}
+
+async function retireInstalledDeviceWithRetry(): Promise<void> {
+  await retryAsync(async () => {
+    await runUiAction("Retire");
+    await runUiAction("ConfirmRetire");
+    await runUiAction("AssertRetirementComplete");
+  }, retirementAttempts, 2_000);
 }
 
 function captureFailureScreen(): Promise<void> {
@@ -217,9 +227,7 @@ async function main(): Promise<void> {
     await waitForLog(cleanupOffset, ["\"name\":\"hostedAuthCompleted\""]);
     await runUiAction("AssertSignedIn");
     await runUiAction("OpenDevice");
-    await runUiAction("Retire");
-    await runUiAction("ConfirmRetire");
-    await runUiAction("AssertRetirementComplete");
+    await retireInstalledDeviceWithRetry();
     await runUiAction("OpenCertificates");
     await runUiAction("EnsureSignedOut");
     await runUiAction("DeleteIdentity");

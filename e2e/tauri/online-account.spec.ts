@@ -9,6 +9,7 @@ import type {
   AccountSnapshotDto,
   VerifyTzapCertificateResponse,
 } from "../../src/api/types";
+import { retryAsync } from "../../src/desktop/retry";
 import { captureHostedCallback } from "./helpers/hostedCallback.ts";
 import { countInstalledApplicationProcesses, observeDefaultBrowserNavigation, openRegisteredProtocol, runWindowsAccountUiAction } from "./helpers/registeredProtocol.ts";
 import { runJobInTaskWindow } from "./helpers/archiveCommands.ts";
@@ -19,6 +20,7 @@ const runArtifactDir = path.resolve(process.env.TZAP_E2E_ARTIFACT_DIR ?? path.jo
 const username = process.env.TZAP_E2E_USERNAME;
 const password = process.env.TZAP_E2E_PASSWORD;
 const boundaryResults: Record<string, { status: "passed" | "failed"; detail?: string }> = {};
+const retirementAttempts = 3;
 
 function recordBoundary(name: string, status: "passed" | "failed", detail?: string): void {
   boundaryResults[name] = detail ? { status, detail } : { status };
@@ -134,8 +136,10 @@ async function clearTestIdentityMaterial(): Promise<boolean> {
     let cleanupComplete = true;
     if (snapshot.authStatus === "signedIn") {
       try {
-        const retirement = await invoke<AccountLifecycleResultDto>("account_retire_device");
-        cleanupComplete = retirement.outcome === "complete" && cleanupComplete;
+        await retryAsync(async () => {
+          const retirement = await invoke<AccountLifecycleResultDto>("account_retire_device");
+          if (retirement.outcome !== "complete") throw new Error("Hosted device retirement is incomplete.");
+        }, retirementAttempts, 2_000);
       } catch {
         cleanupComplete = false;
       }

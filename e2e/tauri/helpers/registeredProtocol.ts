@@ -4,6 +4,8 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 
+import { raceFirstObservation } from "../../../src/desktop/observationRace";
+
 const execFileAsync = promisify(execFile);
 
 /**
@@ -148,14 +150,28 @@ export async function observeMacOSDefaultBrowserNavigation(
   }
 
   // Firefox does not expose its address bar through the macOS accessibility
-  // tree. Its Places database does record the navigation, so use a read-only
-  // history observer when Firefox is the configured/default browser. The
-  // baseline timestamp prevents an old staging URL from satisfying a new run.
-  if (existsSync("/Applications/Firefox.app")) {
-    const firefoxVisit = await observeFirefoxHistoryNavigation(expectedOrigin, timeoutSeconds);
-    if (firefoxVisit) return firefoxVisit;
+  // tree. Its Places database does record the navigation, so race its
+  // read-only history observer with the accessibility-based observers. A
+  // sequential fallback can consume two full observer timeouts and exceed
+  // the WDIO test timeout when Firefox is installed but is not the default.
+  const attempts = [
+    ...(existsSync("/Applications/Firefox.app")
+      ? [(signal: AbortSignal) => observeFirefoxHistoryNavigation(expectedOrigin, timeoutSeconds, signal)]
+      : []),
+    (signal: AbortSignal) => observeMacOSAppleScriptNavigation(expectedOrigin, timeoutSeconds, signal),
+  ];
+  try {
+    return await raceFirstObservation(attempts);
+  } catch {
+    throw new Error("Default browser navigation was not observed on macOS.");
   }
+}
 
+async function observeMacOSAppleScriptNavigation(
+  expectedOrigin: string,
+  timeoutSeconds: number,
+  signal: AbortSignal,
+): Promise<DefaultBrowserObservation | null> {
   const script = `
 on run argv
   set expectedOrigin to item 1 of argv
@@ -187,22 +203,26 @@ end run
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => { stdout += chunk; });
   const exitCode = await new Promise<number>((resolve, reject) => {
+    const abort = (): void => {
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+    };
+    if (signal.aborted) abort();
+    signal.addEventListener("abort", abort, { once: true });
     child.once("error", reject);
-    child.once("close", (code) => resolve(code ?? 1));
+    child.once("close", (code) => {
+      signal.removeEventListener("abort", abort);
+      resolve(code ?? 1);
+    });
   });
   const launchUrl = stdout.trim().split(/\r?\n/u).filter(Boolean).at(-1) ?? "";
-  if (exitCode !== 0 || !launchUrl) {
-    throw new Error("Default browser navigation was not observed on macOS.");
-  }
+  if (exitCode !== 0 || !launchUrl) return null;
   let parsed: URL;
   try {
     parsed = new URL(launchUrl);
   } catch {
-    throw new Error("The macOS browser observer returned an invalid URL.");
+    return null;
   }
-  if (parsed.origin !== expectedOrigin) {
-    throw new Error("The macOS browser observer returned an unexpected origin.");
-  }
+  if (parsed.origin !== expectedOrigin) return null;
   return {
     status: "observed",
     origin: parsed.origin,
@@ -216,6 +236,7 @@ end run
 async function observeFirefoxHistoryNavigation(
   expectedOrigin: string,
   timeoutSeconds: number,
+  signal: AbortSignal,
 ): Promise<DefaultBrowserObservation | null> {
   const profileRoot = path.join(process.env.HOME ?? "", "Library", "Application Support", "Firefox", "Profiles");
   if (!existsSync(profileRoot)) return null;
@@ -260,6 +281,7 @@ async function observeFirefoxHistoryNavigation(
     const baseline = (await readLatest())?.timestamp ?? 0;
     const deadline = Date.now() + timeoutSeconds * 1000;
     while (Date.now() < deadline) {
+      if (signal.aborted) return null;
       const latest = await readLatest();
       if (latest && latest.timestamp > baseline) {
         try {
