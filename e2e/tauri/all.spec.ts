@@ -9,4 +9,11 @@ import "./macos.spec.ts";
 import "./windows.spec.ts";
 import "./share-queue.spec.ts";
 import "./staging-contact-sync.spec.ts";
-import "./online-account.spec.ts";
+
+// The hosted account suite observes the real default browser. Linux has no
+// standalone browser observer yet, so keep that platform-specific gap visible
+// by excluding only the unsupported suite rather than failing unrelated native
+// coverage.
+if (process.platform !== "linux") {
+  await import("./online-account.spec.ts");
+}
