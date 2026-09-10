@@ -121,25 +121,32 @@ test("ordinary application startup never rewrites operating-system shell registr
   assert.match(linuxInstaller, /reload_nautilus_extensions/);
 });
 
-test("macOS postinstall diagnostics cannot write into the signed application bundle", () => {
+test("macOS application startup has no registration-only postinstall mode", () => {
   const main = readFileSync(resolve(root, "src-tauri/src/main.rs"), "utf8");
-  const postinstallStart = main.indexOf('Some("--postinstall")');
-  const postinstallEnd = main.indexOf("\n    let diagnostics = diagnostics::DiagnosticLog::new();", postinstallStart);
-  const postinstall = main.slice(postinstallStart, postinstallEnd);
-
-  assert.notEqual(postinstallStart, -1, "postinstall branch must be present");
-  assert.match(
-    postinstall,
-    /diagnostics\.initialize\(platform::postinstall_diagnostic_log_directory\(\), true\)/,
-    "postinstall must use the user-only diagnostic location policy",
-  );
+  assert.doesNotMatch(main, /--postinstall|postinstall_diagnostic_log_directory|register_macos_bundle_after_install/);
 });
 
-test("macOS packaging verifies the installed signature after postinstall exits", () => {
+test("macOS installation only copies and verifies the final application bundle", () => {
   const build = readFileSync(resolve(root, "scripts/build-macos.sh"), "utf8");
-  const postinstall = build.indexOf('open -W -a "$destination" --args --postinstall');
-  const verifyInstalled = build.indexOf('codesign --verify --deep --strict "$destination"', postinstall);
+  assert.match(build, /ditto "\$staged_app" "\$temporary"/);
+  assert.match(build, /codesign --verify --deep --strict "\$destination"/);
+  assert.doesNotMatch(build, /--postinstall|macos-register-bundle|pluginkit\s+[-+a-z]*a|lsregister\s+[-+a-z]*f/);
+});
 
-  assert.notEqual(postinstall, -1, "installed app postinstall launch must be present");
-  assert.ok(verifyInstalled > postinstall, "installed bundle signature must be verified after postinstall");
+test("macOS packaging prepares only the staged release bundle", () => {
+  const build = readFileSync(resolve(root, "scripts/build-macos.sh"), "utf8");
+  const stage = build.indexOf('run_packaging_step "stage application" ditto "$application" "$staged_app"');
+  const prepare = build.indexOf('scripts/prepare-macos-self-contained-app.sh "$staged_app"');
+
+  assert.ok(stage >= 0, "macOS build must stage the Tauri application");
+  assert.ok(prepare > stage, "native extensions must be prepared only after staging");
+  assert.doesNotMatch(build, /prepare-macos-self-contained-app\.sh "\$application"/);
+});
+
+test("macOS source contains no production registration commands", () => {
+  const macos = readFileSync(resolve(root, "src-tauri/src/platform/macos.rs"), "utf8");
+  const helper = resolve(root, "scripts/macos-register-bundle.sh");
+
+  assert.doesNotMatch(macos, /pluginkit.*(?:-a|-r)|lsregister.*(?:-f|-u)|qlmanage.*-r|mdimport.*-r/);
+  assert.throws(() => readFileSync(helper, "utf8"), /ENOENT/);
 });

@@ -338,7 +338,6 @@ if ((${#applications[@]} != 1)); then
   exit 1
 fi
 application="${applications[0]}"
-scripts/prepare-macos-self-contained-app.sh "$application" "$architecture"
 
 version=$(node -p 'require("./package.json").version')
 artifact_base="ZManager-${version}-macos-${architecture}"
@@ -380,6 +379,11 @@ run_packaging_step "stage application" ditto "$application" "$staged_app"
   report_packaging_state
   exit 1
 }
+
+# Build the native extension suite and finalize metadata only in the staged
+# release bundle. The Tauri target directory remains an uninstalled build
+# product and is never made into a second Finder Sync provider.
+scripts/prepare-macos-self-contained-app.sh "$staged_app" "$architecture"
 
 create_zip() {
   rm -f "$zip_artifact"
@@ -460,26 +464,11 @@ if ((install_application)); then
     exit 1
   fi
   echo "Installed application: $destination"
-  # Unregister all ZManager application bundles from the stage directory to
-  # remove extensions registered by previous builds at different version paths.
-  # Each call is best-effort — the register step below also includes self-healing
-  # cleanup via pluginkit -m enumeration for any paths missed here.
-  for stale_app in "$stage_dir"/ZManager-*-"$architecture".app; do
-    if [[ -d "$stale_app" ]]; then
-      "$repo_root/scripts/macos-register-bundle.sh" unregister "$stale_app" 2>/dev/null || true
-    fi
-  done
-  # Register the installed application and its extensions by launching the app
-  # with --postinstall. This triggers extension validation, App Group container
-  # provisioning, and self-registration. The app binary runs synchronously —
-  # it registers, validates, and exits without showing UI.
-  # Finder won't spawn the Finder Sync extension until the host app binary has
-  # been validated by the system at least once, which this first launch achieves.
-  # Use open -W (wait) to block until the app exits after postinstall completes.
-  echo "Running postinstall registration for $destination"
-  open -W -a "$destination" --args --postinstall
+  # The installed app is the sole production bundle. macOS discovers its
+  # embedded app extensions through the normal application installation and
+  # signing flow; no runtime registration command or custom context-menu hook
+  # is run here.
   codesign --verify --deep --strict "$destination"
-  echo "Postinstall completed for $destination"
 else
   echo "Skipping application install because --no-install was set."
 fi

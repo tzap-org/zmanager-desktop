@@ -303,7 +303,7 @@ jobs:
           app="/tmp/zmanager-macos-ci/ZManager-$(node -p 'require("./package.json").version')-macos-${{ matrix.arch }}.app"
           scripts/release-gate-macos.sh "$app" --expected-arch "${{ matrix.arch }}" \
             --report "/tmp/zmanager-macos-ci/inspection-${{ matrix.arch }}.json"
-          scripts/test-macos-register-bundle.sh "$app"
+          scripts/test-macos-embedded-extensions.sh "$app"
           scripts/test-release-gate-macos.sh "$app" "${{ matrix.arch }}"
 
       - name: Upload macOS inspection and test artifact

@@ -27,27 +27,6 @@ use tauri::{Emitter, Manager};
 fn main() {
     platform::prepare_process();
 
-    // --postinstall is used by build scripts and PKG postinstall to trigger
-    // extension registration and App Group provisioning without showing UI.
-    // This must be checked BEFORE any Tauri state initialization so the
-    // single-instance plugin does not interfere with a concurrent launch.
-    if std::env::args_os().any(|arg| arg.to_str() == Some("--postinstall")) {
-        eprintln!("ZMANAGER_POSTINSTALL: begin");
-        let diagnostics = diagnostics::DiagnosticLog::new();
-        let _ = diagnostics.initialize(platform::postinstall_diagnostic_log_directory(), true);
-        let inbox = native_launch_inbox::NativeLaunchInbox::new();
-        if let Err(e) = platform::initialize_native_host(inbox, diagnostics.clone()) {
-            let _ = diagnostics.record("postinstall", "nativeHostFailed", diagnostics::fields([("error", serde_json::Value::String(e))]));
-        }
-        let group_ready = platform::wait_for_app_group(std::time::Duration::from_secs(30));
-        let _ = diagnostics.record("postinstall", "appGroupReady", diagnostics::fields([("available", serde_json::Value::Bool(group_ready))]));
-        platform::register_macos_bundle_after_install(&diagnostics);
-        platform::shutdown();
-        let _ = diagnostics.record("postinstall", "complete", diagnostics::fields([]));
-        eprintln!("ZMANAGER_POSTINSTALL: complete");
-        std::process::exit(0);
-    }
-
     let diagnostics = diagnostics::DiagnosticLog::new();
     let _ = diagnostics.record("process", "entry", diagnostics::fields([]));
     let native_launch_inbox = native_launch_inbox::NativeLaunchInbox::new();

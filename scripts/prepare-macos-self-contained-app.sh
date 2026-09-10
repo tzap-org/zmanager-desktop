@@ -207,8 +207,8 @@ if otool -L "$executable" | grep -Eq '^\s+/(opt/homebrew|usr/local)/'; then
   exit 1
 fi
 
-# Launch Services, pluginkit, Quick Look, and Spotlight registration is deferred
-# to the install step in build-macos.sh. Registering this ephemeral build output
-# would leave stale extension paths behind after it is copied or removed.
+# The final installer contains the complete signed bundle. macOS discovers
+# embedded app extensions from that installed application; no runtime
+# registration is performed.
 
 echo "Prepared self-contained signed application: $app"

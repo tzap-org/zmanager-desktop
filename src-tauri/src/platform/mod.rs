@@ -284,13 +284,6 @@ pub fn prefer_user_diagnostic_log_directory() -> bool {
     ActivePlatform::prefer_user_log_directory()
 }
 
-pub fn postinstall_diagnostic_log_directory() -> Option<std::path::PathBuf> {
-    #[cfg(target_os = "macos")]
-    return macos::postinstall_diagnostic_log_directory();
-    #[cfg(not(target_os = "macos"))]
-    None
-}
-
 pub fn prepare_native_file_drag(candidates: &[NativeFileDragCandidate], strip_components: usize) -> Result<Vec<NativeFileDragItem>, NativeFileDragError> {
     ActivePlatform::prepare_native_file_drag(candidates, strip_components)
 }
@@ -319,29 +312,6 @@ pub fn shutdown() {
 }
 
 #[allow(dead_code)]
-pub fn app_group_is_available() -> bool {
-    #[cfg(target_os = "macos")]
-    return macos::app_group_is_available();
-    #[cfg(not(target_os = "macos"))]
-    false
-}
-
-pub fn wait_for_app_group(timeout: std::time::Duration) -> bool {
-    #[cfg(target_os = "macos")]
-    return macos::wait_for_app_group(timeout);
-    #[cfg(not(target_os = "macos"))]
-    let _ = timeout;
-    #[cfg(not(target_os = "macos"))]
-    false
-}
-
-pub fn register_macos_bundle_after_install(diagnostics: &crate::diagnostics::DiagnosticLog) {
-    #[cfg(target_os = "macos")]
-    macos::register_bundle_after_install(diagnostics);
-    #[cfg(not(target_os = "macos"))]
-    let _ = diagnostics;
-}
-
 pub fn quick_action_registers_single_instance(is_normal_singleton: bool) -> bool {
     if cfg!(target_os = "linux") { true } else { is_normal_singleton }
 }

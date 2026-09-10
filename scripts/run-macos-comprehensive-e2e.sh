@@ -176,7 +176,7 @@ fi
 if (( run_native )); then
   installed_app="${ZMANAGER_MACOS_APP_PATH:-/Applications/ZManager.app}"
   if [[ -d "$installed_app" ]]; then
-    run_case macos-registration-contract bash "$repo_root/scripts/test-macos-register-bundle.sh" "$installed_app" || true
+    run_case macos-embedded-extension-contract bash "$repo_root/scripts/test-macos-embedded-extensions.sh" "$installed_app" || true
     run_case macos-installed-protocol bash "$repo_root/scripts/test-macos-installed-protocol.sh" "$installed_app" || true
     run_case macos-finder-installed-characterization bash "$repo_root/scripts/characterize-macos-finder-action.sh" "$installed_app" || true
     run_case macos-installed-host-smoke bash "$repo_root/scripts/run-macos-installed-host-smoke.sh" "$installed_app" || true
