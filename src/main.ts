@@ -3,12 +3,7 @@ import { createRoot } from "react-dom/client";
 
 import "./styles.tailwind.css";
 
-import { AppShell } from "./ui/react/AppShell";
-import { DisposableTaskRuntimeApp } from "./runtime/DisposableTaskRuntimeApp";
-
-if (import.meta.env.MODE === "gui") {
-  await import("@wdio/tauri-plugin");
-}
+performance.mark("zmanager-frontend-entrypoint-start");
 
 const app = document.querySelector<HTMLElement>("#app");
 
@@ -19,10 +14,26 @@ if (!app) {
 const disposableTaskSurface = new URLSearchParams(globalThis.location?.search ?? "")
   .get("surface") === "disposable-task";
 
+if (disposableTaskSurface) {
+  document.querySelector<HTMLElement>("#quick-action-loading")?.classList.remove("hidden");
+} else {
+  document.querySelector<HTMLElement>("#quick-action-loading")?.remove();
+}
+
+if (import.meta.env.MODE === "gui" && !disposableTaskSurface) {
+  await import("@wdio/tauri-plugin");
+}
+
+const RootSurface = disposableTaskSurface
+  ? (await import("./runtime/DisposableTaskRuntimeApp")).DisposableTaskRuntimeApp
+  : (await import("./ui/react/AppShell")).AppShell;
+
+if (disposableTaskSurface) {
+  document.querySelector<HTMLElement>("#quick-action-loading")?.classList.add("hidden");
+}
+
 createRoot(app).render(createElement(
   StrictMode,
   null,
-  disposableTaskSurface
-    ? createElement(DisposableTaskRuntimeApp)
-    : createElement(AppShell),
+  createElement(RootSurface),
 ));

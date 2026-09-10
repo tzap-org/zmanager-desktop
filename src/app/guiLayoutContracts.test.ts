@@ -584,7 +584,8 @@ describe("GUI layout contracts", () => {
   }
 
   it("keeps main.ts as the React composition root", () => {
-    expect(compositionRootSource).toContain('from "./ui/react/AppShell"');
+    expect(compositionRootSource).toContain('import("./ui/react/AppShell")');
+    expect(compositionRootSource).toContain('import("./runtime/DisposableTaskRuntimeApp")');
     expect(compositionRootSource).toContain("createRoot(app).render(");
     expect(compositionRootSource).not.toContain('from "./runtimeBridge"');
     expect(compositionRootSource).not.toMatch(

@@ -70,6 +70,23 @@ function DisposableTaskRuntime({ bootstrap }: Readonly<{ bootstrap: DisposableTa
   }), []);
 
   useEffect(() => {
+    performance.mark("zmanager-task-content-mounted");
+    const paint = () => {
+      void persistDiagnosticEvent({
+        scope: "disposableTaskSurface",
+        name: "firstContentPainted",
+        fields: { jobKind: bootstrap.kind, initialStatus: bootstrap.status },
+      }).catch(() => {});
+    };
+    if (typeof requestAnimationFrame === "function") {
+      const frame = requestAnimationFrame(paint);
+      return () => cancelAnimationFrame(frame);
+    }
+    const timeout = globalThis.setTimeout(paint, 0);
+    return () => globalThis.clearTimeout(timeout);
+  }, [bootstrap.kind, bootstrap.status]);
+
+  useEffect(() => {
     void persistDiagnosticEvent({
       scope: "disposableTaskSurface",
       name: "mounted",

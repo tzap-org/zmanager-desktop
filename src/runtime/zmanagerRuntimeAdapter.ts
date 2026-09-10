@@ -508,6 +508,11 @@ const disposableTaskLifecycle = createDisposableTaskLifecycle();
 const processJobs = createProcessJobAccounting();
 const mainWindowSubmissionGuard = createMainWindowSubmissionGuard();
 const diagnostics = createDesktopDiagnosticRecorder();
+diagnostics.record({
+  scope: "frontend",
+  name: "runtimeAdapterLoaded",
+  fields: {},
+});
 function reportJobPresentationFailure(
   job: StartJobResponseDto,
   error: unknown,
@@ -533,9 +538,19 @@ const disposableTaskWindows = createDisposableTaskWindowManager({
 const jobHandoff = createJobHandoffController({
   recordAccepted: (job) => {
     processJobs.observeAccepted(job);
+    diagnostics.record({
+      scope: "jobHandoff",
+      name: "jobAccepted",
+      fields: { jobKind: job.kind },
+    });
   },
   presentTaskWindow: async (job) => {
     if (isDesktopRuntime()) {
+      diagnostics.record({
+        scope: "disposableTaskWindow",
+        name: "requested",
+        fields: { jobKind: job.kind },
+      });
       await disposableTaskWindows.open(job);
     }
   },
@@ -4078,12 +4093,11 @@ async function handleQuickActionStartupState(state: QuickActionStartupStateDto) 
   await startupController.handleQuickActionStartupState(state);
 }
 
-async function initializeDesktopRuntime() {
+async function initializeNativeQuickActionPath() {
   await persistDiagnosticEvent({
     scope: "frontend",
-    name: "desktopInitializationStarted",
+    name: "quickActionPathStarted",
   }).catch(() => {});
-  await nativeInboundController.initialize();
   await listenDisposableTaskJobHandoffs((job) => {
     void jobHandoff.handoffAcceptedJob(job);
   });
@@ -4094,6 +4108,20 @@ async function initializeDesktopRuntime() {
     void effect.catch((error) => {
       setOperationalStatus(unknownErrorMessage(error, "Unable to open the task output."));
     });
+  });
+  await nativeInboundController.initialize();
+  diagnostics.record({
+    scope: "frontend",
+    name: "quickActionPathReady",
+    fields: {},
+  });
+}
+
+async function initializeDeferredDesktopRuntime() {
+  diagnostics.record({
+    scope: "frontend",
+    name: "deferredInitializationStarted",
+    fields: {},
   });
   await listenLocalSendEvents(({ payload }) => {
     handleLocalSendEvent(payload);
@@ -4501,6 +4529,11 @@ async function runCreate(
 }
 
 async function loadBootstrapState() {
+  diagnostics.record({
+    scope: "frontend",
+    name: "bootstrapStarted",
+    fields: {},
+  });
   if (isDesktopRuntime()) {
     try {
       latestDiagnosticLogInfo = await fetchDiagnosticLogInfo();
@@ -4510,6 +4543,15 @@ async function loadBootstrapState() {
   }
   await startupController.loadBootstrapState();
   await accountController.refresh();
+  // Bootstrap now runs concurrently with deferred desktop initialization.
+  // Re-apply the contract-dependent receiver setup after the contract arrives
+  // so normal startup does not permanently miss an enabled LAN receiver.
+  syncLocalSendReceiverWithPreferences();
+  diagnostics.record({
+    scope: "frontend",
+    name: "bootstrapCompleted",
+    fields: {},
+  });
 }
 
 function runtimeDevToolsOptions() {
@@ -4629,8 +4671,10 @@ startZManagerRuntime({
   installRuntimeDevTools: installRuntimeDevApi,
   bindFileDrop: bindTauriFileDrop,
   isDesktopRuntime,
-  initializeDesktopRuntime,
+  initializeNativeQuickActionPath,
+  initializeDeferredDesktopRuntime,
   renderNormalWorkspaceOnce,
   loadLocalDevFixtureFromUrl,
   loadBootstrapState,
+  diagnostics,
 });

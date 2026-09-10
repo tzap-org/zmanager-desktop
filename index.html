@@ -7,7 +7,12 @@
   </head>
   <body>
     <div id="app"></div>
+    <div id="quick-action-loading" class="hidden grid min-h-screen place-items-center bg-slate-100 p-6 text-slate-700 dark:bg-slate-950 dark:text-slate-200">
+      <div class="flex items-center gap-3" role="status" aria-live="polite">
+        <span class="size-3 animate-pulse rounded-full bg-blue-600" aria-hidden="true"></span>
+        <span>Starting Quick Action…</span>
+      </div>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
-

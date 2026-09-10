@@ -49,6 +49,7 @@ fn main() {
     }
 
     let diagnostics = diagnostics::DiagnosticLog::new();
+    let _ = diagnostics.record("process", "entry", diagnostics::fields([]));
     let native_launch_inbox = native_launch_inbox::NativeLaunchInbox::new();
     let startup_args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if let Some(event) = quick_action::hosted_auth_callback_event_from_args(startup_args.clone()) {
@@ -81,6 +82,7 @@ fn main() {
     let setup_diagnostics = diagnostics.clone();
     let exit_diagnostics = diagnostics.clone();
 
+    let _ = diagnostics.record("process", "builderCreationStarted", diagnostics::fields([]));
     let builder = tauri::Builder::default();
     let builder = platform::register_platform_services(builder);
     let builder = builder
@@ -118,6 +120,7 @@ fn main() {
     };
     let app = builder
         .setup(move |app| {
+            let _ = setup_diagnostics.record("process", "setupEntered", diagnostics::fields([]));
             let _ = setup_diagnostics.initialize(app.path().app_log_dir().ok(), platform::prefer_user_diagnostic_log_directory());
             let _ = setup_diagnostics.record(
                 "account",
@@ -240,6 +243,7 @@ fn main() {
         ])
         .build(tauri::generate_context!())
         .expect("failed to build ZManager desktop");
+    let _ = diagnostics.record("process", "builderCompleted", diagnostics::fields([]));
     app.run(move |app_handle, event| {
         platform::handle_run_event(&event, &native_launch_inbox);
         if let tauri::RunEvent::Exit = event {

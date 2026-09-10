@@ -25,42 +25,42 @@ describe("runtime startup", () => {
     ]);
   });
 
-  it("loads the platform profile before desktop initialization can reveal the window", async () => {
+  it("starts the native quick-action path without waiting for bootstrap", async () => {
     const calls: string[] = [];
-    let finishBootstrap: () => void = () => {
-      throw new Error("loadBootstrapState was not called");
-    };
-    let finishInitialize: () => void = () => {
-      throw new Error("initializeDesktopRuntime was not called");
+    let finishNativePath: () => void = () => {
+      throw new Error("initializeNativeQuickActionPath was not called");
     };
     const options = createOptions(calls, {
       isDesktopRuntime: () => true,
-      loadBootstrapState: vi.fn(() => new Promise<void>((resolve) => {
+      loadBootstrapState: vi.fn(async () => {
         calls.push("loadBootstrapState");
-        finishBootstrap = () => resolve();
+      }),
+      initializeNativeQuickActionPath: vi.fn(() => new Promise<void>((resolve) => {
+        calls.push("initializeNativeQuickActionPath");
+        finishNativePath = () => resolve();
       })),
-      initializeDesktopRuntime: vi.fn(() => new Promise<void>((resolve) => {
-        calls.push("initializeDesktopRuntime");
-        finishInitialize = () => resolve();
-      })),
+      initializeDeferredDesktopRuntime: vi.fn(async () => {
+        calls.push("initializeDeferredDesktopRuntime");
+      }),
     });
 
     startZManagerRuntime(options);
     expect(calls).toContain("loadBootstrapState");
-    expect(calls).not.toContain("initializeDesktopRuntime");
+    expect(calls).toContain("initializeNativeQuickActionPath");
+    expect(calls).not.toContain("initializeDeferredDesktopRuntime");
 
-    finishBootstrap?.();
+    finishNativePath?.();
     await Promise.resolve();
 
-    expect(calls).toContain("initializeDesktopRuntime");
+    expect(calls).toContain("initializeDeferredDesktopRuntime");
     expect(calls).not.toContain("loadLocalDevFixtureFromUrl");
-
-    finishInitialize?.();
-    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(calls).toContain("loadLocalDevFixtureFromUrl");
+    });
 
     expect(calls.slice(-3)).toEqual([
-      "loadBootstrapState",
-      "initializeDesktopRuntime",
+      "initializeNativeQuickActionPath",
+      "initializeDeferredDesktopRuntime",
       "loadLocalDevFixtureFromUrl",
     ]);
     expect(options.renderNormalWorkspaceOnce).not.toHaveBeenCalled();
@@ -86,8 +86,11 @@ function createOptions(
     installRuntimeDevTools: effect("installRuntimeDevTools"),
     bindFileDrop: effect("bindFileDrop"),
     isDesktopRuntime: () => false,
-    initializeDesktopRuntime: vi.fn(async () => {
-      calls.push("initializeDesktopRuntime");
+    initializeNativeQuickActionPath: vi.fn(async () => {
+      calls.push("initializeNativeQuickActionPath");
+    }),
+    initializeDeferredDesktopRuntime: vi.fn(async () => {
+      calls.push("initializeDeferredDesktopRuntime");
     }),
     renderNormalWorkspaceOnce: effect("renderNormalWorkspaceOnce"),
     loadLocalDevFixtureFromUrl: effect("loadLocalDevFixtureFromUrl"),

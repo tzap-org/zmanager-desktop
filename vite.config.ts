@@ -15,6 +15,7 @@ export default defineConfig({
   envPrefix: ["VITE_", "TAURI_"],
   build: {
     chunkSizeWarningLimit: 1000,
+    manifest: true,
   },
   test: {
     environment: "jsdom",

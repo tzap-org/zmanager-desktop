@@ -104,6 +104,11 @@ export function createNativeInboundController(
           options.reportFailure(error);
         });
     });
+    diagnostics.record({
+      scope: "nativeInbound",
+      name: "listenerRegistered",
+      fields: { windowClass: windowLabel === "main" ? "main" : "other" },
+    });
     const pendingCount = await options.markFrontendReady(windowLabel);
     diagnostics.record({
       scope: "nativeInbound",
