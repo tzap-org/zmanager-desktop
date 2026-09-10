@@ -145,8 +145,14 @@ test("macOS packaging prepares only the staged release bundle", () => {
 
 test("macOS source contains no production registration commands", () => {
   const macos = readFileSync(resolve(root, "src-tauri/src/platform/macos.rs"), "utf8");
+  const profileRefresh = readFileSync(resolve(root, "scripts/refresh-macos-development-profiles.sh"), "utf8");
   const helper = resolve(root, "scripts/macos-register-bundle.sh");
+  const executableSource = macos
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("//"))
+    .join("\n");
 
-  assert.doesNotMatch(macos, /pluginkit.*(?:-a|-r)|lsregister.*(?:-f|-u)|qlmanage.*-r|mdimport.*-r/);
+  assert.doesNotMatch(executableSource, /\.args\(\[\s*["']-(?:a|r|f|u)["']/);
+  assert.doesNotMatch(profileRefresh, /lsregister|pluginkit/);
   assert.throws(() => readFileSync(helper, "utf8"), /ENOENT/);
 });

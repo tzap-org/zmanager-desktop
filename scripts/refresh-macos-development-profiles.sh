@@ -9,7 +9,6 @@ main_bundle_id=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.
 finder_bundle_id=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["finderExtensionBundleIdentifier"])' "$identity_json")
 work=$(mktemp -d "${TMPDIR:-/tmp}/zmanager-development-profiles.XXXXXX")
 trap 'rm -rf "$work"' EXIT
-lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 
 refresh_profile() {
   local label=$1
@@ -41,7 +40,6 @@ refresh_profile() {
     echo "Xcode did not embed the expected $label development profile." >&2
     exit 1
   }
-  "$lsregister" -u "$built_app" >/dev/null 2>&1 || true
 }
 
 refresh_profile \
@@ -56,9 +54,5 @@ refresh_profile \
   "$repo_root/packaging/macos/FinderExtension/ZManagerFinderExtension.entitlements" \
   YES \
   readonly
-
-if [[ -d /Applications/ZManager.app ]]; then
-  "$lsregister" -f /Applications/ZManager.app >/dev/null 2>&1 || true
-fi
 
 echo "Refreshed ZManager Personal Team macOS development profiles."
