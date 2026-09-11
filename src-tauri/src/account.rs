@@ -27,7 +27,7 @@ use zmanager_tzap_hosted::auth_client::{
 use zmanager_tzap_hosted::backup_client::{TzapBackupClient, TzapBackupError};
 use zmanager_tzap_hosted::certificate_lifecycle::{
     RENEWAL_GRACE_MAX_SECONDS, TzapCertificateLifecycleClient, TzapCertificateLifecycleError, TzapRenewalPolicy, TzapRenewalRequest, TzapRetirementCompletion,
-    enroll_or_renew_device_certificate,
+    TzapRetirementReport, enroll_or_renew_device_certificate,
 };
 use zmanager_tzap_hosted::enrollment_client::{TzapEnrollmentCertificateValidator, TzapEnrollmentClient, TzapEnrollmentError, TzapEnrollmentRequest};
 use zmanager_tzap_hosted::intermediate_client::TzapOnlineIntermediateResolver;
@@ -526,6 +526,47 @@ fn map_lifecycle_error(error: TzapCertificateLifecycleError) -> CommandErrorDto 
     }
 }
 
+fn retire_personal_devices_with_fallback<T: TzapAuthHttpTransport>(
+    lifecycle_client: &TzapCertificateLifecycleClient<'_, T>,
+    store: &mut NativeTzapLocalIdentityStore,
+    session: &TzapSessionRecord,
+) -> Result<TzapRetirementReport, TzapCertificateLifecycleError> {
+    match lifecycle_client.retire_personal_devices(store, session, ACCOUNT_KEY) {
+        Ok(report) => Ok(report),
+        Err(TzapCertificateLifecycleError::RevocationSyncFailed) => {
+            // Some hosted deployments can revoke a certificate successfully while
+            // their device-level linkage synchronization is unavailable. Retire
+            // each active personal certificate individually so the desktop can
+            // still complete a safe device retirement without leaving signing
+            // identities active locally.
+            let inventory = store.load_inventory(ACCOUNT_KEY)?;
+            let attempted_device_ids = inventory.active_personal_sign_device_ids().into_iter().map(ToOwned::to_owned).collect::<Vec<_>>();
+            let mut completed_device_ids = Vec::new();
+            let mut incomplete_reasons = Vec::new();
+            for certificate in inventory.enrolled_certificates.iter().filter(|certificate| {
+                certificate.state == zmanager_tzap_hosted::local_identity_store::TzapLocalCertificateState::Active
+                    && matches!(certificate.sign_device_routing, zmanager_tzap_hosted::local_identity_store::TzapSignDeviceRouting::Personal)
+            }) {
+                match lifecycle_client.revoke_personal_certificate(store, session, ACCOUNT_KEY, &certificate.certificate_id)? {
+                    TzapRetirementCompletion::Complete => {
+                        if !completed_device_ids.contains(&certificate.sign_device_id) {
+                            completed_device_ids.push(certificate.sign_device_id.clone());
+                        }
+                    }
+                    TzapRetirementCompletion::Incomplete => incomplete_reasons.push(certificate.sign_device_id.clone()),
+                }
+            }
+            Ok(TzapRetirementReport {
+                completion: if incomplete_reasons.is_empty() { TzapRetirementCompletion::Complete } else { TzapRetirementCompletion::Incomplete },
+                attempted_sign_device_ids: attempted_device_ids,
+                completed_sign_device_ids: completed_device_ids,
+                incomplete_reasons,
+            })
+        }
+        Err(error) => Err(error),
+    }
+}
+
 fn lifecycle_result(
     app: &AppHandle,
     runtime: &AccountRuntime,
@@ -706,7 +747,7 @@ pub fn account_retire_device(app: AppHandle, runtime: State<'_, AccountRuntime>)
 
     if session.audience == SESSION_AUDIENCE_SIGN_TZAP {
         if !personal_ids.is_empty() {
-            let report = lifecycle_client.retire_personal_devices(&store, &session, ACCOUNT_KEY).map_err(|error| {
+            let report = retire_personal_devices_with_fallback(&lifecycle_client, &mut store, &session).map_err(|error| {
                 if matches!(error, TzapCertificateLifecycleError::Auth(TzapAuthError::HttpStatus { status_code: 401 })) {
                     clear_hosted_session(&runtime, "expired");
                 }
