@@ -33,6 +33,10 @@ function runUiAction(action: string): Promise<void> {
 
 async function retireInstalledDeviceWithRetry(): Promise<void> {
   await retryAsync(async () => {
+    // Re-select the tab on every attempt. The installed release can restore the
+    // last account tab after a restart, so a prior OpenDevice action may race
+    // with the account view being rehydrated.
+    await runUiAction("OpenDevice");
     await runUiAction("Retire");
     await runUiAction("ConfirmRetire");
     await runUiAction("AssertRetirementComplete");
