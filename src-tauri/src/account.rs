@@ -46,6 +46,15 @@ const DESKTOP_DEVICE_NAME: &str = "ZManager Desktop";
 const REGISTERED_DESKTOP_CLIENT_ID: &str = "zmanager_desktop";
 static GUI_TEST_ACCOUNT_STATE_INITIALIZED: OnceLock<()> = OnceLock::new();
 
+fn hosted_device_name() -> String {
+    let Some(run_id) = std::env::var_os("TZAP_E2E_RUN_ID") else {
+        return DESKTOP_DEVICE_NAME.to_owned();
+    };
+    let suffix =
+        run_id.to_string_lossy().chars().filter(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_')).take(32).collect::<String>();
+    if suffix.is_empty() { DESKTOP_DEVICE_NAME.to_owned() } else { format!("{DESKTOP_DEVICE_NAME} ({suffix})") }
+}
+
 fn hosted_online_enabled() -> bool {
     cfg!(feature = "hosted-online")
 }
@@ -541,15 +550,16 @@ pub fn account_enroll_certificate(
     let environment = hosted_environment(&environment_str)?;
     let (sign_base_url, login_base_url) = hosted_service_base_urls(environment);
     let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|error| account_error("account_http_client_failed", error))?;
+    let device_name = hosted_device_name();
     let enrollment_client = if matches!(environment, TzapHostedAuthEnvironment::Local | TzapHostedAuthEnvironment::Staging) {
-        TzapEnrollmentClient::local_staging_server_with_device_name(&sign_base_url, &transport, DESKTOP_DEVICE_NAME)
+        TzapEnrollmentClient::local_staging_server_with_device_name(&sign_base_url, &transport, device_name.clone())
     } else {
-        TzapEnrollmentClient::with_device_name(&sign_base_url, &transport, DESKTOP_DEVICE_NAME)
+        TzapEnrollmentClient::with_device_name(&sign_base_url, &transport, device_name.clone())
     };
     let lifecycle_client = if matches!(environment, TzapHostedAuthEnvironment::Local | TzapHostedAuthEnvironment::Staging) {
-        TzapCertificateLifecycleClient::local_staging_server_with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
+        TzapCertificateLifecycleClient::local_staging_server_with_device_name(&sign_base_url, &login_base_url, &transport, device_name)
     } else {
-        TzapCertificateLifecycleClient::with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
+        TzapCertificateLifecycleClient::with_device_name(&sign_base_url, &login_base_url, &transport, device_name)
     };
     let request = TzapEnrollmentRequest {
         account_key: ACCOUNT_KEY.to_owned(),
@@ -642,8 +652,9 @@ pub fn account_renew_certificate(
     let environment = hosted_environment(&environment_str)?;
     let (sign_base_url, login_base_url) = hosted_service_base_urls(environment);
     let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|error| account_error("account_http_client_failed", error))?;
+    let device_name = hosted_device_name();
     let lifecycle_client = if matches!(environment, TzapHostedAuthEnvironment::Local | TzapHostedAuthEnvironment::Staging) {
-        TzapCertificateLifecycleClient::local_staging_server_with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
+        TzapCertificateLifecycleClient::local_staging_server_with_device_name(&sign_base_url, &login_base_url, &transport, device_name)
     } else {
         TzapCertificateLifecycleClient::with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
     };
@@ -683,8 +694,9 @@ pub fn account_retire_device(app: AppHandle, runtime: State<'_, AccountRuntime>)
     let environment = hosted_environment(&environment_str)?;
     let (sign_base_url, login_base_url) = hosted_service_base_urls(environment);
     let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|error| account_error("account_http_client_failed", error))?;
+    let device_name = hosted_device_name();
     let lifecycle_client = if matches!(environment, TzapHostedAuthEnvironment::Local | TzapHostedAuthEnvironment::Staging) {
-        TzapCertificateLifecycleClient::local_staging_server_with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
+        TzapCertificateLifecycleClient::local_staging_server_with_device_name(&sign_base_url, &login_base_url, &transport, device_name)
     } else {
         TzapCertificateLifecycleClient::with_device_name(&sign_base_url, &login_base_url, &transport, DESKTOP_DEVICE_NAME)
     };

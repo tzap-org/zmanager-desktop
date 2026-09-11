@@ -1430,10 +1430,18 @@ mod tests {
         let started = registry
             .start(StartArchiveIndexRequest { archive_path: archive.to_string_lossy().into_owned(), password: None })
             .expect("index request should be accepted");
-        let terminal = tokio::time::timeout(Duration::from_secs(3), registry.wait_for_change(&started.session_id, Some(&started.snapshot.revision)))
-            .await
-            .expect("index worker should publish a terminal state")
-            .expect("index state should remain available");
+        let terminal = tokio::time::timeout(Duration::from_secs(3), async {
+            let mut revision = started.snapshot.revision;
+            loop {
+                let snapshot = registry.wait_for_change(&started.session_id, Some(&revision)).await.expect("index state should remain available");
+                revision = snapshot.revision.clone();
+                if snapshot.status != ArchiveIndexStatusDto::Indexing {
+                    break snapshot;
+                }
+            }
+        })
+        .await
+        .expect("index worker should publish a terminal state");
         assert_eq!(terminal.status, ArchiveIndexStatusDto::Ready);
         assert!(terminal.final_entry_count.is_some_and(|count| count > 0));
         registry.close(&started.session_id).expect("index session should close");

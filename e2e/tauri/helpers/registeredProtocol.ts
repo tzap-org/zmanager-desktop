@@ -180,22 +180,66 @@ on run argv
   set timeoutSeconds to (item 2 of argv) as integer
   set deadline to (current date) + timeoutSeconds
   repeat while (current date is less than deadline)
-    repeat with browserName in {"Safari", "Google Chrome", "Microsoft Edge", "Brave Browser", "Arc", "Firefox"}
-      set browserLabel to browserName as text
-      try
-        if browserLabel is "Safari" then
-          tell application "Safari" to set candidates to URL of every tab of every window
-        else if browserLabel is "Google Chrome" then
-          tell application "Google Chrome" to set candidates to URL of every tab of every window
-        else
-          tell application browserLabel to set candidates to URL of every tab of every window
-        end if
-        repeat with candidate in candidates
-          set candidateText to candidate as text
-          if candidateText starts with expectedOrigin then return candidateText
+    try
+      tell application "Safari"
+        repeat with browserWindow in every window
+          repeat with browserTab in every tab of browserWindow
+            set candidateText to URL of browserTab
+            if candidateText starts with expectedOrigin then return candidateText
+          end repeat
         end repeat
-      end try
-    end repeat
+      end tell
+    end try
+    try
+      tell application "Google Chrome"
+        repeat with browserWindow in every window
+          repeat with browserTab in every tab of browserWindow
+            set candidateText to URL of browserTab
+            if candidateText starts with expectedOrigin then return candidateText
+          end repeat
+        end repeat
+      end tell
+    end try
+    try
+      tell application "Microsoft Edge"
+        repeat with browserWindow in every window
+          repeat with browserTab in every tab of browserWindow
+            set candidateText to URL of browserTab
+            if candidateText starts with expectedOrigin then return candidateText
+          end repeat
+        end repeat
+      end tell
+    end try
+    try
+      tell application "Brave Browser"
+        repeat with browserWindow in every window
+          repeat with browserTab in every tab of browserWindow
+            set candidateText to URL of browserTab
+            if candidateText starts with expectedOrigin then return candidateText
+          end repeat
+        end repeat
+      end tell
+    end try
+    try
+      tell application "Arc"
+        repeat with browserWindow in every window
+          repeat with browserTab in every tab of browserWindow
+            set candidateText to URL of browserTab
+            if candidateText starts with expectedOrigin then return candidateText
+          end repeat
+        end repeat
+      end tell
+    end try
+    try
+      tell application "Firefox"
+        repeat with browserWindow in every window
+          repeat with browserTab in every tab of browserWindow
+            set candidateText to URL of browserTab
+            if candidateText starts with expectedOrigin then return candidateText
+          end repeat
+        end repeat
+      end tell
+    end try
     delay 0.25
   end repeat
   error "not_observed"
@@ -254,13 +298,12 @@ async function observeMacOSHistoryNavigation(
       .map((entry) => path.join(root, entry.name, fileName))
       .filter(existsSync);
   };
-  const databases: HistoryDatabase[] = [
+  const databaseCandidates: HistoryDatabase[] = [
     { path: path.join(libraryRoot, "Safari", "History.db"), kind: "safari" } satisfies HistoryDatabase,
     ...profileDatabases(path.join(applicationSupportRoot, "Google", "Chrome"), "History").map((database): HistoryDatabase => ({ path: database, kind: "chromium" })),
     ...profileDatabases(path.join(applicationSupportRoot, "Microsoft Edge"), "History").map((database): HistoryDatabase => ({ path: database, kind: "chromium" })),
     ...profileDatabases(path.join(applicationSupportRoot, "Firefox", "Profiles"), "places.sqlite").map((database): HistoryDatabase => ({ path: database, kind: "firefox" })),
-  ].filter((database) => existsSync(database.path));
-  if (databases.length === 0) return null;
+  ];
   const escapedOrigin = expectedOrigin.replaceAll("'", "''");
   const queries = {
     safari: `SELECT history_visits.visit_time || char(9) || history_items.url FROM history_visits JOIN history_items ON history_items.id = history_visits.history_item WHERE history_items.url LIKE '${escapedOrigin}/%' ORDER BY history_visits.visit_time DESC LIMIT 1;`,
@@ -270,6 +313,7 @@ async function observeMacOSHistoryNavigation(
   const snapshotDirectory = mkdtempSync(path.join(tmpdir(), "zmanager-browser-history-"));
 
   const readLatest = async (): Promise<{ timestamp: number; url: string } | null> => {
+    const databases = databaseCandidates.filter((database) => existsSync(database.path));
     const visits = await Promise.all(databases.map(async (database, index) => {
       const snapshot = path.join(snapshotDirectory, `${index}-${path.basename(database.path)}`);
       try {
