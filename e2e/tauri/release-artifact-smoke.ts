@@ -230,7 +230,6 @@ async function main(): Promise<void> {
     await signInThroughInstalledApplication({ allowAlreadyCompleted: true });
     await waitForLog(cleanupOffset, ["\"name\":\"hostedAuthCompleted\""]);
     await runUiAction("AssertSignedIn");
-    await runUiAction("OpenDevice");
     await retireInstalledDeviceWithRetry();
     await runUiAction("OpenCertificates");
     await runUiAction("EnsureSignedOut");
