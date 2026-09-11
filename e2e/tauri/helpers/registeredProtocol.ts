@@ -96,7 +96,11 @@ export async function observeWindowsDefaultBrowserNavigation(
   child.stderr.on("data", (chunk: string) => { stderr += chunk; });
 
   try {
-    const readyDeadline = Date.now() + 5_000;
+    // Loading UIAutomationClient and the first Chromium accessibility tree can
+    // exceed five seconds on a cold hosted Windows runner. Keep the observer
+    // startup bound separate from the navigation observation bound so a slow
+    // runner does not fail before it has installed its handlers.
+    const readyDeadline = Date.now() + 15_000;
     while (!existsSync(readyPath) && Date.now() < readyDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
@@ -176,17 +180,20 @@ on run argv
   set timeoutSeconds to (item 2 of argv) as integer
   set deadline to (current date) + timeoutSeconds
   repeat while (current date is less than deadline)
-    repeat with browserName in {"Safari", "Google Chrome", "Microsoft Edge"}
+    repeat with browserName in {"Safari", "Google Chrome", "Microsoft Edge", "Brave Browser", "Arc", "Firefox"}
       set browserLabel to browserName as text
       try
         if browserLabel is "Safari" then
-          tell application "Safari" to set candidate to URL of current tab of front window
+          tell application "Safari" to set candidates to URL of every tab of every window
         else if browserLabel is "Google Chrome" then
-          tell application "Google Chrome" to set candidate to URL of active tab of front window
+          tell application "Google Chrome" to set candidates to URL of every tab of every window
         else
-          tell application "Microsoft Edge" to set candidate to URL of active tab of front window
+          tell application browserLabel to set candidates to URL of every tab of every window
         end if
-        if candidate starts with expectedOrigin then return candidate
+        repeat with candidate in candidates
+          set candidateText to candidate as text
+          if candidateText starts with expectedOrigin then return candidateText
+        end repeat
       end try
     end repeat
     delay 0.25
@@ -302,17 +309,18 @@ async function observeMacOSHistoryNavigation(
       if (latest && latest.timestamp > baseline) {
         try {
           const parsed = new URL(latest.url);
-          if (parsed.origin !== expectedOrigin) return null;
-          return {
-            status: "observed",
-            origin: parsed.origin,
-            path: parsed.pathname,
-            queryKeys: [...parsed.searchParams.keys()].sort().join(","),
-            launchUrl: latest.url,
-            observedAtUnixMs: Date.now(),
-          };
+          if (parsed.origin === expectedOrigin) {
+            return {
+              status: "observed",
+              origin: parsed.origin,
+              path: parsed.pathname,
+              queryKeys: [...parsed.searchParams.keys()].sort().join(","),
+              launchUrl: latest.url,
+              observedAtUnixMs: Date.now(),
+            };
+          }
         } catch {
-          return null;
+          // Keep polling until the bounded observation window expires.
         }
       }
       await new Promise((resolve) => setTimeout(resolve, 250));
