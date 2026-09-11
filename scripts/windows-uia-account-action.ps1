@@ -26,7 +26,10 @@ $windowCondition = New-Object System.Windows.Automation.PropertyCondition(
 $deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
 
 function Find-Button {
-    param([string]$Pattern)
+    param(
+        [string]$Pattern,
+        [switch]$BringIntoView
+    )
 
     $windows = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $windowCondition)
     foreach ($window in $windows) {
@@ -35,7 +38,20 @@ function Find-Button {
             $controls = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
             foreach ($control in $controls) {
                 try {
-                    if (-not $control.Current.IsOffscreen -and $control.Current.IsEnabled -and $control.Current.Name -match $Pattern) {
+                    if (-not $control.Current.IsEnabled -or $control.Current.Name -notmatch $Pattern) { continue }
+                    if ($control.Current.IsOffscreen) {
+                        if ($BringIntoView) {
+                            try {
+                                $scrollItem = $control.GetCurrentPattern([System.Windows.Automation.ScrollItemPattern]::Pattern)
+                                $scrollItem.ScrollIntoView()
+                            } catch {
+                                # The control may be in a WebView2 subtree that
+                                # does not expose ScrollItemPattern.
+                            }
+                        }
+                        continue
+                    }
+                    if ($control.Current.IsEnabled) {
                         return $control
                     }
                 } catch {
@@ -51,7 +67,7 @@ function Invoke-Button {
     param([string]$Pattern)
 
     while ([DateTime]::UtcNow -lt $deadline) {
-        $button = Find-Button -Pattern $Pattern
+        $button = Find-Button -Pattern $Pattern -BringIntoView
         if ($null -ne $button) {
             try {
                 $invoke = $button.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern)
