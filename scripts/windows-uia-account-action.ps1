@@ -163,7 +163,10 @@ switch ($Action) {
     "Retire" { Invoke-Button -Pattern "^Retire Hosted Device$" }
     "ConfirmRetire" { Invoke-Button -Pattern "^Confirm Retire$" }
     "AssertRetirementComplete" {
-        Assert-AccessibleText -Pattern "^Retirement completed$" -FailureMessage "Installed Account UI did not confirm completed hosted-device retirement."
+        # A successful retirement clears the hosted session, which removes the
+        # Device tab immediately. The account controller leaves the generic
+        # completion notice visible in that signed-out state.
+        Assert-AccessibleText -Pattern "^(Retirement completed|Account operation completed\.)$" -FailureMessage "Installed Account UI did not confirm completed hosted-device retirement."
     }
     "ConfirmNative" { Invoke-NativeConfirmation }
     "OpenCertificates" { Invoke-Button -Pattern "^Certificates$" }
