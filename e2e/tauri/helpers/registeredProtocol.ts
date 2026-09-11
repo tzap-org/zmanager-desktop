@@ -155,9 +155,7 @@ export async function observeMacOSDefaultBrowserNavigation(
   // sequential fallback can consume two full observer timeouts and exceed
   // the WDIO test timeout when Firefox is installed but is not the default.
   const attempts = [
-    ...(existsSync("/Applications/Firefox.app")
-      ? [(signal: AbortSignal) => observeFirefoxHistoryNavigation(expectedOrigin, timeoutSeconds, signal)]
-      : []),
+    (signal: AbortSignal) => observeMacOSHistoryNavigation(expectedOrigin, timeoutSeconds, signal),
     (signal: AbortSignal) => observeMacOSAppleScriptNavigation(expectedOrigin, timeoutSeconds, signal),
   ];
   try {
@@ -233,35 +231,53 @@ end run
   };
 }
 
-async function observeFirefoxHistoryNavigation(
+async function observeMacOSHistoryNavigation(
   expectedOrigin: string,
   timeoutSeconds: number,
   signal: AbortSignal,
 ): Promise<DefaultBrowserObservation | null> {
-  const profileRoot = path.join(process.env.HOME ?? "", "Library", "Application Support", "Firefox", "Profiles");
-  if (!existsSync(profileRoot)) return null;
-  const databases = readdirSync(profileRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => path.join(profileRoot, entry.name, "places.sqlite"))
-    .filter(existsSync);
+  type HistoryDatabaseKind = "safari" | "chromium" | "firefox";
+  type HistoryDatabase = Readonly<{ path: string; kind: HistoryDatabaseKind }>;
+  const libraryRoot = path.join(process.env.HOME ?? "", "Library");
+  const applicationSupportRoot = path.join(libraryRoot, "Application Support");
+  const profileDatabases = (root: string, fileName: string): string[] => {
+    if (!existsSync(root)) return [];
+    return readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(root, entry.name, fileName))
+      .filter(existsSync);
+  };
+  const databases: HistoryDatabase[] = [
+    { path: path.join(libraryRoot, "Safari", "History.db"), kind: "safari" } satisfies HistoryDatabase,
+    ...profileDatabases(path.join(applicationSupportRoot, "Google", "Chrome"), "History").map((database): HistoryDatabase => ({ path: database, kind: "chromium" })),
+    ...profileDatabases(path.join(applicationSupportRoot, "Microsoft Edge"), "History").map((database): HistoryDatabase => ({ path: database, kind: "chromium" })),
+    ...profileDatabases(path.join(applicationSupportRoot, "Firefox", "Profiles"), "places.sqlite").map((database): HistoryDatabase => ({ path: database, kind: "firefox" })),
+  ].filter((database) => existsSync(database.path));
   if (databases.length === 0) return null;
   const escapedOrigin = expectedOrigin.replaceAll("'", "''");
-  const query = `SELECT last_visit_date || char(9) || url FROM moz_places WHERE url LIKE '${escapedOrigin}/%' AND last_visit_date IS NOT NULL ORDER BY last_visit_date DESC LIMIT 1;`;
-  const snapshotDirectory = mkdtempSync(path.join(tmpdir(), "zmanager-firefox-history-"));
+  const queries = {
+    safari: `SELECT history_visits.visit_time || char(9) || history_items.url FROM history_visits JOIN history_items ON history_items.id = history_visits.history_item WHERE history_items.url LIKE '${escapedOrigin}/%' ORDER BY history_visits.visit_time DESC LIMIT 1;`,
+    chromium: `SELECT visits.visit_time || char(9) || urls.url FROM visits JOIN urls ON urls.id = visits.url WHERE urls.url LIKE '${escapedOrigin}/%' ORDER BY visits.visit_time DESC LIMIT 1;`,
+    firefox: `SELECT last_visit_date || char(9) || url FROM moz_places WHERE url LIKE '${escapedOrigin}/%' AND last_visit_date IS NOT NULL ORDER BY last_visit_date DESC LIMIT 1;`,
+  } as const;
+  const snapshotDirectory = mkdtempSync(path.join(tmpdir(), "zmanager-browser-history-"));
 
   const readLatest = async (): Promise<{ timestamp: number; url: string } | null> => {
-    const visits = await Promise.all(databases.map(async (database) => {
-      const snapshot = path.join(snapshotDirectory, `${databases.indexOf(database)}-places.sqlite`);
+    const visits = await Promise.all(databases.map(async (database, index) => {
+      const snapshot = path.join(snapshotDirectory, `${index}-${path.basename(database.path)}`);
       try {
-        // Firefox keeps places.sqlite open and may hold a read lock while the
-        // browser is handling the new navigation. Query a point-in-time copy
-        // plus its WAL/SHM companions instead of racing the live database.
-        copyFileSync(database, snapshot);
+        // Browsers keep their history database open and may hold a read lock
+        // while handling navigation. Query a point-in-time copy plus its WAL/
+        // SHM companions instead of racing the live database.
+        copyFileSync(database.path, snapshot);
         for (const suffix of ["-wal", "-shm"]) {
-          const sidecar = `${database}${suffix}`;
+          const sidecar = `${database.path}${suffix}`;
           if (existsSync(sidecar)) copyFileSync(sidecar, `${snapshot}${suffix}`);
         }
-        const result = await execFileAsync("sqlite3", ["-readonly", snapshot, query], { encoding: "utf8" }) as { stdout: string };
+        const result = await execFileAsync("sqlite3", ["-readonly", snapshot, queries[database.kind]], {
+          encoding: "utf8",
+          timeout: 2_000,
+        }) as { stdout: string };
         const line = result.stdout.trim().split(/\r?\n/u).filter(Boolean).at(-1);
         if (!line) return null;
         const separator = line.indexOf("\t");

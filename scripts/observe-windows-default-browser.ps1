@@ -104,10 +104,15 @@ function Get-BrowserAddressValues {
     return $values
 }
 
-foreach ($value in Get-BrowserAddressValues) { [void]$baselineUrls.Add($value) }
+# Signal readiness before the initial UI Automation scan. Enumerating a
+# Chromium accessibility tree can take several seconds on a fresh hosted
+# runner, and the caller must be able to start the navigation while this
+# process finishes establishing its baseline and event handlers.
 if (-not [string]::IsNullOrWhiteSpace($ReadyFile)) {
     Set-Content -LiteralPath $ReadyFile -Value "ready" -NoNewline
 }
+
+foreach ($value in Get-BrowserAddressValues) { [void]$baselineUrls.Add($value) }
 
 function Write-Result {
     param(
