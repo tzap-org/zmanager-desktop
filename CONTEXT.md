@@ -348,26 +348,32 @@ step-up prompt exists here.
 build with `--features hosted-revocation`. `TzapCertificateLifecycleError::AdminMfaRequired`
 already separates the recoverable "step up and retry" case from a flat authorization failure.
 
-## Device identity is not reproducible across a fresh install
+## Device identity is per-install by design
 
 A device's server-side identity is the SPKI SHA-256 fingerprint of its signing key, on both the
-sign and login side. `enroll_or_renew_device_certificate` reuses an existing key by looking up a
-`label` in the local identity catalog. The private key itself lives in the OS keyring, but the
-reference that locates it (`TzapSecretRef::generate()`) is 24 random bytes and is deliberately
-non-discoverable — the only record of it, and of the label, is the catalog file under
-`app_data_dir/tzap-state`.
+sign and login side. A fresh install generates a new signing key and therefore enrolls as a new
+device. **That is intended, not a defect.**
 
-So if the state directory is lost (uninstall, new machine, cleared app data) while the keyring
-entry survives, the label lookup misses, a fresh keypair is generated, and the server sees a
-**brand-new device**. The old device stays active indefinitely, and with retirement disabled here
-it cannot be retired from this app at all. The orphaned keyring entry is never cleaned up.
+`zmanager-mobile/docs/mobile-contact-book-design.md` §9.3 excludes the device signing key and its
+certificate from backup: "Those are device identity: a new phone enrolls its own certificate, as
+it does today, and a signing key that could be restored onto another device would weaken what a
+signature means." §8.4 additionally makes this app a read-only consumer of account backups that
+never writes back, and leaves the CLI out entirely. Do not propose backing up or restoring a
+device signing key here; the `/v1/me/key-backup` slots are for password-sealed *recipient* keys,
+which are the opposite case — losing those destroys data rather than merely requiring
+re-enrollment.
 
-The intended recovery path already exists server-side and is unused: `/v1/me/key-backup/{public_device_id}`
-(GET/PUT/DELETE), with `TzapBackupClient` support in `zmanager-tzap-hosted`. The desktop currently
-calls only `fetch_contact_backup`. Wiring key backup into enrollment — upload on enrol, restore on
-a fresh install — makes the key reproducible without weakening the non-discoverable-reference
-property. Deriving the secret reference from the label instead would also work but deliberately
-contradicts that property, and needs a migration for existing installs.
+Mechanically, reuse across runs works by looking up a `label` in the local identity catalog. The
+private key lives in the OS keyring, but the reference locating it (`TzapSecretRef::generate()`)
+is deliberately non-discoverable random bytes recorded only in the catalog under
+`app_data_dir/tzap-state`. Losing that directory therefore means a new key, a new device, and an
+orphaned keyring entry.
+
+**The real problem is accumulation, not identity.** Superseded devices stay active on the server
+indefinitely, nothing expires them, and with retirement disabled here (above) they cannot be
+retired from this app at all. That is a lifecycle question for the server — retire-on-expiry, a
+per-user device cap, or restoring a usable retirement path — not a reason to make signing keys
+portable.
 
 ## MFA step-up: backend landed, UI pending (2026-09-12)
 
@@ -377,32 +383,6 @@ They wrap `TzapBackupClient::start_email_step_up` / `verify_step_up`. Email is u
 code because every account has a verified address; verification accepts an emailed *or* TOTP
 code, since the server tries every active factor.
 
-**No UI calls them yet.** They are the prerequisite for two blocked things, in this order:
-
-1. Re-enabling `hosted-revocation` (see above) — the step-up is what the revoke paths need.
-2. Restoring a key backup, because the *read* side is MFA-gated.
-
-Note the server's asymmetry, which is deliberate (design §10): `PUT`/`DELETE` on
-`/v1/me/key-backup/{public_device_id}` need **no** step-up, only `GET`/list do. So the upload
-half of key backup can ship before any step-up UI exists — and it is the time-sensitive half,
-because a key that was never backed up cannot be recovered retroactively.
-
-### Remaining work for reproducible device identity
-
-| Piece | Where | State |
-|---|---|---|
-| Key-backup transport + step-up transport | `zmanager-tzap-hosted` | exists |
-| Sealed envelope (Argon2id + AES-256-GCM, password-authenticated) | `zmanager-core` | exists, **recipient keys only** |
-| Extend the sealed payload to device signing keys | `zmanager-core` | **not started — needs a format decision** |
-| Backup-password UX | desktop | not started |
-| Upload on enrol (no step-up needed) | desktop | not started |
-| Step-up commands | desktop | **done** |
-| Step-up UI | desktop | not started |
-| Restore on fresh install | desktop | not started |
-
-The open design question is the payload format: `TzapRecipientKeysBackupPayload` is a versioned,
-password-sealed envelope covering recipient keys. Device signing keys are a different record
-type (`TzapDeviceSigningKeyRecord`). Either the payload grows a second collection behind a format
-version bump, or signing keys get their own envelope under the same per-device backup slot.
-That choice changes the compatibility story for existing recipient-key backups and should be made
-deliberately rather than inferred.
+**No UI calls them yet.** They exist to unblock re-enabling `hosted-revocation` above: the
+step-up is what the personal revoke paths require, and it is the only thing standing between the
+current state and a working retirement flow in this app.
