@@ -1057,6 +1057,62 @@ pub fn account_fetch_current_user(_app: AppHandle, runtime: State<'_, AccountRun
     }
 }
 
+/// Requests a one-time step-up code by email (`POST /v1/me/mfa/email/start`).
+///
+/// The sign server gates its sensitive operations — reading a key backup, and now revoking a
+/// personal certificate or device — behind a recent MFA step-up on the *calling session*. A
+/// step-up performed in the hosted console belongs to a different session, so the desktop has to
+/// be able to satisfy its own. Email is used rather than TOTP because every account has a
+/// verified address, whereas a TOTP factor is optional; the verify call below accepts either,
+/// since the server tries every active factor.
+#[tauri::command]
+pub fn account_start_mfa_step_up(runtime: State<'_, AccountRuntime>) -> Result<(), CommandErrorDto> {
+    let (session, environment_str) = active_hosted_session(&runtime)?;
+    let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|error| account_error("account_http_client_failed", error))?;
+    let client = TzapBackupClient::new(&hosted_account_base_url(&environment_str)?, &transport);
+    client.start_email_step_up(&session).map_err(|error| map_step_up_error(&runtime, error))
+}
+
+/// Verifies a step-up code so this session satisfies the server's freshness window.
+///
+/// Accepts an emailed code or a TOTP code: the server tries every active factor.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountMfaStepUpRequest {
+    pub code: String,
+}
+
+#[tauri::command]
+pub fn account_verify_mfa_step_up(request: AccountMfaStepUpRequest, runtime: State<'_, AccountRuntime>) -> Result<(), CommandErrorDto> {
+    let code = request.code.trim().to_owned();
+    if code.is_empty() {
+        return Err(CommandErrorDto::invalid_request("Enter the verification code"));
+    }
+    let (session, environment_str) = active_hosted_session(&runtime)?;
+    let transport = crate::hosted_transport::HostedHttpTransport::new().map_err(|error| account_error("account_http_client_failed", error))?;
+    let client = TzapBackupClient::new(&hosted_account_base_url(&environment_str)?, &transport);
+    client.verify_step_up(&session, &code).map_err(|error| map_step_up_error(&runtime, error))
+}
+
+fn hosted_account_base_url(environment_str: &str) -> Result<String, CommandErrorDto> {
+    let environment = hosted_environment(environment_str)?;
+    let client_id = hosted_client_id(environment)?;
+    Ok(hosted_auth_config(environment, client_id).hosted_account_base_url)
+}
+
+fn map_step_up_error(runtime: &AccountRuntime, error: TzapBackupError) -> CommandErrorDto {
+    match error {
+        TzapBackupError::Auth(zmanager_tzap_hosted::auth_client::TzapAuthError::HttpStatus { status_code: 401 }) => {
+            clear_hosted_session(runtime, "expired");
+            CommandErrorDto::unauthorized("Hosted sign-in expired. Please sign in again.")
+        }
+        TzapBackupError::HttpStatus { status_code: 400, .. } => {
+            CommandErrorDto::invalid_request("That code was not accepted. Request a new one and try again.")
+        }
+        other => account_error("account_mfa_step_up_failed", other),
+    }
+}
+
 #[tauri::command]
 pub fn account_apply_hosted_callback(request: AccountHostedAuthCallbackRequest, runtime: State<'_, AccountRuntime>) -> Result<(), CommandErrorDto> {
     validate_callback(&request)?;

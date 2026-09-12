@@ -159,6 +159,12 @@ const COMMAND_WRAPPERS = [
     call: () => api.acceptAccountContactCard({ version: 1 }),
   },
   { command: "account_sync_contacts", call: () => api.syncAccountContacts() },
+  { command: "account_start_mfa_step_up", call: () => api.startAccountMfaStepUp() },
+  {
+    command: "account_verify_mfa_step_up",
+    request: { code: "123456" },
+    call: () => api.verifyAccountMfaStepUp("123456"),
+  },
   {
     command: "start_archive_index",
     request: { archivePath: "C:/archives/demo.zip" },

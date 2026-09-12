@@ -162,6 +162,20 @@ export async function syncAccountContacts(): Promise<AccountContactSyncResultDto
   return invoke<AccountContactSyncResultDto>("account_sync_contacts");
 }
 
+/**
+ * Requests a one-time step-up code by email. The sign server gates reading a key backup, and
+ * revoking a personal certificate or device, behind a recent MFA step-up on the calling session,
+ * and a step-up done in the hosted console belongs to a different session.
+ */
+export async function startAccountMfaStepUp(): Promise<void> {
+  return invoke<void>("account_start_mfa_step_up");
+}
+
+/** Verifies an emailed or TOTP step-up code so this session satisfies the freshness window. */
+export async function verifyAccountMfaStepUp(code: string): Promise<void> {
+  return invoke<void>("account_verify_mfa_step_up", { request: { code } });
+}
+
 export async function enrollAccountCertificate(): Promise<AccountLifecycleResultDto> {
   return invoke<AccountLifecycleResultDto>("account_enroll_certificate");
 }

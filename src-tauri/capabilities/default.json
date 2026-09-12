@@ -2,8 +2,14 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
   "description": "Allow the main ZManager window to run archive commands and use native file dialogs/openers.",
-  "windows": ["main"],
-  "platforms": ["windows", "linux", "macOS"],
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "windows",
+    "linux",
+    "macOS"
+  ],
   "permissions": [
     "allow-healthcheck",
     "allow-project-contract",
@@ -37,6 +43,8 @@
     "allow-account-inspect-contact-card",
     "allow-account-accept-contact-card",
     "allow-account-sync-contacts",
+    "allow-account-start-mfa-step-up",
+    "allow-account-verify-mfa-step-up",
     "allow-start-archive-index",
     "allow-wait-archive-index",
     "allow-get-archive-children",

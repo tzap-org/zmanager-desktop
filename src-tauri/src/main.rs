@@ -181,6 +181,8 @@ fn main() {
             account::account_inspect_contact_card,
             account::account_accept_contact_card,
             account::account_sync_contacts,
+            account::account_start_mfa_step_up,
+            account::account_verify_mfa_step_up,
             commands::start_archive_index,
             commands::wait_archive_index,
             commands::get_archive_children,

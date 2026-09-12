@@ -368,3 +368,41 @@ calls only `fetch_contact_backup`. Wiring key backup into enrollment — upload 
 a fresh install — makes the key reproducible without weakening the non-discoverable-reference
 property. Deriving the secret reference from the label instead would also work but deliberately
 contradicts that property, and needs a migration for existing installs.
+
+## MFA step-up: backend landed, UI pending (2026-09-12)
+
+`account_start_mfa_step_up` and `account_verify_mfa_step_up` are registered Tauri commands with
+TypeScript wrappers (`startAccountMfaStepUp`, `verifyAccountMfaStepUp`) and capability entries.
+They wrap `TzapBackupClient::start_email_step_up` / `verify_step_up`. Email is used to request a
+code because every account has a verified address; verification accepts an emailed *or* TOTP
+code, since the server tries every active factor.
+
+**No UI calls them yet.** They are the prerequisite for two blocked things, in this order:
+
+1. Re-enabling `hosted-revocation` (see above) — the step-up is what the revoke paths need.
+2. Restoring a key backup, because the *read* side is MFA-gated.
+
+Note the server's asymmetry, which is deliberate (design §10): `PUT`/`DELETE` on
+`/v1/me/key-backup/{public_device_id}` need **no** step-up, only `GET`/list do. So the upload
+half of key backup can ship before any step-up UI exists — and it is the time-sensitive half,
+because a key that was never backed up cannot be recovered retroactively.
+
+### Remaining work for reproducible device identity
+
+| Piece | Where | State |
+|---|---|---|
+| Key-backup transport + step-up transport | `zmanager-tzap-hosted` | exists |
+| Sealed envelope (Argon2id + AES-256-GCM, password-authenticated) | `zmanager-core` | exists, **recipient keys only** |
+| Extend the sealed payload to device signing keys | `zmanager-core` | **not started — needs a format decision** |
+| Backup-password UX | desktop | not started |
+| Upload on enrol (no step-up needed) | desktop | not started |
+| Step-up commands | desktop | **done** |
+| Step-up UI | desktop | not started |
+| Restore on fresh install | desktop | not started |
+
+The open design question is the payload format: `TzapRecipientKeysBackupPayload` is a versioned,
+password-sealed envelope covering recipient keys. Device signing keys are a different record
+type (`TzapDeviceSigningKeyRecord`). Either the payload grows a second collection behind a format
+version bump, or signing keys get their own envelope under the same per-device backup slot.
+That choice changes the compatibility story for existing recipient-key backups and should be made
+deliberately rather than inferred.
