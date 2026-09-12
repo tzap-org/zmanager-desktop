@@ -123,7 +123,7 @@ describe("AccountWorkspace", () => {
     expect(html).toContain("Enroll this device");
   });
 
-  it("does not offer server retirement while signed out", () => {
+  it("explains that device management is owned by the hosted console", () => {
     const initial = createInitialZManagerReactSnapshot();
     const store = createZManagerAppStore(
       {
@@ -145,13 +145,12 @@ describe("AccountWorkspace", () => {
       ),
     );
 
-    // Retirement revokes server-side, and the sign server now requires an MFA step-up on the
-    // calling session that this app cannot perform, so the destructive control is gone and the
-    // tab explains where the operation lives instead of offering a button that would 403.
+    // Device revocation is a server-side account operation. The desktop surface explains the
+    // ownership boundary instead of offering a local action.
     expect(html).not.toContain("Confirm Retire");
-    expect(html).not.toContain("Sign in to retire device");
-    expect(html).toContain("requires a multi-factor verification step");
-    expect(html).toContain("Hosted sign-in is still required before the console can retire this device.");
+    expect(html).not.toContain("Retire Hosted Device");
+    expect(html).toContain("Device management lives in the hosted console");
+    expect(html).toContain("Device revocation is a server-side account operation");
   });
 
   it("keeps a notice and long Contacts content inside the shared bounded surface", () => {

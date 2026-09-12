@@ -330,23 +330,17 @@ guards. Do not reimplement these behaviors in TypeScript.
 - `docs/windows-context-menu-behavior.md`: Windows shell action contract
 - `docs/adr/`: durable architectural decisions
 
-## Hosted device retirement is disabled (2026-09-12)
+## Hosted device revocation ownership (2026-09-12)
 
-`account_retire_device` is compiled out of the default build and the Device tab no longer offers
-the action. The `hosted-revocation` cargo feature re-enables both.
+Device revocation is a server-side account operation for lost, stolen, sold, or otherwise
+untrusted devices. The hosted console owns that operation and requires MFA in the same session
+that selects the device to revoke. A future mobile account surface may provide the same remote
+operation if it has device selection and an equivalent MFA step-up.
 
-**Why.** Retirement revokes signing identities on the sign server, and the server now requires a
-recent admin MFA step-up for the personal revoke paths (`POST /v1/certificates/{id}/revoke`,
-`POST /v1/devices/{id}/revoke`) so that a stolen session alone cannot destroy a user's
-certificates. The step-up satisfaction is keyed on the **calling session** and lasts 15 minutes,
-so a verification performed in the hosted console cannot satisfy this app's session. The desktop
-has no step-up flow of its own, so the call could only ever return 403 — and it would do so
-*after* the user confirmed a destructive action. Retirement lives in the hosted console until a
-step-up prompt exists here.
-
-**To re-enable.** Add a step-up flow (prompt for a code, `POST /v1/me/mfa/step-up`, retry) and
-build with `--features hosted-revocation`. `TzapCertificateLifecycleError::AdminMfaRequired`
-already separates the recoverable "step up and retry" case from a flat authorization failure.
+`zmanager-desktop` does not revoke or retire devices, including the device on which it is running.
+It may enroll and renew its own certificate, display server-reported status, sign out, and clear
+local identity material. Clearing local material is not server-side revocation and must not be
+described as such.
 
 ## Device identity is per-install by design
 
@@ -375,14 +369,9 @@ retired from this app at all. That is a lifecycle question for the server — re
 per-user device cap, or restoring a usable retirement path — not a reason to make signing keys
 portable.
 
-## MFA step-up: backend landed, UI pending (2026-09-12)
+## MFA step-up ownership
 
-`account_start_mfa_step_up` and `account_verify_mfa_step_up` are registered Tauri commands with
-TypeScript wrappers (`startAccountMfaStepUp`, `verifyAccountMfaStepUp`) and capability entries.
-They wrap `TzapBackupClient::start_email_step_up` / `verify_step_up`. Email is used to request a
-code because every account has a verified address; verification accepts an emailed *or* TOTP
-code, since the server tries every active factor.
-
-**No UI calls them yet.** They exist to unblock re-enabling `hosted-revocation` above: the
-step-up is what the personal revoke paths require, and it is the only thing standing between the
-current state and a working retirement flow in this app.
+MFA step-up remains a hosted-account concern for device revocation. The desktop does not expose
+step-up commands solely to support revocation, because it does not own that operation. The shared
+hosted client may continue to model `AdminMfaRequired` for administrative clients that do perform
+remote revocation.

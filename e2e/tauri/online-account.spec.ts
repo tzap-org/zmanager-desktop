@@ -9,7 +9,6 @@ import type {
   AccountSnapshotDto,
   VerifyTzapCertificateResponse,
 } from "../../src/api/types";
-import { retryAsync } from "../../src/desktop/retry";
 import { captureHostedCallback } from "./helpers/hostedCallback.ts";
 import { countInstalledApplicationProcesses, observeDefaultBrowserNavigation, openRegisteredProtocol, runWindowsAccountUiAction } from "./helpers/registeredProtocol.ts";
 import { runJobInTaskWindow } from "./helpers/archiveCommands.ts";
@@ -20,7 +19,6 @@ const runArtifactDir = path.resolve(process.env.TZAP_E2E_ARTIFACT_DIR ?? path.jo
 const username = process.env.TZAP_E2E_USERNAME;
 const password = process.env.TZAP_E2E_PASSWORD;
 const boundaryResults: Record<string, { status: "passed" | "failed"; detail?: string }> = {};
-const retirementAttempts = 3;
 
 function recordBoundary(name: string, status: "passed" | "failed", detail?: string): void {
   boundaryResults[name] = detail ? { status, detail } : { status };
@@ -134,16 +132,6 @@ async function clearTestIdentityMaterial(): Promise<boolean> {
   try {
     const snapshot = await invoke<AccountSnapshotDto>("account_snapshot");
     let cleanupComplete = true;
-    if (snapshot.authStatus === "signedIn") {
-      try {
-        await retryAsync(async () => {
-          const retirement = await invoke<AccountLifecycleResultDto>("account_retire_device");
-          if (retirement.outcome !== "complete") throw new Error("Hosted device retirement is incomplete.");
-        }, retirementAttempts, 2_000);
-      } catch {
-        cleanupComplete = false;
-      }
-    }
     for (const identity of snapshot.certificates) {
       try {
         await invoke("account_remove_signing_identity", { request: { id: identity.identityId } });
@@ -175,15 +163,12 @@ async function clearTestIdentityMaterial(): Promise<boolean> {
     }
     return cleanupComplete;
   } catch {
-    // If the WDIO connection is unavailable, finish cleanup through the same
-    // external Account UI used by the installed-artifact lane so the staging
-    // device is still retired.
+    // If the WDIO connection is unavailable, finish local cleanup through the
+    // same external Account UI used by the installed-artifact lane. Device
+    // revocation remains an operation for the hosted account surface.
     if (process.platform !== "win32" || !process.env.ZMANAGER_GUI_APP_PATH) return false;
     try {
       await runWindowsAccountUiAction("OpenAccount");
-      await runWindowsAccountUiAction("OpenDevice");
-      await runWindowsAccountUiAction("Retire");
-      await runWindowsAccountUiAction("ConfirmRetire");
       await runWindowsAccountUiAction("OpenCertificates");
       await runWindowsAccountUiAction("EnsureSignedOut");
       await runWindowsAccountUiAction("DeleteIdentity");

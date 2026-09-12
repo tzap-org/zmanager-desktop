@@ -406,7 +406,6 @@ export type ZManagerAccountIntent =
   | Readonly<{ type: "acceptContactCard"; contactCard: string }>
   | Readonly<{ type: "enrollCertificate" }>
   | Readonly<{ type: "renewCertificate"; certificateId: string }>
-  | Readonly<{ type: "retireDevice" }>
   | Readonly<{ type: "syncContacts" }>;
 
 export type ZManagerContextMenuIntent =

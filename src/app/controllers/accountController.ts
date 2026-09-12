@@ -22,7 +22,6 @@ export type AccountControllerOptions = Readonly<{
   fetchCurrentUser(): Promise<AccountCurrentUserDto>;
   enrollDeviceCertificate(): Promise<AccountSnapshotDto | AccountLifecycleResultDto>;
   renewCertificate(certificateId: string): Promise<AccountSnapshotDto | AccountLifecycleResultDto>;
-  retireDevice(): Promise<AccountSnapshotDto | AccountLifecycleResultDto>;
   forget(): Promise<AccountSnapshotDto>;
   generateRecipientKey(label?: string): Promise<AccountSnapshotDto>;
   generateSigningIdentity(commonName: string, label?: string): Promise<AccountSnapshotDto>;
@@ -206,7 +205,6 @@ export function createAccountController(options: AccountControllerOptions) {
     },
     handleEnroll: () => run(options.enrollDeviceCertificate, "enrollCertificate"),
     handleRenew: (certificateId: string) => run(() => options.renewCertificate(certificateId), "renewCertificate"),
-    handleDeviceRetire: () => run(options.retireDevice, "retireDevice"),
     forget: () => run(options.forget),
     generateRecipientKey: (label?: string) => run(() => options.generateRecipientKey(label)),
     generateSigningIdentity: (commonName: string, label?: string) => run(() => options.generateSigningIdentity(commonName, label)),

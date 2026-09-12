@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet("OpenAccount", "SignIn", "Enroll", "OpenDevice", "Retire", "ConfirmRetire", "AssertRetirementComplete", "ConfirmNative", "OpenCertificates", "AssertIdentityPresent", "AssertIdentityAbsent", "AssertSignedIn", "SignOut", "DeleteIdentity", "ConfirmDelete", "AssertSignedOut", "EnsureSignedOut")]
+    [ValidateSet("OpenAccount", "SignIn", "Enroll", "OpenDevice", "AssertDeviceManagementExternal", "ConfirmNative", "OpenCertificates", "AssertIdentityPresent", "AssertIdentityAbsent", "AssertSignedIn", "SignOut", "DeleteIdentity", "ConfirmDelete", "AssertSignedOut", "EnsureSignedOut")]
     [string]$Action,
     [int]$TimeoutSeconds = 30
 )
@@ -176,13 +176,8 @@ switch ($Action) {
     "SignIn" { Invoke-Button -Pattern "^Sign in to (enroll|manage)$" }
     "Enroll" { Invoke-Button -Pattern "^Enroll this device$" }
     "OpenDevice" { Invoke-Button -Pattern "^Device$" }
-    "Retire" { Invoke-Button -Pattern "^Retire Hosted Device$" }
-    "ConfirmRetire" { Invoke-Button -Pattern "^Confirm Retire$" }
-    "AssertRetirementComplete" {
-        # A successful retirement clears the hosted session, which removes the
-        # Device tab immediately. The account controller leaves the generic
-        # completion notice visible in that signed-out state.
-        Assert-AccessibleText -Pattern "^(Retirement completed|Account operation completed\.)$" -FailureMessage "Installed Account UI did not confirm completed hosted-device retirement."
+    "AssertDeviceManagementExternal" {
+        Assert-AccessibleText -Pattern "^Device management lives in the hosted console$" -FailureMessage "Installed Account UI did not explain that device management belongs in the hosted console."
     }
     "ConfirmNative" { Invoke-NativeConfirmation }
     "OpenCertificates" { Invoke-Button -Pattern "^Certificates$" }

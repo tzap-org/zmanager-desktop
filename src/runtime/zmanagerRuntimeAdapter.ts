@@ -300,7 +300,6 @@ import {
   syncAccountContacts,
   enrollAccountCertificate,
   renewAccountCertificate,
-  retireAccountDevice,
   removeAccountRecipientKey,
   setDefaultAccountSigningIdentity,
   runLocalSendRespondToTransfer,
@@ -1246,7 +1245,6 @@ const accountController = createAccountController({
   fetchCurrentUser: fetchAccountCurrentUser,
   enrollDeviceCertificate: enrollAccountCertificate,
   renewCertificate: renewAccountCertificate,
-  retireDevice: retireAccountDevice,
   forget: forgetAccount,
   generateRecipientKey: generateAccountRecipientKey,
   generateSigningIdentity: (commonName, label) => generateAccountSigningIdentity({ commonName, label }),
@@ -2230,7 +2228,6 @@ function handleReactAccountIntent(intent: ZManagerAccountIntent) {
     }
     case "enrollCertificate": void accountController.handleEnroll(); break;
     case "renewCertificate": void accountController.handleRenew(intent.certificateId); break;
-    case "retireDevice": void accountController.handleDeviceRetire(); break;
     case "syncContacts": void accountController.syncContacts(); break;
   }
 }

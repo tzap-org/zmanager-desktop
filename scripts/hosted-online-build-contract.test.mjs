@@ -82,7 +82,7 @@ test("Windows build entry points keep local E2E on staging and production explic
   assert.match(releaseDriver, /cold callback must leave one installed application instance/u);
   assert.match(releaseDriver, /captureHostedCallback/u);
   assert.match(releaseDriver, /AssertIdentityAbsent/u);
-  assert.match(releaseDriver, /AssertRetirementComplete/u);
+  assert.doesNotMatch(releaseDriver, /Retire|ConfirmRetire|AssertRetirementComplete/u);
   assert.match(releaseDriver, /TZAP_E2E_FORCE_SESSION_EXPIRED/u);
   assert.match(releaseDriver, /delete process\.env\.TZAP_E2E_FORCE_SESSION_EXPIRED[\s\S]*stopWindowsInstalledApplication\(appPath\)[\s\S]*startWindowsInstalledApplication\(appPath\)[\s\S]*signInThroughInstalledApplication/u);
   assert.match(releaseDriver, /windows-uia-account-action\.ps1/u);
@@ -90,8 +90,9 @@ test("Windows build entry points keep local E2E on staging and production explic
   assert.doesNotMatch(accountSource, /with_reqwest\(intermediate_cache, Some\(config\.hosted_account_base_url/u);
   assert.match(accountSource, /TzapOnlineIntermediateResolver::new\(intermediate_cache, Some\(config\.hosted_account_base_url/u);
   assert.match(uiaDriver, /UIAutomationClient/u);
-  assert.match(uiaDriver, /AssertRetirementComplete/u);
-  assert.match(uiaDriver, /Retirement completed/u);
+  assert.doesNotMatch(uiaDriver, /Retire|ConfirmRetire|AssertRetirementComplete/u);
+  assert.doesNotMatch(onlineSpec, /account_retire_device|Retire|ConfirmRetire/u);
+  assert.doesNotMatch(accountSource, /account_retire_device|account_start_mfa_step_up|account_verify_mfa_step_up|hosted-revocation/u);
   assert.ok(
     releaseDriver.indexOf('assert.equal(observed.origin, "https://staging.tzap.org")') < releaseDriver.indexOf('mark("environmentSelection", "passed"'),
     "environment selection must only pass after the observed launch origin is validated",

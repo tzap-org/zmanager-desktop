@@ -29,7 +29,6 @@ describe("account controller", () => {
       fetchCurrentUser: async () => ({ displayName: "Test", assuranceLevel: "basic" }),
       enrollDeviceCertificate,
       renewCertificate,
-      retireDevice: async () => empty,
       forget: async () => empty,
       generateRecipientKey: async () => empty,
       generateSigningIdentity: async () => empty,
@@ -73,7 +72,6 @@ describe("account controller", () => {
       fetchCurrentUser: async () => ({ displayName: "Test User", assuranceLevel: "basic" }),
       enrollDeviceCertificate: async () => empty,
       renewCertificate: async () => empty,
-      retireDevice: async () => empty,
       forget: async () => empty,
       generateRecipientKey: async () => empty,
       generateSigningIdentity: async () => empty,
@@ -110,7 +108,6 @@ describe("account controller", () => {
       fetchCurrentUser: async () => ({ displayName: "Test User", assuranceLevel: "basic" }),
       enrollDeviceCertificate: async () => empty,
       renewCertificate: async () => empty,
-      retireDevice: async () => empty,
       forget: async () => empty,
       generateRecipientKey: async () => empty,
       generateSigningIdentity: async () => empty,
@@ -146,7 +143,6 @@ describe("account controller", () => {
       fetchCurrentUser: async () => ({ displayName: "Test User", assuranceLevel: "basic" }),
       enrollDeviceCertificate: async () => { throw { code: "unauthorized" }; },
       renewCertificate: async () => empty,
-      retireDevice: async () => empty,
       forget: async () => empty,
       generateRecipientKey: async () => empty,
       generateSigningIdentity: async () => empty,
@@ -184,7 +180,6 @@ describe("account controller", () => {
       fetchCurrentUser: async () => ({ displayName: "Test User", assuranceLevel: "basic" }),
       enrollDeviceCertificate: async () => empty,
       renewCertificate: async () => empty,
-      retireDevice: async () => empty,
       forget: async () => empty,
       generateRecipientKey: async () => empty,
       generateSigningIdentity: async () => empty,
@@ -221,7 +216,6 @@ describe("account controller", () => {
       fetchCurrentUser: async () => ({ displayName: "Test User", assuranceLevel: "basic" }),
       enrollDeviceCertificate: async () => empty,
       renewCertificate: async () => empty,
-      retireDevice: async () => empty,
       forget: async () => empty,
       generateRecipientKey: async () => empty,
       generateSigningIdentity: async () => empty,
@@ -244,42 +238,6 @@ describe("account controller", () => {
 
     expect(createStore).toHaveBeenCalledWith("Signer");
     expect(workspace.getSnapshot().busy).toBe(false);
-  });
-
-  it("handles device retirement intent handler", async () => {
-    const workspace = createAccountWorkspace();
-    const retire = vi.fn(async () => empty);
-
-    const controller = createAccountController({
-      workspace,
-      fetchSnapshot: async () => empty,
-      beginHostedAuth: async () => ({ launchUrl: "", state: "", expiresAtUnixSeconds: 0 }),
-      applyHostedCallback: async () => {},
-      completeHostedAuth: async () => empty,
-      fetchCurrentUser: async () => ({ displayName: "Test", assuranceLevel: "basic" }),
-      enrollDeviceCertificate: async () => empty,
-      renewCertificate: async () => empty,
-      retireDevice: retire,
-      forget: async () => empty,
-      generateRecipientKey: async () => empty,
-      generateSigningIdentity: async () => empty,
-      importSigningIdentity: async () => empty,
-      installSigningCertificate: async () => empty,
-      createSelfSignedCertificateStore: async () => empty,
-      removeSigningIdentity: async () => empty,
-      removeRecipientKey: async () => empty,
-      setDefaultSigningIdentity: async () => empty,
-      removeContact: async () => empty,
-      inspectContactCard: async () => ({ displayName: "Test", signingCertificateSha256: "", recipientPublicKeyFingerprint: "", trustSource: "official_pinned_root", verificationState: "verified", missingStatusCaveat: false }),
-      acceptContactCard: async () => empty,
-      syncContacts: async () => empty,
-      openUrl: async () => {},
-      publish: () => {},
-      errorMessage: (error) => error instanceof Error ? error.message : String(error),
-    });
-
-    await controller.handleDeviceRetire();
-    expect(retire).toHaveBeenCalled();
   });
 
   it("syncs contacts from phone snapshot and updates workspace state", async () => {
@@ -313,7 +271,6 @@ describe("account controller", () => {
       fetchCurrentUser: async () => ({ displayName: "Test", assuranceLevel: "basic" }),
       enrollDeviceCertificate: async () => empty,
       renewCertificate: async () => empty,
-      retireDevice: async () => empty,
       forget: async () => empty,
       generateRecipientKey: async () => empty,
       generateSigningIdentity: async () => empty,

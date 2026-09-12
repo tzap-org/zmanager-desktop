@@ -6,7 +6,6 @@ import { chromium } from "@playwright/test";
 
 import { captureHostedCallback } from "./helpers/hostedCallback.ts";
 import { countWindowsInstalledApplicationProcesses, observeWindowsDefaultBrowserNavigation, openRegisteredProtocol, startWindowsInstalledApplication, stopWindowsInstalledApplication } from "./helpers/registeredProtocol.ts";
-import { retryAsync } from "../../src/desktop/retry";
 
 const appPath = process.env.ZMANAGER_GUI_APP_PATH;
 const username = process.env.TZAP_E2E_USERNAME;
@@ -14,7 +13,6 @@ const password = process.env.TZAP_E2E_PASSWORD;
 const artifactDir = path.resolve(process.env.TZAP_E2E_ARTIFACT_DIR ?? path.join(".tmp", "zmanager-release-artifact-smoke"));
 const logPath = appPath ? path.join(path.dirname(appPath), "logs", "zmanager-diagnostics.log") : "";
 const boundaries: Record<string, { status: "passed" | "failed"; detail?: string }> = {};
-const retirementAttempts = 3;
 
 function mark(name: string, status: "passed" | "failed", detail?: string): void {
   boundaries[name] = detail ? { status, detail } : { status };
@@ -31,17 +29,6 @@ function runUiAction(action: string): Promise<void> {
   });
 }
 
-async function retireInstalledDeviceWithRetry(): Promise<void> {
-  await retryAsync(async () => {
-    // Re-select the tab on every attempt. The installed release can restore the
-    // last account tab after a restart, so a prior OpenDevice action may race
-    // with the account view being rehydrated.
-    await runUiAction("OpenDevice");
-    await runUiAction("Retire");
-    await runUiAction("ConfirmRetire");
-    await runUiAction("AssertRetirementComplete");
-  }, retirementAttempts, 2_000);
-}
 
 function captureFailureScreen(): Promise<void> {
   return new Promise((resolve) => {
@@ -222,22 +209,23 @@ async function main(): Promise<void> {
       await stopWindowsInstalledApplication(appPath).catch(() => undefined);
     }
 
-    // The Device tab is intentionally unavailable while signed out. Re-authenticate
-    // after the forced-expiry assertion so cleanup can retire the hosted device.
+    // Re-authenticate after the forced-expiry assertion so the installed artifact
+    // can prove the device-management ownership boundary before local cleanup.
     const cleanupOffset = existsSync(logPath) ? statSync(logPath).size : 0;
     await startWindowsInstalledApplication(appPath);
     await runUiAction("OpenAccount");
     await signInThroughInstalledApplication({ allowAlreadyCompleted: true });
     await waitForLog(cleanupOffset, ["\"name\":\"hostedAuthCompleted\""]);
     await runUiAction("AssertSignedIn");
-    await retireInstalledDeviceWithRetry();
+    await runUiAction("OpenDevice");
+    await runUiAction("AssertDeviceManagementExternal");
     await runUiAction("OpenCertificates");
     await runUiAction("EnsureSignedOut");
     await runUiAction("DeleteIdentity");
     await runUiAction("ConfirmDelete");
     await runUiAction("AssertIdentityAbsent");
     await runUiAction("AssertSignedOut");
-    mark("cleanup", "passed");
+    mark("cleanup", "passed", "local account material cleared; device revocation remains hosted-console-owned");
     completed = true;
   } finally {
     if (!completed) await captureFailureScreen();
