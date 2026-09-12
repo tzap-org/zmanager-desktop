@@ -329,3 +329,42 @@ guards. Do not reimplement these behaviors in TypeScript.
 - `docs/REQUIREMENTS.md`: functional, platform, security, and acceptance requirements
 - `docs/windows-context-menu-behavior.md`: Windows shell action contract
 - `docs/adr/`: durable architectural decisions
+
+## Hosted device retirement is disabled (2026-09-12)
+
+`account_retire_device` is compiled out of the default build and the Device tab no longer offers
+the action. The `hosted-revocation` cargo feature re-enables both.
+
+**Why.** Retirement revokes signing identities on the sign server, and the server now requires a
+recent admin MFA step-up for the personal revoke paths (`POST /v1/certificates/{id}/revoke`,
+`POST /v1/devices/{id}/revoke`) so that a stolen session alone cannot destroy a user's
+certificates. The step-up satisfaction is keyed on the **calling session** and lasts 15 minutes,
+so a verification performed in the hosted console cannot satisfy this app's session. The desktop
+has no step-up flow of its own, so the call could only ever return 403 — and it would do so
+*after* the user confirmed a destructive action. Retirement lives in the hosted console until a
+step-up prompt exists here.
+
+**To re-enable.** Add a step-up flow (prompt for a code, `POST /v1/me/mfa/step-up`, retry) and
+build with `--features hosted-revocation`. `TzapCertificateLifecycleError::AdminMfaRequired`
+already separates the recoverable "step up and retry" case from a flat authorization failure.
+
+## Device identity is not reproducible across a fresh install
+
+A device's server-side identity is the SPKI SHA-256 fingerprint of its signing key, on both the
+sign and login side. `enroll_or_renew_device_certificate` reuses an existing key by looking up a
+`label` in the local identity catalog. The private key itself lives in the OS keyring, but the
+reference that locates it (`TzapSecretRef::generate()`) is 24 random bytes and is deliberately
+non-discoverable — the only record of it, and of the label, is the catalog file under
+`app_data_dir/tzap-state`.
+
+So if the state directory is lost (uninstall, new machine, cleared app data) while the keyring
+entry survives, the label lookup misses, a fresh keypair is generated, and the server sees a
+**brand-new device**. The old device stays active indefinitely, and with retirement disabled here
+it cannot be retired from this app at all. The orphaned keyring entry is never cleaned up.
+
+The intended recovery path already exists server-side and is unused: `/v1/me/key-backup/{public_device_id}`
+(GET/PUT/DELETE), with `TzapBackupClient` support in `zmanager-tzap-hosted`. The desktop currently
+calls only `fetch_contact_backup`. Wiring key backup into enrollment — upload on enrol, restore on
+a fresh install — makes the key reproducible without weakening the non-discoverable-reference
+property. Deriving the secret reference from the label instead would also work but deliberately
+contradicts that property, and needs a migration for existing installs.

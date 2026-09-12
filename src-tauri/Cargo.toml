@@ -20,6 +20,11 @@ license = "Apache-2.0"
 publish = false
 
 [features]
+# Personal device retirement revokes server-side, and the sign server requires a recent admin
+# MFA step-up on the calling session. The desktop app has no step-up flow, and a step-up done in
+# the hosted console belongs to a different session, so retirement is disabled by default and
+# lives in the hosted console. Enable once a step-up prompt exists here.
+hosted-revocation = []
 default = ["hosted-online"]
 # Hosted account sign-in is part of the product build. The client ID is public
 # configuration; private session material remains in the native secure store.

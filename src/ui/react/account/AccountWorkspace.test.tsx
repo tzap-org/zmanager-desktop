@@ -145,9 +145,13 @@ describe("AccountWorkspace", () => {
       ),
     );
 
-    expect(html).toContain("Sign in to retire device");
-    expect(html).toContain("Hosted sign-in is required before the server can retire this device.");
-    expect(html).toContain('disabled=""');
+    // Retirement revokes server-side, and the sign server now requires an MFA step-up on the
+    // calling session that this app cannot perform, so the destructive control is gone and the
+    // tab explains where the operation lives instead of offering a button that would 403.
+    expect(html).not.toContain("Confirm Retire");
+    expect(html).not.toContain("Sign in to retire device");
+    expect(html).toContain("requires a multi-factor verification step");
+    expect(html).toContain("Hosted sign-in is still required before the console can retire this device.");
   });
 
   it("keeps a notice and long Contacts content inside the shared bounded surface", () => {

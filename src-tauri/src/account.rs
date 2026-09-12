@@ -26,8 +26,8 @@ use zmanager_tzap_hosted::auth_client::{
 };
 use zmanager_tzap_hosted::backup_client::{TzapBackupClient, TzapBackupError};
 use zmanager_tzap_hosted::certificate_lifecycle::{
-    RENEWAL_GRACE_MAX_SECONDS, TzapCertificateLifecycleClient, TzapCertificateLifecycleError, TzapRenewalPolicy, TzapRenewalRequest, TzapRetirementCompletion,
-    TzapRetirementReport, enroll_or_renew_device_certificate,
+    RENEWAL_GRACE_MAX_SECONDS, TzapCertificateLifecycleClient, TzapCertificateLifecycleError, TzapRenewalPolicy, TzapRenewalRequest,
+    enroll_or_renew_device_certificate,
 };
 use zmanager_tzap_hosted::enrollment_client::{TzapEnrollmentCertificateValidator, TzapEnrollmentClient, TzapEnrollmentError, TzapEnrollmentRequest};
 use zmanager_tzap_hosted::intermediate_client::TzapOnlineIntermediateResolver;
@@ -526,6 +526,10 @@ fn map_lifecycle_error(error: TzapCertificateLifecycleError) -> CommandErrorDto 
     }
 }
 
+#[cfg(feature = "hosted-revocation")]
+use zmanager_tzap_hosted::certificate_lifecycle::{TzapRetirementCompletion, TzapRetirementReport};
+
+#[cfg(feature = "hosted-revocation")]
 fn retire_personal_devices_with_fallback<T: TzapAuthHttpTransport>(
     lifecycle_client: &TzapCertificateLifecycleClient<'_, T>,
     store: &mut NativeTzapLocalIdentityStore,
@@ -722,6 +726,32 @@ pub fn account_renew_certificate(
     }
 }
 
+/// Device retirement is disabled in the desktop app (default build).
+///
+/// The sign server requires a recent admin MFA step-up on the *calling session* before it will
+/// revoke a personal certificate or device, so that a stolen session alone cannot destroy a
+/// user's signing identities. The desktop app has no step-up flow: there is no code prompt here,
+/// and a step-up performed in the hosted console belongs to a different session, so it cannot
+/// satisfy this one. Calling anyway would surface an opaque 403 *after* the user confirmed a
+/// destructive action, so this refuses up front and says where the operation lives.
+///
+/// Enable `hosted-revocation` once a real step-up flow exists (prompt for a code, POST
+/// /v1/me/mfa/step-up, retry). `TzapCertificateLifecycleError::AdminMfaRequired` already
+/// separates that recoverable case from a flat authorization failure.
+#[cfg(not(feature = "hosted-revocation"))]
+#[tauri::command]
+pub fn account_retire_device(_app: AppHandle, runtime: State<'_, AccountRuntime>) -> Result<AccountLifecycleResultDto, CommandErrorDto> {
+    let _lifecycle_guard = runtime.2.lock().expect("account lifecycle lock poisoned");
+    Err(CommandErrorDto::new(
+        "account_retirement_requires_hosted_console",
+        "Device retirement now requires a multi-factor verification step that the desktop app cannot perform yet.",
+        Some("Retire this device from the hosted console under Account, then reopen the desktop app to refresh its status."),
+        ErrorSeverityDto::Error,
+        false,
+    ))
+}
+
+#[cfg(feature = "hosted-revocation")]
 #[tauri::command]
 pub fn account_retire_device(app: AppHandle, runtime: State<'_, AccountRuntime>) -> Result<AccountLifecycleResultDto, CommandErrorDto> {
     let _lifecycle_guard = runtime.2.lock().expect("account lifecycle lock poisoned");
@@ -806,6 +836,7 @@ pub fn account_retire_device(app: AppHandle, runtime: State<'_, AccountRuntime>)
     lifecycle_result(&app, &runtime, "complete", attempted_device_ids, Vec::new())
 }
 
+#[cfg(feature = "hosted-revocation")]
 fn mark_completed_retirement_devices(store: &mut impl TzapLocalIdentityStore, completed_device_ids: &[String]) -> Result<(), CommandErrorDto> {
     if completed_device_ids.is_empty() {
         return Ok(());
@@ -2433,6 +2464,8 @@ mod tests {
         assert_eq!(snapshot.certificates[0].identity_type, "hosted");
     }
 
+    // Retirement is compiled out of the default build, so its unit test follows the same gate.
+    #[cfg(feature = "hosted-revocation")]
     #[test]
     fn partial_retirement_marks_only_server_confirmed_devices_non_signing() {
         let mut store = zmanager_core::local_identity_store::InMemoryTzapLocalIdentityStore::new();
