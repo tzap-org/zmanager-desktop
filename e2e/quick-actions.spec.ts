@@ -563,7 +563,7 @@ async function expectWindowCommand(page: Page, command: string) {
 
 
 test("LAN share discovers from picker, shows progress, and locks completed receiver", async ({ page }) => {
-  const peer = { alias: "Same name", fingerprint: "peer", port: 53317, protocol: "https", ip: "192.168.1.5", deviceModel: "Windows" };
+  const peer = { alias: "Same name", fingerprint: "peer", port: 53317, protocol: "https", ip: "192.168.1.5", deviceModel: "Windows", lastSeenUnixSeconds: null };
   await installQuickActionTauriStub(page, [notRequestedState], { shareItems: [shareFixture()], discoveries: [[], [peer, { ...peer, fingerprint: "other", ip: "192.168.1.6" }]] });
   await page.goto("/");
   const panel = page.getByRole("region", { name: "Share queue" });
