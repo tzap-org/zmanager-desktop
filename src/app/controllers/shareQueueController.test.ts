@@ -31,7 +31,7 @@ describe("share queue controller", () => {
   });
   it("coalesces rapid receiver selections into the first commitment", async () => {
     const { controller, api } = setup();
-    const receiver = { alias: "Peer", fingerprint: "peer", port: 53317, protocol: "https", ip: null, deviceModel: null };
+    const receiver = { alias: "Peer", fingerprint: "peer", port: 53317, protocol: "https", ip: null, deviceModel: null, lastSeenUnixSeconds: null };
     await Promise.all([controller.setReceiver("share-1", receiver), controller.setReceiver("share-1", { ...receiver, fingerprint: "other" })]);
     expect(api.setShareReceiver).toHaveBeenCalledTimes(1);
     expect(api.setShareReceiver).toHaveBeenCalledWith({ shareId: "share-1", receiver });

@@ -14,7 +14,7 @@ function setup(item = shareFixture()) {
   const view = render(<ZManagerAppRuntimeProvider store={store}><ShareQueuePanel /></ZManagerAppRuntimeProvider>);
   return { view, store, onIntent };
 }
-const peer = { alias: "Peer", fingerprint: "peer", port: 53317, protocol: "https", ip: "192.168.1.5", deviceModel: null };
+const peer = { alias: "Peer", fingerprint: "peer", port: 53317, protocol: "https", ip: "192.168.1.5", deviceModel: null, lastSeenUnixSeconds: null };
 
 describe("share queue panel", () => {
   it("does not invent a byte count when a tiny send finishes before its first progress event", () => {

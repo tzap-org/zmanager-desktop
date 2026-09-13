@@ -943,6 +943,7 @@ mod tests {
             protocol: "https".into(),
             ip: Some("192.168.1.20".into()),
             device_model: None,
+            last_seen_unix_seconds: None,
         }
     }
 

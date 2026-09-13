@@ -222,17 +222,38 @@ pub struct LocalSendDeviceInfoDto {
     pub protocol: String,
     pub ip: Option<String>,
     pub device_model: Option<String>,
+    /// When this peer last confirmed itself, for devices that came from discovery.
+    ///
+    /// `None` where the device is not a discovery result — an event's sender,
+    /// or a send target the caller handed back to us.
+    pub last_seen_unix_seconds: Option<u64>,
 }
 
 impl From<zmanager_localsend::DeviceInfoDto> for LocalSendDeviceInfoDto {
     fn from(value: zmanager_localsend::DeviceInfoDto) -> Self {
-        Self { alias: value.alias, fingerprint: value.fingerprint, port: value.port, protocol: value.protocol, ip: value.ip, device_model: value.device_model }
+        Self {
+            alias: value.alias,
+            fingerprint: value.fingerprint,
+            port: value.port,
+            protocol: value.protocol,
+            ip: value.ip,
+            device_model: value.device_model,
+            last_seen_unix_seconds: value.last_seen_unix_seconds,
+        }
     }
 }
 
 impl From<LocalSendDeviceInfoDto> for zmanager_localsend::DeviceInfoDto {
     fn from(value: LocalSendDeviceInfoDto) -> Self {
-        Self { alias: value.alias, fingerprint: value.fingerprint, port: value.port, protocol: value.protocol, ip: value.ip, device_model: value.device_model }
+        Self {
+            alias: value.alias,
+            fingerprint: value.fingerprint,
+            port: value.port,
+            protocol: value.protocol,
+            ip: value.ip,
+            device_model: value.device_model,
+            last_seen_unix_seconds: value.last_seen_unix_seconds,
+        }
     }
 }
 

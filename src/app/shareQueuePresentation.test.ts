@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { shareFixture } from "./shareQueueTestFixtures";
 import { presentShare } from "./shareQueuePresentation";
 
-const peer = { alias: "Peer", fingerprint: "peer", port: 53317, protocol: "https", ip: "192.168.1.5", deviceModel: null };
+const peer = { alias: "Peer", fingerprint: "peer", port: 53317, protocol: "https", ip: "192.168.1.5", deviceModel: null, lastSeenUnixSeconds: null };
 
 describe("share presentation", () => {
   it("uses transfer bytes after compression and awaits confirmed success", () => {

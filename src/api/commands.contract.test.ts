@@ -352,8 +352,8 @@ const COMMAND_WRAPPERS = [
   },
   {
     command: "set_share_receiver",
-    request: { shareId: "share-1", receiver: { alias: "Peer", fingerprint: "fingerprint-1", port: 53317, protocol: "http", ip: "192.168.1.20", deviceModel: null } },
-    call: () => api.setShareReceiver({ shareId: "share-1", receiver: { alias: "Peer", fingerprint: "fingerprint-1", port: 53317, protocol: "http", ip: "192.168.1.20", deviceModel: null } }),
+    request: { shareId: "share-1", receiver: { alias: "Peer", fingerprint: "fingerprint-1", port: 53317, protocol: "http", ip: "192.168.1.20", deviceModel: null, lastSeenUnixSeconds: null } },
+    call: () => api.setShareReceiver({ shareId: "share-1", receiver: { alias: "Peer", fingerprint: "fingerprint-1", port: 53317, protocol: "http", ip: "192.168.1.20", deviceModel: null, lastSeenUnixSeconds: null } }),
   },
   {
     command: "start_share",

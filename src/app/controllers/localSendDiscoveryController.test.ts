@@ -6,7 +6,7 @@ import { createLocalSendDiscoveryController } from "./localSendDiscoveryControll
 describe("local send discovery controller", () => {
   it("deduplicates picker scans and refreshes expired results", async () => {
     let now = 0;
-    const device = { alias: "Peer", fingerprint: "peer", port: 53317, protocol: "https", ip: null, deviceModel: null };
+    const device = { alias: "Peer", fingerprint: "peer", port: 53317, protocol: "https", ip: null, deviceModel: null, lastSeenUnixSeconds: null };
     const discover = vi.fn(async () => [device]);
     const controller = createLocalSendDiscoveryController({ discover, publish: () => {}, errorMessage: String, now: () => now });
     await Promise.all([controller.openPicker("self"), controller.openPicker("self")]);
@@ -32,7 +32,7 @@ describe("local send discovery controller", () => {
   it("publishes discovered receivers without exposing the desktop adapter to React", async () => {
     const publish = vi.fn();
     const controller = createLocalSendDiscoveryController({
-      discover: async (alias) => [{ alias, fingerprint: "peer-1", port: 53317, protocol: "https", ip: null, deviceModel: null }],
+      discover: async (alias) => [{ alias, fingerprint: "peer-1", port: 53317, protocol: "https", ip: null, deviceModel: null, lastSeenUnixSeconds: null }],
       publish,
       errorMessage: () => "discovery failed",
     });
@@ -69,9 +69,9 @@ describe("local send discovery controller", () => {
 
     const firstRefresh = controller.refresh("first");
     const secondRefresh = controller.refresh("second");
-    resolveSecond([{ alias: "Second", fingerprint: "peer-2", port: 53317, protocol: "https", ip: null, deviceModel: null }]);
+    resolveSecond([{ alias: "Second", fingerprint: "peer-2", port: 53317, protocol: "https", ip: null, deviceModel: null, lastSeenUnixSeconds: null }]);
     await secondRefresh;
-    resolveFirst([{ alias: "First", fingerprint: "peer-1", port: 53317, protocol: "https", ip: null, deviceModel: null }]);
+    resolveFirst([{ alias: "First", fingerprint: "peer-1", port: 53317, protocol: "https", ip: null, deviceModel: null, lastSeenUnixSeconds: null }]);
     await firstRefresh;
 
     expect(controller.getSnapshot()).toMatchObject({ status: "ready", devices: [{ fingerprint: "peer-2" }] });

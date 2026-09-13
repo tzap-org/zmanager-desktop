@@ -846,6 +846,13 @@ export type LocalSendDeviceInfoDto = {
   protocol: string;
   ip: string | null;
   deviceModel: string | null;
+  /**
+   * When this peer last confirmed itself, for devices that came from discovery.
+   *
+   * `null` where the device is not a discovery result — an event's sender, or
+   * a send target handed back to the backend.
+   */
+  lastSeenUnixSeconds: number | null;
 };
 
 export type LocalSendTransferFileDto = {
