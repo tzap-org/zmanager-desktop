@@ -2,7 +2,7 @@
 resolver = "2"
 
 [workspace.package]
-version = "1.2.4"
+version = "1.2.5"
 
 # TZAP 0.2.4 includes the Unicode-safe volume-name parsing fix that previously
 # required a temporary sibling-checkout patch.
