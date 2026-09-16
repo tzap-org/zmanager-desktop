@@ -377,6 +377,18 @@ describe("create workspace source state", () => {
     });
   });
 
+  it("reuses one snapshot per state so renders keep stable identities", () => {
+    const workspace = createCreateWorkspace();
+
+    const first = workspace.getSnapshot();
+    expect(workspace.getSnapshot()).toBe(first);
+
+    // A mutator hands back the same instance a later read observes.
+    const added = workspace.addSources(["C:/work/project"]).snapshot;
+    expect(added).not.toBe(first);
+    expect(workspace.getSnapshot()).toBe(added);
+  });
+
   it("returns snapshots that cannot mutate workspace state", () => {
     const workspace = createCreateWorkspace();
     const first = workspace.addSources(["C:/work/project"]).snapshot;

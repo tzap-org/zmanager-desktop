@@ -86,3 +86,11 @@ keyring = { version = "4.1.6", default-features = false, features = ["v1"] }
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# Apple's `strip` on macOS 26+ (Xcode ld-27037) emits a mis-aligned LINKEDIT
+# string pool, which dyld then refuses to dlopen. Proc-macro crates are host
+# dylibs that rustc must load at compile time, so stripping them breaks the
+# build with a misleading "can't find crate" error. build-override covers
+# build scripts and proc macros; the app binary keeps strip = "symbols".
+[profile.release.build-override]
+strip = false

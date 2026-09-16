@@ -17,14 +17,33 @@ const catalogs = {
   "zh-CN": zhCnMessages,
 } as const satisfies Record<SupportedLocale, MessageCatalog>;
 
+// Catalogs are static module data, so an un-overridden translator for a locale
+// is the same value every time. React components build one per render - the
+// archive toolbar builds two per command button - so returning a shared
+// instance keeps both the ~800-key catalog copy and the identity churn (which
+// defeats `memo` on anything taking a translator as a prop) off the render path.
+const sharedTranslators = new Map<SupportedLocale, Translator>();
+
 export function createTranslator(
   locale: SupportedLocale,
   catalogOverrides: Partial<Record<SupportedLocale, Partial<MessageCatalog>>> = {},
 ): Translator {
-  return createTranslatorFromCatalog(locale, {
-    ...catalogs[locale],
-    ...catalogOverrides[locale],
-  });
+  const overrides = catalogOverrides[locale];
+  if (overrides) {
+    return createTranslatorFromCatalog(locale, {
+      ...catalogs[locale],
+      ...overrides,
+    });
+  }
+
+  const shared = sharedTranslators.get(locale);
+  if (shared) {
+    return shared;
+  }
+
+  const translator = createTranslatorFromCatalog(locale, catalogs[locale]);
+  sharedTranslators.set(locale, translator);
+  return translator;
 }
 
 export function createTranslatorFromCatalog(
@@ -34,13 +53,16 @@ export function createTranslatorFromCatalog(
 ): Translator {
   const englishCatalog = catalogs[DEFAULT_LOCALE];
 
-  return {
+  // Frozen because `createTranslator` hands the same instance to every consumer
+  // of a locale: without this, one caller reassigning `t` or `locale` would
+  // poison translation for the whole app rather than just its own copy.
+  return Object.freeze({
     locale,
     t: (key, params = {}) => {
       const message = catalog[key] ?? fallbackCatalog[key] ?? englishCatalog[key] ?? key;
       return interpolateMessage(message, params);
     },
-  };
+  });
 }
 
 export function interpolateMessage(message: string, params: MessageParams): string {

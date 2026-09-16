@@ -563,9 +563,24 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
       : resetCreateColumnSettings(),
   };
 
+  // Same contract as the archive workspace: snapshots are shared immutable
+  // values keyed on state identity, so repeated reads stay identity-stable and
+  // the compress table's `useMemo`s (source paths, inclusion) do not recompute
+  // on every unrelated publish. State is only ever replaced wholesale.
+  let cachedSnapshotState: MutableCreateWorkspaceState | null = null;
+  let cachedSnapshot: CreateWorkspaceSnapshot | null = null;
+
+  function currentSnapshot(): CreateWorkspaceSnapshot {
+    if (cachedSnapshot === null || cachedSnapshotState !== state) {
+      cachedSnapshot = snapshotFromState(state);
+      cachedSnapshotState = state;
+    }
+    return cachedSnapshot;
+  }
+
   return {
     getSnapshot() {
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     suggestedArchiveName(sources) {
@@ -582,20 +597,20 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
     addSources(paths) {
       const normalizedPaths = normalizeSourcePaths(paths);
       if (normalizedPaths.length === 0) {
-        return mutationResult(state, false, [], []);
+        return mutationResult(currentSnapshot(), false, [], []);
       }
 
       const existing = new Set(state.sources);
       const addedSources = normalizedPaths.filter((path) => !existing.has(path));
       if (addedSources.length === 0) {
-        return mutationResult(state, false, [], []);
+        return mutationResult(currentSnapshot(), false, [], []);
       }
 
       state = {
         ...resetPlanState(state),
         sources: [...state.sources, ...addedSources],
       };
-      return mutationResult(state, true, addedSources, []);
+      return mutationResult(currentSnapshot(), true, addedSources, []);
     },
 
     setSources(paths) {
@@ -613,31 +628,31 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
         };
       }
 
-      return mutationResult(state, changed, addedSources, removedSources);
+      return mutationResult(currentSnapshot(), changed, addedSources, removedSources);
     },
 
     removeSources(paths) {
       const removals = new Set(normalizeSourcePaths(paths));
       if (removals.size === 0) {
-        return mutationResult(state, false, [], []);
+        return mutationResult(currentSnapshot(), false, [], []);
       }
 
       const nextSources = state.sources.filter((path) => !removals.has(path));
       const removedSources = state.sources.filter((path) => removals.has(path));
       if (removedSources.length === 0) {
-        return mutationResult(state, false, [], []);
+        return mutationResult(currentSnapshot(), false, [], []);
       }
 
       state = {
         ...resetPlanState(state),
         sources: nextSources,
       };
-      return mutationResult(state, true, [], removedSources);
+      return mutationResult(currentSnapshot(), true, [], removedSources);
     },
 
     clearSources() {
       if (state.sources.length === 0) {
-        return mutationResult(state, false, [], []);
+        return mutationResult(currentSnapshot(), false, [], []);
       }
 
       const removedSources = state.sources;
@@ -645,12 +660,12 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
         ...resetPlanState(state),
         sources: [],
       };
-      return mutationResult(state, true, [], removedSources);
+      return mutationResult(currentSnapshot(), true, [], removedSources);
     },
 
     reset() {
       if (state.sources.length === 0 && isPlanInitial(state)) {
-        return mutationResult(state, false, [], []);
+        return mutationResult(currentSnapshot(), false, [], []);
       }
 
       const removedSources = state.sources;
@@ -672,7 +687,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
         },
         columnSettings: state.columnSettings,
       };
-      return mutationResult(state, true, [], removedSources);
+      return mutationResult(currentSnapshot(), true, [], removedSources);
     },
 
     resetAfterAcceptedStart(format, defaults) {
@@ -698,14 +713,14 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
         },
         columnSettings: state.columnSettings,
       };
-      return mutationResult(state, true, [], removedSources);
+      return mutationResult(currentSnapshot(), true, [], removedSources);
     },
 
     queuePlan() {
       const revision = state.planRevision + 1;
       state = beginQueuedPlanState(state, revision);
       return Object.freeze({
-        snapshot: snapshotFromState(state),
+        snapshot: currentSnapshot(),
         revision,
         hasSources: state.sources.length > 0,
       });
@@ -716,7 +731,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
       if (revision !== undefined && revision !== state.planRevision) {
         return Object.freeze({
           ready: false,
-          snapshot: snapshotFromState(state),
+          snapshot: currentSnapshot(),
           revision,
           reason: "stale" as const,
         });
@@ -726,7 +741,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
       if (state.sources.length === 0) {
         return Object.freeze({
           ready: false,
-          snapshot: snapshotFromState(state),
+          snapshot: currentSnapshot(),
           revision: nextRevision,
           reason: "needsSources" as const,
         });
@@ -734,7 +749,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
 
       return Object.freeze({
         ready: true,
-        snapshot: snapshotFromState(state),
+        snapshot: currentSnapshot(),
         revision: nextRevision,
         request: buildPlanCreateRequest(
           state.sources,
@@ -748,7 +763,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
 
     acceptPlanResult(revision, plan) {
       if (revision !== state.planRevision) {
-        return stalePlanAcceptance(state, revision);
+        return stalePlanAcceptance(currentSnapshot(), revision);
       }
 
       state = {
@@ -760,7 +775,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
       state = pruneExcludedPathsForPlan(state);
       state = reconcileViewForPlan(state);
       return Object.freeze({
-        snapshot: snapshotFromState(state),
+        snapshot: currentSnapshot(),
         revision,
         accepted: true,
       });
@@ -768,12 +783,12 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
 
     acceptPlanError(revision, status) {
       if (revision !== state.planRevision) {
-        return stalePlanAcceptance(state, revision);
+        return stalePlanAcceptance(currentSnapshot(), revision);
       }
 
       state = setPlanErrorState(state, status);
       return Object.freeze({
-        snapshot: snapshotFromState(state),
+        snapshot: currentSnapshot(),
         revision,
         accepted: true,
       });
@@ -781,7 +796,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
 
     setPlanError(status) {
       state = setPlanErrorState(state, status);
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     refreshPlanAfterDestinationEdit() {
@@ -792,7 +807,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
           planStatus: null,
         };
       }
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     applyFormatDefaults(format, defaults, suggestionOptions) {
@@ -811,7 +826,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
           options: nextOptions,
         };
       }
-      return optionsMutationResult(state, changed);
+      return optionsMutationResult(currentSnapshot(), changed);
     },
 
     changeFormat(format, defaults) {
@@ -829,7 +844,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
           options: nextOptions,
         };
       }
-      return optionsMutationResult(state, changed);
+      return optionsMutationResult(currentSnapshot(), changed);
     },
 
     setOptions(patch) {
@@ -910,21 +925,21 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
       const optionsChanged = !sameOptions(state.options, nextOptions);
       const planWillRefresh = state.planState === "error" && state.currentPlan !== null;
       if (!optionsChanged && !planWillRefresh) {
-        return optionsMutationResult(state, false);
+        return optionsMutationResult(currentSnapshot(), false);
       }
 
       state = refreshPlanAfterTransientInputEdit({
         ...state,
         options: nextOptions,
       });
-      return optionsMutationResult(state, true);
+      return optionsMutationResult(currentSnapshot(), true);
     },
 
     setDestinationPath(path) {
       const optionsChanged = state.options.destinationPath !== path;
       const planWillRefresh = state.planState === "error" && state.currentPlan !== null;
       if (!optionsChanged && !planWillRefresh) {
-        return destinationMutationResult(state, false);
+        return destinationMutationResult(currentSnapshot(), false);
       }
 
       state = refreshPlanAfterTransientInputEdit({
@@ -934,12 +949,12 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
           destinationPath: path,
         },
       });
-      return destinationMutationResult(state, true);
+      return destinationMutationResult(currentSnapshot(), true);
     },
 
     setDestinationPathIfBlank(path) {
       if (state.options.destinationPath.trim()) {
-        return destinationMutationResult(state, false);
+        return destinationMutationResult(currentSnapshot(), false);
       }
       const nextPath = path.trim();
       const changed = state.options.destinationPath !== nextPath;
@@ -952,12 +967,12 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
           },
         };
       }
-      return destinationMutationResult(state, changed);
+      return destinationMutationResult(currentSnapshot(), changed);
     },
 
     suggestDestinationPathIfBlank(options) {
       if (state.options.destinationPath.trim()) {
-        return destinationMutationResult(state, false);
+        return destinationMutationResult(currentSnapshot(), false);
       }
       const nextPath = suggestedDestinationPathFromState(state, options);
       const changed = state.options.destinationPath !== nextPath;
@@ -970,7 +985,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
           },
         };
       }
-      return destinationMutationResult(state, changed);
+      return destinationMutationResult(currentSnapshot(), changed);
     },
 
     destinationPathWithFormatExtension(path) {
@@ -999,7 +1014,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
           },
         };
       }
-      return destinationMutationResult(state, changed, destinationPath);
+      return destinationMutationResult(currentSnapshot(), changed, destinationPath);
     },
 
     buildStartCreateRequest(input) {
@@ -1018,27 +1033,27 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
       }
 
       if (state.options.submissionInFlight) {
-        return startRequestUnavailableResult(state, "starting");
+        return startRequestUnavailableResult(currentSnapshot(), "starting");
       }
       if (state.sources.length === 0) {
-        return startRequestUnavailableResult(state, "needsSources");
+        return startRequestUnavailableResult(currentSnapshot(), "needsSources");
       }
       if (!destinationPath) {
         state = setPlanErrorState(state, { messageKey: "create.error.pickDestination" });
-        return startRequestUnavailableResult(state, "needsDestination", state.planStatus);
+        return startRequestUnavailableResult(currentSnapshot(), "needsDestination", state.planStatus);
       }
       if (state.planState === "loading") {
         state = setPlanErrorState(state, { messageKey: "create.error.refreshPlan" });
-        return startRequestUnavailableResult(state, "planning", state.planStatus);
+        return startRequestUnavailableResult(currentSnapshot(), "planning", state.planStatus);
       }
       if (state.planState !== "ready" || state.currentPlan === null) {
         state = setPlanErrorState(state, { messageKey: "create.error.refreshPlan" });
-        return startRequestUnavailableResult(state, "needsPlan", state.planStatus);
+        return startRequestUnavailableResult(currentSnapshot(), "needsPlan", state.planStatus);
       }
 
       const includedPlan = filterCreatePlanByIncludedPaths(state.currentPlan, state.excludedArchivePaths);
       if (includedPlan.planEntries.length === 0) {
-        return startRequestUnavailableResult(state, "needsIncludedEntries");
+        return startRequestUnavailableResult(currentSnapshot(), "needsIncludedEntries");
       }
 
       if (!isCreateSplitConfigurationValid({
@@ -1050,7 +1065,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
         recipientEncryptionSelected: hasTzapRecipientSelection(state.options),
       })) {
         state = setPlanErrorState(state, { messageKey: "create.error.invalidSplitConfiguration" });
-        return startRequestUnavailableResult(state, "invalidSplitConfiguration", state.planStatus);
+        return startRequestUnavailableResult(currentSnapshot(), "invalidSplitConfiguration", state.planStatus);
       }
 
       const supportsPassword = createFormatSupportsPassword(state.options.format);
@@ -1058,12 +1073,12 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
       const passwordConfirm = supportsPassword ? input?.passwordConfirm?.trim() ?? "" : "";
       if ((password || passwordConfirm) && password !== passwordConfirm) {
         state = setPlanErrorState(state, { messageKey: "create.error.passwordMismatch" });
-        return startRequestUnavailableResult(state, "passwordMismatch", state.planStatus);
+        return startRequestUnavailableResult(currentSnapshot(), "passwordMismatch", state.planStatus);
       }
 
       return Object.freeze({
         ok: true,
-        snapshot: snapshotFromState(state),
+        snapshot: currentSnapshot(),
         request: buildStartCreateRequestFromState(state, {
           password,
           signingIdentityPassword: input?.signingIdentityPassword ?? "",
@@ -1074,7 +1089,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
 
     setSubmissionInFlight(inFlight) {
       if (state.options.submissionInFlight === inFlight) {
-        return optionsMutationResult(state, false);
+        return optionsMutationResult(currentSnapshot(), false);
       }
       state = {
         ...state,
@@ -1083,17 +1098,17 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
           submissionInFlight: inFlight,
         },
       };
-      return optionsMutationResult(state, true);
+      return optionsMutationResult(currentSnapshot(), true);
     },
 
     navigateToFolder(folderPath) {
       const nextFolder = normalizeExistingCreateFolderPath(state.currentPlan?.planEntries ?? [], folderPath);
       if (nextFolder === null) {
-        return navigationMutationResult(state, false, false);
+        return navigationMutationResult(currentSnapshot(), false, false);
       }
 
       if (nextFolder === state.currentFolder) {
-        return navigationMutationResult(state, true, false);
+        return navigationMutationResult(currentSnapshot(), true, false);
       }
 
       state = {
@@ -1106,38 +1121,38 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
         )),
       };
       state = cleanupSelectionForState(state);
-      return navigationMutationResult(state, true, true);
+      return navigationMutationResult(currentSnapshot(), true, true);
     },
 
     setSearchQuery(query) {
       const nextQuery = String(query ?? "");
       if (nextQuery === state.searchQuery) {
-        return snapshotFromState(state);
+        return currentSnapshot();
       }
       state = {
         ...state,
         searchQuery: nextQuery,
       };
       state = cleanupSelectionForState(state);
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     clearSearch() {
       if (!state.searchQuery) {
-        return snapshotFromState(state);
+        return currentSnapshot();
       }
       state = {
         ...state,
         searchQuery: "",
       };
       state = cleanupSelectionForState(state);
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     toggleTreeFolder(folderPath) {
       const normalizedFolder = normalizeExistingCreateFolderPath(state.currentPlan?.planEntries ?? [], folderPath);
       if (normalizedFolder === null || !normalizedFolder) {
-        return navigationMutationResult(state, false, false);
+        return navigationMutationResult(currentSnapshot(), false, false);
       }
 
       const expandedTreeFolders = new Set(state.expandedTreeFolders);
@@ -1158,13 +1173,13 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
           expandedTreeFolders: nextExpandedTreeFolders,
         };
       }
-      return navigationMutationResult(state, true, changed);
+      return navigationMutationResult(currentSnapshot(), true, changed);
     },
 
     setTreeFolderExpanded(folderPath, expanded) {
       const normalizedFolder = normalizeExistingCreateFolderPath(state.currentPlan?.planEntries ?? [], folderPath);
       if (normalizedFolder === null || !normalizedFolder) {
-        return navigationMutationResult(state, false, false);
+        return navigationMutationResult(currentSnapshot(), false, false);
       }
 
       const expandedTreeFolders = new Set(state.expandedTreeFolders);
@@ -1185,7 +1200,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
           expandedTreeFolders: nextExpandedTreeFolders,
         };
       }
-      return navigationMutationResult(state, true, changed);
+      return navigationMutationResult(currentSnapshot(), true, changed);
     },
 
     selectRow(path, modifiers) {
@@ -1238,7 +1253,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
     setPathIncluded(path, included) {
       const normalizedPath = normalizeCreateArchivePath(path);
       if (!state.currentPlan || !normalizedPath) {
-        return inclusionMutationResult(state, false);
+        return inclusionMutationResult(currentSnapshot(), false);
       }
 
       const nextExcludedPaths = applyCreatePlanPathInclusion({
@@ -1254,7 +1269,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
           excludedArchivePaths: nextExcludedPaths,
         };
       }
-      return inclusionMutationResult(state, changed);
+      return inclusionMutationResult(currentSnapshot(), changed);
     },
 
     setAllPathsIncluded(included) {
@@ -1268,7 +1283,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
           excludedArchivePaths: nextExcludedPaths,
         };
       }
-      return inclusionMutationResult(state, changed);
+      return inclusionMutationResult(currentSnapshot(), changed);
     },
 
     setCurrentFolderIncluded(folderPath, included) {
@@ -1284,11 +1299,11 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
             excludedArchivePaths: nextExcludedPaths,
           };
         }
-        return inclusionMutationResult(state, changed);
+        return inclusionMutationResult(currentSnapshot(), changed);
       }
 
       if (!state.currentPlan) {
-        return inclusionMutationResult(state, false);
+        return inclusionMutationResult(currentSnapshot(), false);
       }
       const nextExcludedPaths = applyCreatePlanPathInclusion({
         entries: state.currentPlan.planEntries,
@@ -1303,12 +1318,12 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
           excludedArchivePaths: nextExcludedPaths,
         };
       }
-      return inclusionMutationResult(state, changed);
+      return inclusionMutationResult(currentSnapshot(), changed);
     },
 
     setVisibleRowsIncluded(included) {
       if (!state.currentPlan) {
-        return inclusionMutationResult(state, false);
+        return inclusionMutationResult(currentSnapshot(), false);
       }
 
       const visiblePaths = visibleRowsForState(state)
@@ -1316,7 +1331,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
         .map((row) => normalizeCreateArchivePath(row.path))
         .filter(Boolean);
       if (visiblePaths.length === 0) {
-        return inclusionMutationResult(state, false);
+        return inclusionMutationResult(currentSnapshot(), false);
       }
 
       let nextExcludedPaths = new Set(state.excludedArchivePaths);
@@ -1335,7 +1350,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
           excludedArchivePaths: nextExcludedPaths,
         };
       }
-      return inclusionMutationResult(state, changed);
+      return inclusionMutationResult(currentSnapshot(), changed);
     },
 
     getPathInclusionState(path) {
@@ -1359,7 +1374,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
         ...state,
         columnSettings: setCreateColumnWidth(state.columnSettings, columnId, width),
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     toggleColumnVisibility(columnId) {
@@ -1367,7 +1382,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
         ...state,
         columnSettings: toggleCreateColumnVisibility(state.columnSettings, columnId),
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     moveColumn(columnId, direction) {
@@ -1375,7 +1390,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
         ...state,
         columnSettings: moveCreateColumn(state.columnSettings, columnId, direction),
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     reorderColumn(sourceColumnId, targetColumnId) {
@@ -1383,7 +1398,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
         ...state,
         columnSettings: reorderCreateColumn(state.columnSettings, sourceColumnId, targetColumnId),
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     resetColumns(settings) {
@@ -1391,7 +1406,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
         ...state,
         columnSettings: settings ? normalizeCreateColumnSettings(settings) : resetCreateColumnSettings(),
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
   };
 
@@ -1410,7 +1425,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
         selection: nextSelection,
       };
     }
-    return selectionMutationResult(state, changed);
+    return selectionMutationResult(currentSnapshot(), changed);
   }
 }
 
@@ -1848,24 +1863,24 @@ function setPlanErrorState(
 }
 
 function startRequestUnavailableResult(
-  state: MutableCreateWorkspaceState,
+  snapshot: CreateWorkspaceSnapshot,
   reason: CreateWorkspaceStartRequestUnavailableReason,
   status: CreateWorkspacePlanStatus | null = null,
 ): Extract<CreateWorkspaceStartRequestResult, { ok: false }> {
   return Object.freeze({
     ok: false,
-    snapshot: snapshotFromState(state),
+    snapshot,
     reason,
     status,
   });
 }
 
 function stalePlanAcceptance(
-  state: MutableCreateWorkspaceState,
+  snapshot: CreateWorkspaceSnapshot,
   revision: number,
 ): CreateWorkspacePlanResultAcceptance {
   return Object.freeze({
-    snapshot: snapshotFromState(state),
+    snapshot,
     revision,
     accepted: false,
   });
@@ -2250,69 +2265,69 @@ function sameCreateSelection(
 }
 
 function selectionMutationResult(
-  state: MutableCreateWorkspaceState,
+  snapshot: CreateWorkspaceSnapshot,
   changed: boolean,
 ): CreateWorkspaceSelectionMutation {
   return Object.freeze({
-    snapshot: snapshotFromState(state),
+    snapshot,
     changed,
   });
 }
 
 function mutationResult(
-  state: MutableCreateWorkspaceState,
+  snapshot: CreateWorkspaceSnapshot,
   changed: boolean,
   addedSources: readonly string[],
   removedSources: readonly string[],
 ): CreateWorkspaceSourceMutation {
   return Object.freeze({
-    snapshot: snapshotFromState(state),
+    snapshot,
     changed,
     addedSources: Object.freeze([...addedSources]),
     removedSources: Object.freeze([...removedSources]),
-    becameEmpty: changed && state.sources.length === 0,
+    becameEmpty: changed && snapshot.sources.length === 0,
   });
 }
 
 function inclusionMutationResult(
-  state: MutableCreateWorkspaceState,
+  snapshot: CreateWorkspaceSnapshot,
   changed: boolean,
 ): CreateWorkspaceInclusionMutation {
   return Object.freeze({
-    snapshot: snapshotFromState(state),
+    snapshot,
     changed,
   });
 }
 
 function navigationMutationResult(
-  state: MutableCreateWorkspaceState,
+  snapshot: CreateWorkspaceSnapshot,
   accepted: boolean,
   changed: boolean,
 ): CreateWorkspaceNavigationMutation {
   return Object.freeze({
-    snapshot: snapshotFromState(state),
+    snapshot,
     accepted,
     changed,
   });
 }
 
 function optionsMutationResult(
-  state: MutableCreateWorkspaceState,
+  snapshot: CreateWorkspaceSnapshot,
   changed: boolean,
 ): CreateWorkspaceOptionsMutation {
   return Object.freeze({
-    snapshot: snapshotFromState(state),
+    snapshot,
     changed,
   });
 }
 
 function destinationMutationResult(
-  state: MutableCreateWorkspaceState,
+  snapshot: CreateWorkspaceSnapshot,
   changed: boolean,
-  destinationPath = state.options.destinationPath,
+  destinationPath = snapshot.options.destinationPath,
 ): CreateWorkspaceDestinationMutation {
   return Object.freeze({
-    snapshot: snapshotFromState(state),
+    snapshot,
     changed,
     destinationPath,
   });

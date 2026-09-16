@@ -9,6 +9,7 @@ export interface TimerClock {
 
 export interface AppTimerOptions {
   createPlanDebounceMs: number;
+  archiveSearchDebounceMs: number;
   clock?: TimerClock;
 }
 
@@ -25,6 +26,7 @@ export interface OneShotTimerAdapter {
 
 export interface AppTimers {
   createPlanDebounce: DebounceTimerAdapter;
+  archiveSearchDebounce: DebounceTimerAdapter;
   uiDeferrals: OneShotTimerAdapter;
 }
 
@@ -78,6 +80,7 @@ export function createAppTimers(options: AppTimerOptions): AppTimers {
 
   return {
     createPlanDebounce: createDebounceTimer(clock, options.createPlanDebounceMs),
+    archiveSearchDebounce: createDebounceTimer(clock, options.archiveSearchDebounceMs),
     uiDeferrals: createOneShotTimer(clock),
   };
 }

@@ -64,6 +64,7 @@ function createTimersWithFakeClock(fakeClock = createFakeClock()) {
     fakeClock,
     timers: createAppTimers({
       createPlanDebounceMs: 350,
+      archiveSearchDebounceMs: 200,
       clock: fakeClock.clock,
     }),
   };

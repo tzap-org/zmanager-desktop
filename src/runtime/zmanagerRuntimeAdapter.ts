@@ -565,17 +565,35 @@ const reactRuntimeStore = createReactRuntimeStore({
 const contextMenuRuntime = createRuntimeContextMenu({
   publishSnapshot: () => reactRuntimeStore.publishSnapshot(),
 });
+const appTimers = createAppTimers({
+  createPlanDebounceMs: 350,
+  archiveSearchDebounceMs: 200,
+});
+const createPlanDebounce = appTimers.createPlanDebounce;
+const archiveSearchDebounce = appTimers.archiveSearchDebounce;
+
 const archiveRuntimeActions = createArchiveRuntimeActions({
   navigateToFolder,
   navigateBack,
   navigateUp,
   loadNextPage: () => archiveLoadController.loadNextPage(),
   loadPreviousPage: () => archiveLoadController.loadPreviousPage(),
-  setSearchQuery: (query) => {
+  setSearchQuery: (query, immediate) => {
+    // Publish straight away so the field stays responsive, but debounce the
+    // load: a search walks the whole index in Rust, so running one per
+    // keystroke made typing stutter. Enter (`immediate`) skips the wait.
     publishArchiveSnapshot(archiveWorkspace.setSearchQuery(query));
-    void (query.trim()
-      ? archiveLoadController.loadSearch(query)
-      : archiveLoadController.loadFolder(archiveCurrentFolder()));
+    const runSearch = () => {
+      void (query.trim()
+        ? archiveLoadController.loadSearch(query)
+        : archiveLoadController.loadFolder(archiveCurrentFolder()));
+    };
+    archiveSearchDebounce.cancel();
+    if (immediate) {
+      runSearch();
+      return;
+    }
+    archiveSearchDebounce.schedule(runSearch);
   },
   clearSearch,
   setFlatView,
@@ -763,11 +781,6 @@ const createRuntimeActions = createCreateRuntimeActions({
   }),
   compressAndShareOnLan: startCompressAndShareOnLan,
 });
-
-const appTimers = createAppTimers({
-  createPlanDebounceMs: 350,
-});
-const createPlanDebounce = appTimers.createPlanDebounce;
 
 function archiveSnapshot(): ArchiveWorkspaceSnapshot {
   return archiveWorkspace.getSnapshot();
@@ -1927,6 +1940,8 @@ function publishArchiveSnapshot(
 }
 
 function clearSearch() {
+  // Drop any debounced search so a stale query cannot land after the clear.
+  archiveSearchDebounce.cancel();
   if (!currentSearchQuery()) {
     return;
   }

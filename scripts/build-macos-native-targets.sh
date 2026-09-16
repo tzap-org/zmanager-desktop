@@ -50,6 +50,37 @@ bin_dir=$(swift build --package-path "$package" -c release --triple "$swift_pack
 version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
 build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")
 
+# SwiftPM through Xcode 26 emitted one object per source file under
+# <Target>.build/*.swift.o. Xcode 27's build system instead emits a single
+# merged <Target>.o next to the static libraries. Resolve whichever this
+# toolchain produced so the same script links on both.
+target_objects() {
+  local target object
+  for target in "$@"; do
+    if [[ -f "$bin_dir/$target.o" ]]; then
+      printf '%s\n' "$bin_dir/$target.o"
+    else
+      for object in "$bin_dir/$target.build"/*.swift.o; do
+        [[ -e $object ]] || {
+          echo "No Swift objects found for target $target under $bin_dir" >&2
+          return 1
+        }
+        printf '%s\n' "$object"
+      done
+    fi
+  done
+}
+
+collect_objects() {
+  objects=()
+  local line
+  while IFS= read -r line; do objects+=("$line"); done < <(target_objects "$@")
+  ((${#objects[@]})) || {
+    echo "No Swift objects resolved for: $*" >&2
+    exit 1
+  }
+}
+
 sync_bundle_identity() {
   local bundle=$1
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$bundle/Contents/Info.plist"
@@ -72,12 +103,11 @@ done
 
 sync_bundle_identity "$appex"
 
+collect_objects ZManagerGenerated ZManagerMacOSShared ZManagerFinderExtensionSupport ZManagerFinderExtension
+finder_objects=("${objects[@]}")
 xcrun swiftc -o "$appex/Contents/MacOS/ZManagerFinderExtension" \
   -target "$swift_compile_target" \
-  "$bin_dir"/ZManagerGenerated.build/*.swift.o \
-  "$bin_dir"/ZManagerMacOSShared.build/*.swift.o \
-  "$bin_dir"/ZManagerFinderExtensionSupport.build/*.swift.o \
-  "$bin_dir"/ZManagerFinderExtension.build/*.swift.o \
+  "${finder_objects[@]}" \
   -framework AppKit -framework FinderSync -framework Security \
   -Xlinker -e -Xlinker _NSExtensionMain
 chmod 0755 "$appex/Contents/MacOS/ZManagerFinderExtension"
@@ -86,11 +116,11 @@ rm -rf "$preview_appex"
 mkdir -p "$preview_appex/Contents/MacOS" "$preview_appex/Contents/Resources"
 ditto "$repo_root/packaging/macos/QuickLookPreview/Info.plist" "$preview_appex/Contents/Info.plist"
 sync_bundle_identity "$preview_appex"
+collect_objects ZManagerUniFFI ZManagerPreviewModel ZManagerQuickLookPreview
+preview_objects=("${objects[@]}")
 xcrun swiftc -o "$preview_appex/Contents/MacOS/ZManagerQuickLookPreview" \
   -target "$swift_compile_target" \
-  "$bin_dir"/ZManagerUniFFI.build/*.swift.o \
-  "$bin_dir"/ZManagerPreviewModel.build/*.swift.o \
-  "$bin_dir"/ZManagerQuickLookPreview.build/*.swift.o \
+  "${preview_objects[@]}" \
   -framework AppKit -framework QuickLookUI -framework UniformTypeIdentifiers \
   "${ffi_link_args[@]}" \
   -Xlinker -e -Xlinker _NSExtensionMain
@@ -100,9 +130,11 @@ rm -rf "$thumbnail_appex"
 mkdir -p "$thumbnail_appex/Contents/MacOS" "$thumbnail_appex/Contents/Resources"
 ditto "$repo_root/packaging/macos/QuickLookThumbnail/Info.plist" "$thumbnail_appex/Contents/Info.plist"
 sync_bundle_identity "$thumbnail_appex"
+collect_objects ZManagerQuickLookThumbnail
+thumbnail_objects=("${objects[@]}")
 xcrun swiftc -o "$thumbnail_appex/Contents/MacOS/ZManagerQuickLookThumbnail" \
   -target "$swift_compile_target" \
-  "$bin_dir"/ZManagerQuickLookThumbnail.build/*.swift.o \
+  "${thumbnail_objects[@]}" \
   -framework AppKit -framework QuickLookThumbnailing \
   -Xlinker -e -Xlinker _NSExtensionMain
 chmod 0755 "$thumbnail_appex/Contents/MacOS/ZManagerQuickLookThumbnail"

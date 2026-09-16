@@ -20,26 +20,50 @@ private final class OperationResult: @unchecked Sendable {
     var data = Data()
 }
 
-private func pngDataURL(for path: String, isDirectory: Bool) -> String? {
-    let icon: NSImage
-    if isDirectory {
-        icon = NSWorkspace.shared.icon(for: .folder)
-    } else {
-        guard !path.isEmpty else { return nil }
-        // The frontend sends the extension with a leading dot (e.g. ".pdf").
-        // NSString.pathExtension is empty for such paths, so strip the dot.
-        let ext: String
-        if path.hasPrefix(".") {
-            ext = String(path.dropFirst())
-        } else {
-            ext = (path as NSString).pathExtension
-        }
-        if !ext.isEmpty, let type = UTType(filenameExtension: ext.lowercased()) {
-            icon = NSWorkspace.shared.icon(for: type)
-        } else {
-            icon = NSWorkspace.shared.icon(for: .data)
+// Every entry of the same kind renders to an identical icon, so the expensive
+// NSWorkspace lookup and NSImage draw only need to happen once per kind rather
+// than once per entry. A single request carries up to 1,024 entries that
+// typically collapse to a handful of kinds.
+private enum IconKind {
+    case directory
+    case type(UTType)
+    case data
+
+    var cacheKey: String {
+        switch self {
+        case .directory: return "\u{1}directory"
+        case .type(let type): return type.identifier
+        case .data: return "\u{1}data"
         }
     }
+
+    var icon: NSImage {
+        switch self {
+        case .directory: return NSWorkspace.shared.icon(for: .folder)
+        case .type(let type): return NSWorkspace.shared.icon(for: type)
+        case .data: return NSWorkspace.shared.icon(for: .data)
+        }
+    }
+}
+
+private func iconKind(for path: String, isDirectory: Bool) -> IconKind? {
+    if isDirectory { return .directory }
+    guard !path.isEmpty else { return nil }
+    // The frontend sends the extension with a leading dot (e.g. ".pdf").
+    // NSString.pathExtension is empty for such paths, so strip the dot.
+    let ext: String
+    if path.hasPrefix(".") {
+        ext = String(path.dropFirst())
+    } else {
+        ext = (path as NSString).pathExtension
+    }
+    if !ext.isEmpty, let type = UTType(filenameExtension: ext.lowercased()) {
+        return .type(type)
+    }
+    return .data
+}
+
+private func renderPNGDataURL(for icon: NSImage) -> String? {
     let size = NSSize(width: 32, height: 32)
     guard let rep = NSBitmapImageRep(
         bitmapDataPlanes: nil,
@@ -62,6 +86,26 @@ private func pngDataURL(for path: String, isDirectory: Bool) -> String? {
     NSGraphicsContext.restoreGraphicsState()
     guard let png = rep.representation(using: .png, properties: [:]) else { return nil }
     return "data:image/png;base64,\(png.base64EncodedString())"
+}
+
+// Main-thread confined: every caller reaches this through the dispatch in
+// zmanagerMacOSSystemFileIcons, which runs its work block on the main thread.
+private final class IconDataURLCache: @unchecked Sendable {
+    static let shared = IconDataURLCache()
+    private var entries: [String: String?] = [:]
+
+    func dataURL(for kind: IconKind) -> String? {
+        let key = kind.cacheKey
+        if let cached = entries[key] { return cached }
+        let rendered = renderPNGDataURL(for: kind.icon)
+        entries[key] = rendered
+        return rendered
+    }
+}
+
+private func pngDataURL(for path: String, isDirectory: Bool) -> String? {
+    guard let kind = iconKind(for: path, isDirectory: isDirectory) else { return nil }
+    return IconDataURLCache.shared.dataURL(for: kind)
 }
 
 @_cdecl("zmanager_macos_system_file_icons")

@@ -129,7 +129,7 @@ export type ZManagerArchiveIntent =
   | Readonly<{ type: "navigateUp" }>
   | Readonly<{ type: "loadNextArchivePage" }>
   | Readonly<{ type: "loadPreviousArchivePage" }>
-  | Readonly<{ type: "setSearchQuery"; query: string }>
+  | Readonly<{ type: "setSearchQuery"; query: string; immediate?: boolean }>
   | Readonly<{ type: "clearSearch" }>
   | Readonly<{
       type: "setFlatView";

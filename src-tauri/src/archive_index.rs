@@ -22,7 +22,10 @@ const MAX_ARCHIVE_INDEX_ENTRIES: usize = 500_000;
 const MAX_ARCHIVE_INDEX_METADATA_BYTES: usize = 256 * 1024 * 1024;
 const DEFAULT_ARCHIVE_PAGE_SIZE: usize = 200;
 const MAX_ARCHIVE_PAGE_SIZE: usize = 512;
-const ARCHIVE_INDEX_PUBLICATION_BATCH: usize = 256;
+// A published revision wakes every `wait_for_change` subscriber, and the
+// frontend answers each one by re-reading and re-sorting the visible directory
+// page. The interval is therefore a hard rate limit on publication, not a
+// fallback for some batch of entries that has not filled up yet.
 const ARCHIVE_INDEX_PUBLICATION_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Clone)]
@@ -134,7 +137,6 @@ impl ArchiveIndexRegistry {
             }
 
             let mut last_publication = Instant::now();
-            let mut unpublished_entries = 0;
             let mut index_error = None;
             let result = archive_browser::visit_entries_with_options(
                 Path::new(&archive_path),
@@ -148,11 +150,9 @@ impl ArchiveIndexRegistry {
                         index_error = Some(error);
                         return false;
                     }
-                    unpublished_entries += 1;
-                    if unpublished_entries >= ARCHIVE_INDEX_PUBLICATION_BATCH || last_publication.elapsed() >= ARCHIVE_INDEX_PUBLICATION_INTERVAL {
+                    if last_publication.elapsed() >= ARCHIVE_INDEX_PUBLICATION_INTERVAL {
                         let statistics = index.lock().unwrap_or_else(|error| error.into_inner()).statistics();
                         registry.publish_progress(&worker_session_id, statistics);
-                        unpublished_entries = 0;
                         last_publication = Instant::now();
                     }
                     true
@@ -283,43 +283,63 @@ impl ArchiveIndexRegistry {
         Ok(())
     }
 
-    pub fn search(&self, request: ArchiveSearchRequest) -> Result<ArchiveChildrenPageDto, CommandErrorDto> {
-        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
-        let record = state.sessions.get(&request.session_id).ok_or_else(|| archive_session_not_found(&request.session_id))?;
-        if record.snapshot.status == ArchiveIndexStatusDto::Indexing {
-            return Err(CommandErrorDto::operation_failed("Archive search becomes available when indexing is complete."));
-        }
-        if archive_browser::supports_on_demand_directories(&record.snapshot.archive_path) {
-            return Err(CommandErrorDto::operation_failed("Search is not currently supported for on-demand archives."));
-        }
-        let index = record.index.lock().unwrap_or_else(|error| error.into_inner());
-        let normalized_query = request.query.trim().to_lowercase();
-        let mut matching_entries: Vec<&ArchiveEntryDto> =
-            index.entries.values().filter(|entry| normalized_query.is_empty() || case_insensitive_contains(&entry.path, &normalized_query)).collect();
-        let sort_key = request.sort_key.as_deref().unwrap_or("name");
-        let ascending = request.sort_ascending.unwrap_or(true);
-        matching_entries.sort_by(|left, right| compare_entries_by_sort(left, right, sort_key, ascending));
-        let total_count = matching_entries.len();
-        let cursor_scope = format!("?search={normalized_query}\0{sort_key}\0{ascending}");
-        let limit = request.limit.unwrap_or(DEFAULT_ARCHIVE_PAGE_SIZE).clamp(1, MAX_ARCHIVE_PAGE_SIZE);
-        let offset = decode_cursor(request.cursor.as_deref(), &request.session_id, &cursor_scope, &record.snapshot.revision)?;
-        if offset > total_count {
-            return Err(CommandErrorDto::invalid_request("Archive search cursor is out of range."));
-        }
-        let end = offset.saturating_add(limit).min(total_count);
-        let entries = matching_entries[offset..end].iter().map(|&entry| entry.clone()).collect();
-        let next_cursor = (end < total_count).then(|| encode_cursor(&request.session_id, &cursor_scope, &record.snapshot.revision, end));
-        Ok(ArchiveChildrenPageDto {
-            session_id: request.session_id,
-            revision: record.snapshot.revision.clone(),
-            parent_path: String::new(),
-            entries,
-            next_cursor,
-            complete: end == total_count,
-            child_count: total_count,
-        })
-    }
+    pub async fn search(&self, request: ArchiveSearchRequest) -> Result<ArchiveChildrenPageDto, CommandErrorDto> {
+        // Resolve the session under the registry lock, then release it. A search
+        // walks every indexed entry, and holding the registry across that would
+        // block indexing publication, `children`, `start`, and `close` for every
+        // session, not just this one.
+        let (index_mutex, revision) = {
+            let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+            let record = state.sessions.get(&request.session_id).ok_or_else(|| archive_session_not_found(&request.session_id))?;
+            if record.snapshot.status == ArchiveIndexStatusDto::Indexing {
+                return Err(CommandErrorDto::operation_failed("Archive search becomes available when indexing is complete."));
+            }
+            if archive_browser::supports_on_demand_directories(&record.snapshot.archive_path) {
+                return Err(CommandErrorDto::operation_failed("Search is not currently supported for on-demand archives."));
+            }
+            (record.index.clone(), record.snapshot.revision.clone())
+        };
 
+        // Scanning and sorting are CPU-bound over up to MAX_ARCHIVE_INDEX_ENTRIES
+        // entries, so keep them off the async worker threads.
+        tokio::task::spawn_blocking(move || {
+            let index = index_mutex.lock().unwrap_or_else(|error| error.into_inner());
+            search_index(&index, &request, &revision)
+        })
+        .await
+        .map_err(|error| CommandErrorDto::operation_failed(format!("Task panic: {error}")))?
+    }
+}
+
+fn search_index(index: &ArchiveIndex, request: &ArchiveSearchRequest, revision: &str) -> Result<ArchiveChildrenPageDto, CommandErrorDto> {
+    let normalized_query = request.query.trim().to_lowercase();
+    let mut matching_entries: Vec<&ArchiveEntryDto> =
+        index.entries.values().filter(|entry| normalized_query.is_empty() || case_insensitive_contains(&entry.path, &normalized_query)).collect();
+    let sort_key = request.sort_key.as_deref().unwrap_or("name");
+    let ascending = request.sort_ascending.unwrap_or(true);
+    matching_entries.sort_by(|left, right| compare_entries_by_sort(left, right, sort_key, ascending));
+    let total_count = matching_entries.len();
+    let cursor_scope = format!("?search={normalized_query}\0{sort_key}\0{ascending}");
+    let limit = request.limit.unwrap_or(DEFAULT_ARCHIVE_PAGE_SIZE).clamp(1, MAX_ARCHIVE_PAGE_SIZE);
+    let offset = decode_cursor(request.cursor.as_deref(), &request.session_id, &cursor_scope, revision)?;
+    if offset > total_count {
+        return Err(CommandErrorDto::invalid_request("Archive search cursor is out of range."));
+    }
+    let end = offset.saturating_add(limit).min(total_count);
+    let entries = matching_entries[offset..end].iter().map(|&entry| entry.clone()).collect();
+    let next_cursor = (end < total_count).then(|| encode_cursor(&request.session_id, &cursor_scope, revision, end));
+    Ok(ArchiveChildrenPageDto {
+        session_id: request.session_id.clone(),
+        revision: revision.to_string(),
+        parent_path: String::new(),
+        entries,
+        next_cursor,
+        complete: end == total_count,
+        child_count: total_count,
+    })
+}
+
+impl ArchiveIndexRegistry {
     /// Returns the password retained by the newest live session for an archive.
     ///
     /// The password stays backend-only and is used to continue operations such

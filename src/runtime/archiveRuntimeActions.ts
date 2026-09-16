@@ -13,7 +13,7 @@ export type ArchiveRuntimeActionEffects = Readonly<{
   navigateUp(): void;
   loadNextPage(): void | Promise<void>;
   loadPreviousPage(): void | Promise<void>;
-  setSearchQuery(query: string): void;
+  setSearchQuery(query: string, immediate: boolean): void;
   clearSearch(): void;
   setFlatView(flatView: boolean, persistPreference: boolean): void;
   setColumnWidth(columnId: ArchiveTableColumnId, width: number, persist: boolean): void;
@@ -78,7 +78,7 @@ export function createArchiveRuntimeActions(
           void effects.loadPreviousPage();
           break;
         case "setSearchQuery":
-          effects.setSearchQuery(intent.query);
+          effects.setSearchQuery(intent.query, Boolean(intent.immediate));
           break;
         case "clearSearch":
           effects.clearSearch();

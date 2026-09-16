@@ -90,7 +90,7 @@ export function ArchivePathBar() {
         onChange: (query) =>
           actions.handleArchiveIntent({ type: "setSearchQuery", query }),
         onSubmit: (query) =>
-          actions.handleArchiveIntent({ type: "setSearchQuery", query }),
+          actions.handleArchiveIntent({ type: "setSearchQuery", query, immediate: true }),
         onClear: () => actions.handleArchiveIntent({ type: "clearSearch" }),
       }}
     />

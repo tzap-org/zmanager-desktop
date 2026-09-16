@@ -461,7 +461,28 @@ describe("archive workspace load state", () => {
     ]);
   });
 
-  it("exposes immutable selection facts while preserving hidden search selections", () => {
+  it("reuses one snapshot per state so renders keep stable identities", () => {
+    const workspace = createArchiveWorkspace();
+    workspace.loadSucceeded({
+      archivePath: "C:/tmp/project.zip",
+      entries,
+      entryCount: entries.length,
+      totalSize: 72,
+    });
+
+    // Repeated reads must be identity-stable, or `useMemo`/`memo` downstream
+    // re-render the whole table on every unrelated publish.
+    const first = workspace.getSnapshot();
+    expect(workspace.getSnapshot()).toBe(first);
+    expect(workspace.getSnapshot().view.rows).toBe(first.view.rows);
+
+    // A mutator that changes nothing keeps the snapshot; a real change replaces it.
+    expect(workspace.navigateToFolder("")).toBe(first);
+    expect(workspace.navigateToFolder("docs")).not.toBe(first);
+    expect(workspace.getSnapshot().view.currentFolder).toBe("docs");
+  });
+
+  it("exposes selection facts while preserving hidden search selections", () => {
     const workspace = createArchiveWorkspace();
     workspace.loadSucceeded({
       archivePath: "C:/tmp/project.zip",
@@ -476,9 +497,11 @@ describe("archive workspace load state", () => {
       focusedPath: "docs/readme.txt",
       anchorPath: "docs/readme.txt",
     });
-    (selected.view.selection.selectedPaths as string[]).push("src/main.rs");
-    selected.view.selection.selectedEntries[0].path = "mutated.txt";
 
+    // A mutator returns the same snapshot a later `getSnapshot` observes;
+    // snapshots are shared immutable values, not per-caller copies.
+    expect(workspace.getSnapshot()).toBe(selected);
+    expect(workspace.getSnapshot().view.selection.selectedEntries[0].path).toBe("docs/readme.txt");
     expect(workspace.getSnapshot().view.selection).toMatchObject({
       selectedPaths: ["docs/readme.txt"],
       selectedCount: 1,
@@ -489,7 +512,6 @@ describe("archive workspace load state", () => {
       anchorPath: "docs/readme.txt",
       hiddenBySearch: false,
     });
-    expect(workspace.getSnapshot().view.selection.selectedEntries[0].path).toBe("docs/readme.txt");
 
     const hidden = workspace.setSearchQuery("nomatch");
 

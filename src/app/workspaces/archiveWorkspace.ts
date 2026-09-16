@@ -396,9 +396,35 @@ type MutableArchiveWorkspaceState = Omit<ArchiveWorkspaceSnapshot, "command" | "
 export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = {}): ArchiveWorkspace {
   let state = createInitialState(options);
 
+  // `snapshotFromState` rebuilds and re-sorts the visible rows and deep-clones
+  // the entries, and every caller used to get a fresh object graph. That churn
+  // defeated `useMemo`/`memo` downstream, so an unrelated publish (a toolbar
+  // toggle, a job progress tick) re-rendered every row in the table.
+  //
+  // State is only ever replaced wholesale, never mutated in place, so its
+  // identity is an exact invalidation signal - including for the mutators that
+  // return the state unchanged, which correctly keep the cached snapshot.
+  let cachedSnapshotState: MutableArchiveWorkspaceState | null = null;
+  let cachedSnapshot: ArchiveWorkspaceSnapshot | null = null;
+
+  function currentSnapshot(): ArchiveWorkspaceSnapshot {
+    if (cachedSnapshot === null || cachedSnapshotState !== state) {
+      cachedSnapshot = snapshotFromState(state);
+      cachedSnapshotState = state;
+      // Callers share one instance, so a stray mutation would corrupt workspace
+      // state instead of being absorbed by a private copy. Freezing costs about
+      // twice the snapshot build, so only development and tests pay for it; that
+      // is where a mutation gets introduced, and it throws on the first attempt.
+      if (import.meta.env.DEV) {
+        deepFreezeSnapshot(cachedSnapshot);
+      }
+    }
+    return cachedSnapshot;
+  }
+
   return {
     getSnapshot() {
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     beginLoading(input) {
@@ -426,7 +452,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
               }),
             }),
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     loadSucceeded(listing, options = {}) {
@@ -455,7 +481,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
         ...metadata,
         view,
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     acceptPage(page) {
@@ -488,7 +514,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
           selection: selectionFromResult(clearHierarchicalTableSelection()),
         },
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     acceptTreePage(entries) {
@@ -497,7 +523,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
         treeEntries: mergeTreeEntries(state.treeEntries, entries),
         listingRevision: state.listingRevision + 1,
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     loadFailed(error) {
@@ -513,7 +539,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
         error: normalizedError,
         passwordRetry: null,
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     setBrowseState(browseState, fallbackText) {
@@ -526,7 +552,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
         error: browseState === "error" ? state.error : null,
         passwordRetry: browseState === "error" ? null : state.passwordRetry,
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     navigateToFolder(folderPath) {
@@ -534,14 +560,14 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
         pushHistory: true,
         clearSearch: true,
       });
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     navigateBack() {
       const navigationHistory = [...state.view.navigationHistory];
       const previousFolder = navigationHistory.pop();
       if (previousFolder === undefined) {
-        return snapshotFromState(state);
+        return currentSnapshot();
       }
 
       const currentFolder = normalizeExistingFolderPath(state.entries, previousFolder);
@@ -558,18 +584,18 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
           selection: selectionFromResult(clearHierarchicalTableSelection()),
         },
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     navigateUp() {
       if (!state.view.currentFolder) {
-        return snapshotFromState(state);
+        return currentSnapshot();
       }
       state = navigateStateToFolder(state, getParentArchivePath(state.view.currentFolder) ?? "", {
         pushHistory: true,
         clearSearch: true,
       });
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     setSearchQuery(query) {
@@ -580,12 +606,12 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
           searchQuery: query,
         },
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     clearSearch() {
       if (!state.view.searchQuery.trim()) {
-        return snapshotFromState(state);
+        return currentSnapshot();
       }
       state = {
         ...state,
@@ -594,7 +620,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
           searchQuery: "",
         },
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     setFlatView(flatView) {
@@ -605,7 +631,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
           flatView,
         },
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     setRowOptions(options) {
@@ -619,7 +645,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
           },
         },
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     applySortCommand(sortKey) {
@@ -638,7 +664,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
               },
         },
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     applySortDirection(sortKey, ascending) {
@@ -652,7 +678,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
           },
         },
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     getSelectedExtractEntryPaths() {
@@ -783,13 +809,13 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
 
     clearPasswordRetry() {
       if (!state.passwordRetry) {
-        return snapshotFromState(state);
+        return currentSnapshot();
       }
       state = {
         ...state,
         passwordRetry: null,
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     resetAfterAcceptedOperation() {
@@ -801,13 +827,13 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
           selection: selectionFromResult(clearHierarchicalTableSelection()),
         },
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     toggleTreeFolder(folderPath) {
       const normalizedFolder = normalizeArchivePath(folderPath);
       if (!normalizedFolder) {
-        return snapshotFromState(state);
+        return currentSnapshot();
       }
 
       const expandedTreeFolders = new Set(state.view.expandedTreeFolders);
@@ -827,7 +853,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
           ),
         },
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     updateSelection(selection) {
@@ -838,7 +864,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
           selection: selectionFromResult(selection),
         },
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     setColumnWidth(columnId, width) {
@@ -849,7 +875,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
           tableColumns: setColumnWidth(state.view.tableColumns, columnId, width),
         },
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     toggleColumnVisibility(columnId) {
@@ -860,7 +886,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
           tableColumns: toggleColumnVisibility(state.view.tableColumns, columnId),
         },
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     moveColumn(columnId, direction) {
@@ -871,7 +897,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
           tableColumns: moveColumn(state.view.tableColumns, columnId, direction),
         },
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     reorderColumn(sourceColumnId, targetColumnId) {
@@ -882,7 +908,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
           tableColumns: reorderColumn(state.view.tableColumns, sourceColumnId, targetColumnId),
         },
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     resetColumns(defaults) {
@@ -893,7 +919,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
           tableColumns: defaults ?? resetColumnSettings(),
         },
       };
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
 
     reset() {
@@ -903,7 +929,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
         sortKey: state.view.sort.key,
         sortAscending: state.view.sort.ascending,
       });
-      return snapshotFromState(state);
+      return currentSnapshot();
     },
   };
 }
@@ -1597,6 +1623,16 @@ function commandSnapshotFromState(
     canSearchEntries: hasArchive && state.browseState === "loaded",
     canNavigateBack: state.view.navigationHistory.length > 0,
   };
+}
+
+function deepFreezeSnapshot(value: unknown): void {
+  if (value === null || typeof value !== "object" || Object.isFrozen(value)) {
+    return;
+  }
+  Object.freeze(value);
+  for (const inner of Object.values(value as Record<string, unknown>)) {
+    deepFreezeSnapshot(inner);
+  }
 }
 
 function snapshotFromState(state: MutableArchiveWorkspaceState): ArchiveWorkspaceSnapshot {

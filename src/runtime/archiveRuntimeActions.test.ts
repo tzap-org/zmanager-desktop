@@ -77,6 +77,17 @@ describe("archive runtime actions", () => {
     expect(effects.setColumnWidth).toHaveBeenCalledWith("size", 200, true);
     expect(effects.reorderColumn).toHaveBeenCalledWith("size", "modified");
   });
+
+  it("marks a submitted search as immediate and a typed one as debounceable", () => {
+    const effects = createEffects();
+    const actions = createArchiveRuntimeActions(effects);
+
+    actions.handleIntent({ type: "setSearchQuery", query: "rep" });
+    actions.handleIntent({ type: "setSearchQuery", query: "report", immediate: true });
+
+    expect(effects.setSearchQuery).toHaveBeenNthCalledWith(1, "rep", false);
+    expect(effects.setSearchQuery).toHaveBeenNthCalledWith(2, "report", true);
+  });
 });
 
 function createEffects(

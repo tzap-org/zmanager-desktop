@@ -93,12 +93,19 @@ pub fn project_contract() -> crate::dto::ProjectContract {
     }
 }
 
+// Deliberately NOT `#[tauri::command(async)]`. The macOS implementation ends in
+// `DispatchQueue.main.sync` (NativeHostOperations.swift), because NSWorkspace
+// icon lookup and NSImage drawing are AppKit main-thread work. Running the
+// command on a worker therefore does not move that work off the main thread; it
+// just adds a blocking cross-thread hop and stalls the worker behind whatever
+// the main thread is doing. Keep it on the IPC thread, which is already main.
 #[tauri::command]
 pub fn system_file_icons(request: SystemFileIconRequest) -> SystemFileIconResponse {
     SystemFileIconResponse { icons: crate::platform::system_file_icons(&request.entries) }
 }
 
-#[tauri::command]
+// Runs off the main thread: filesystem metadata and read_dir.
+#[tauri::command(async)]
 pub fn validate_directory(request: ValidateDirectoryRequest) -> ValidateDirectoryResponse {
     let path = request.path.trim();
     if path.is_empty() {
@@ -209,11 +216,11 @@ pub async fn get_archive_children(
 }
 
 #[tauri::command]
-pub fn search_archive_index(
+pub async fn search_archive_index(
     request: crate::dto::ArchiveSearchRequest,
     registry: State<'_, ArchiveIndexRegistry>,
 ) -> Result<crate::dto::ArchiveChildrenPageDto, CommandErrorDto> {
-    registry.search(request)
+    registry.inner().clone().search(request).await
 }
 
 #[tauri::command]
@@ -221,7 +228,8 @@ pub fn close_archive_index(request: crate::dto::ArchiveIndexSessionRequest, regi
     registry.close(&request.session_id)
 }
 
-#[tauri::command]
+// Runs off the main thread: recursive filesystem walk with per-entry stat.
+#[tauri::command(async)]
 pub fn plan_create(request: PlanCreateRequest) -> Result<CreatePlanResponse, CommandErrorDto> {
     let sources = normalize_non_empty_paths(&request.sources)?;
 
@@ -725,7 +733,8 @@ pub fn start_extract(
     start_extract_internal_with_recipient_key(request, &registry, recipient_private_key)
 }
 
-#[tauri::command]
+// Runs off the main thread: file read plus PKCS12 key derivation.
+#[tauri::command(async)]
 pub fn validate_tzap_signing_identity(
     request: crate::dto::ValidateTzapSigningIdentityRequest,
 ) -> Result<crate::dto::ValidateTzapSigningIdentityResponse, CommandErrorDto> {
@@ -855,7 +864,8 @@ fn hosted_status_base_url(environment: Option<&str>) -> Result<&'static str, Com
     }
 }
 
-#[tauri::command]
+// Runs off the main thread: certificate verification, including an online status check.
+#[tauri::command(async)]
 pub fn verify_tzap_certificate(request: crate::dto::VerifyTzapCertificateRequest) -> Result<crate::dto::VerifyTzapCertificateResponse, CommandErrorDto> {
     let archive_path = ensure_non_empty_path(request.archive_path, "archivePath")?;
     if !is_tzap_archive_path(Path::new(&archive_path)) {
@@ -1130,7 +1140,8 @@ fn remove_created_source_paths(sources: &[PathBuf], destination: &str) -> Result
     Ok(())
 }
 
-#[tauri::command]
+// Runs off the main thread: archive entry extraction to a temporary root.
+#[tauri::command(async)]
 pub fn preview_entry(
     request: PreviewEntryRequest,
     registry: State<'_, JobRegistry>,
