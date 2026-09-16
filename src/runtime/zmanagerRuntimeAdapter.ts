@@ -3574,6 +3574,12 @@ async function openSetupDialog(announceOnlyWhenIncomplete = false) {
       outstanding: setup.steps.filter((step) => step.state !== "satisfied").length,
     },
   });
+  // Bootstrap probes resolve asynchronously. If the user has already opened a
+  // dialog, do not queue a modal behind it and resurrect it when that dialog
+  // closes. The user can reopen the checklist from its normal entry point.
+  if (announceOnlyWhenIncomplete && (preferencesDialogDraft !== null || reactDialogSnapshot.kind !== "none")) {
+    return;
+  }
   if (announceOnlyWhenIncomplete && setup.complete) {
     return;
   }
@@ -3816,6 +3822,13 @@ async function savePreferencesFromDialog() {
 }
 
 function openPreferencesDialog() {
+  // The setup checklist is a startup announcement, not a second modal layer.
+  // Clear it before mounting Preferences so its focus cleanup cannot race the
+  // Preferences focus restoration when the user opens Options immediately
+  // after startup.
+  if (reactDialogSnapshot.kind === "setup") {
+    reactDialogSnapshot = { kind: "none" };
+  }
   preferencesDialogDraft = appPreferences;
   columnVisibilityDraft = { ...columnVisibilityPrefs, visibleColumnIdsByFormatFamily: { ...columnVisibilityPrefs.visibleColumnIdsByFormatFamily } };
   publishReactSnapshot();

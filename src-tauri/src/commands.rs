@@ -864,8 +864,13 @@ fn hosted_status_base_url(environment: Option<&str>) -> Result<&'static str, Com
     }
 }
 
-// Runs off the main thread: certificate verification, including an online status check.
-#[tauri::command(async)]
+// Keep this on Tauri's synchronous command path. The verification flow is also
+// used by the embedded GUI driver after a create/extract task, and moving this
+// command to the async-command threadpool can leave that IPC call unresolved
+// after the preceding task window has completed. The bounded HTTP client still
+// limits the online status enhancement; failures degrade to an unavailable
+// status rather than changing the archive verification result.
+#[tauri::command]
 pub fn verify_tzap_certificate(request: crate::dto::VerifyTzapCertificateRequest) -> Result<crate::dto::VerifyTzapCertificateResponse, CommandErrorDto> {
     let archive_path = ensure_non_empty_path(request.archive_path, "archivePath")?;
     if !is_tzap_archive_path(Path::new(&archive_path)) {
