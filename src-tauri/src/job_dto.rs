@@ -43,6 +43,8 @@ pub enum JobRetryDescriptorDto {
         overwrite: OverwritePolicyDto,
         destination_collision_strategy: DestinationCollisionStrategyDto,
         entry_paths: Vec<String>,
+        select_all: bool,
+        excluded_entry_paths: Vec<String>,
         strip_components: usize,
         tzap_restore_policy: TzapRestorePolicyDto,
         tzap_allow_degraded: bool,

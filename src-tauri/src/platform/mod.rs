@@ -304,6 +304,57 @@ pub fn handle_run_event(event: &tauri::RunEvent, inbox: &NativeLaunchInbox) {
     let _ = (event, inbox);
 }
 
+/// Wait for the macOS App Group container to become usable. Non-macOS targets
+/// have no App Group and report success immediately.
+pub fn wait_for_app_group(timeout: std::time::Duration) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        macos::wait_for_app_group(timeout)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = timeout;
+        true
+    }
+}
+
+/// Diagnostic log directory used by the headless `--postinstall` launch.
+pub fn postinstall_diagnostic_log_directory() -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::postinstall_diagnostic_log_directory()
+    }
+    #[cfg(not(target_os = "macos"))]
+    None
+}
+
+/// First-run shell-integration checklist for the running platform.
+///
+/// Platforms whose shell integration needs no user approval report a complete
+/// checklist with no steps, so the caller never has to branch on the OS.
+pub fn shell_integration_setup() -> crate::dto::ShellIntegrationSetupDto {
+    #[cfg(target_os = "macos")]
+    {
+        macos::shell_integration_setup()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        crate::dto::ShellIntegrationSetupDto { complete: true, steps: Vec::new() }
+    }
+}
+
+/// Open the OS settings page holding the shell-integration switches.
+pub fn open_shell_integration_settings() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::open_shell_integration_settings()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("shell integration settings are not applicable on this platform".to_owned())
+    }
+}
+
 pub fn shutdown() {
     #[cfg(target_os = "macos")]
     macos::shutdown();

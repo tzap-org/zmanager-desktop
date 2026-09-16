@@ -577,6 +577,10 @@ pub struct StartExtractRequest {
     #[serde(default)]
     pub entry_paths: Option<Vec<String>>,
     #[serde(default)]
+    pub select_all: bool,
+    #[serde(default)]
+    pub excluded_entry_paths: Vec<String>,
+    #[serde(default)]
     pub strip_components: usize,
     #[serde(default)]
     pub tzap_restore_policy: TzapRestorePolicyDto,
@@ -613,6 +617,10 @@ pub struct NativeFileDragRequest {
     pub archive_path: String,
     #[serde(default)]
     pub entry_paths: Vec<String>,
+    #[serde(default)]
+    pub select_all: bool,
+    #[serde(default)]
+    pub excluded_entry_paths: Vec<String>,
     pub password: Option<String>,
     #[serde(default)]
     pub strip_components: usize,
@@ -854,4 +862,28 @@ mod tests {
             assert_eq!(ArchiveFormatKindDto::from(core_kind), dto);
         }
     }
+}
+
+/// One row in the first-run shell-integration checklist.
+///
+/// Titles and instructions are not carried here: they live in the frontend
+/// message catalogue, keyed by `id`, so both locales stay in one place.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellIntegrationSetupStepDto {
+    /// Stable identifier the UI uses to look up its copy.
+    pub id: &'static str,
+    /// `satisfied`, `needsApproval`, `notRegistered`, or `unknown`.
+    pub state: &'static str,
+    /// Deep link that opens the exact settings pane holding the switch, when
+    /// the platform has one.
+    pub settings_url: Option<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellIntegrationSetupDto {
+    /// False when at least one step still needs the user's attention.
+    pub complete: bool,
+    pub steps: Vec<ShellIntegrationSetupStepDto>,
 }

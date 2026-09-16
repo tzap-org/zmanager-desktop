@@ -71,7 +71,11 @@ export function createExtractStartController(
       return;
     }
 
-    if (mode === "selection" && resolvedInput.entryReferences.length === 0) {
+    if (
+      mode === "selection" &&
+      resolvedInput.entryReferences.length === 0 &&
+      !snapshot.view.selection.allSelected
+    ) {
       options.selectEntryFirst();
       return;
     }

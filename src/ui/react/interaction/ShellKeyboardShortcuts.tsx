@@ -48,7 +48,9 @@ export function decodeShellKeyboardShortcut(
 
   const selectedCount =
     event.key === "F5"
-      ? snapshot.archive.view.selection.selectedPaths.length
+      ? snapshot.archive.view.selection.allSelected
+        ? snapshot.archive.view.selection.selectedCount
+        : snapshot.archive.view.selection.selectedPaths.length
       : snapshot.archive.view.selection.selectedEntryPaths.length;
   const command = selectKeyboardCommand({
     key: event.key,

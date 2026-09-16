@@ -27,6 +27,34 @@ use tauri::{Emitter, Manager};
 fn main() {
     platform::prepare_process();
 
+    // `--postinstall` is the headless launch the macOS install step performs once
+    // after copying the bundle into place. PlugInKit only registers an appex after
+    // its parent app has actually been run on this Mac, so installing the bundle is
+    // not by itself enough to make the Finder Sync extension appear; this launch is
+    // what triggers LaunchServices seeding and PlugInKit's continuous discovery.
+    //
+    // It deliberately performs no registration commands of its own. `pluginkit`
+    // edits are reverted by the next discovery pass, and LaunchServices is driven
+    // from the install script, which knows every bundle path the build produced.
+    //
+    // This runs BEFORE any Tauri state initialization so the single-instance plugin
+    // does not interfere with a concurrent launch.
+    if std::env::args_os().any(|arg| arg.to_str() == Some("--postinstall")) {
+        eprintln!("ZMANAGER_POSTINSTALL: begin");
+        let diagnostics = diagnostics::DiagnosticLog::new();
+        let _ = diagnostics.initialize(platform::postinstall_diagnostic_log_directory(), true);
+        let inbox = native_launch_inbox::NativeLaunchInbox::new();
+        if let Err(e) = platform::initialize_native_host(inbox, diagnostics.clone()) {
+            let _ = diagnostics.record("postinstall", "nativeHostFailed", diagnostics::fields([("error", serde_json::Value::String(e))]));
+        }
+        let group_ready = platform::wait_for_app_group(std::time::Duration::from_secs(30));
+        let _ = diagnostics.record("postinstall", "appGroupReady", diagnostics::fields([("available", serde_json::Value::Bool(group_ready))]));
+        platform::shutdown();
+        let _ = diagnostics.record("postinstall", "complete", diagnostics::fields([]));
+        eprintln!("ZMANAGER_POSTINSTALL: complete");
+        std::process::exit(if group_ready { 0 } else { 1 });
+    }
+
     let diagnostics = diagnostics::DiagnosticLog::new();
     let _ = diagnostics.record("process", "entry", diagnostics::fields([]));
     let native_launch_inbox = native_launch_inbox::NativeLaunchInbox::new();
@@ -151,6 +179,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             commands::healthcheck,
             commands::project_contract,
+            commands::shell_integration_setup,
+            commands::open_shell_integration_settings,
             commands::system_file_icons,
             default_handlers::default_handler_status,
             default_handlers::default_handler_set,

@@ -72,8 +72,14 @@ export function ArchiveTable() {
   const showStartEmpty = !archive.currentArchivePath;
   const rows = archive.view.rows;
   const selectedPathSet = useMemo(
-    () => new Set(archive.view.selection.selectedPaths),
-    [archive.view.selection.selectedPaths],
+    () => new Set(archive.view.selection.allSelected
+      ? archive.view.selection.visibleSelectedPaths
+      : archive.view.selection.selectedPaths),
+    [
+      archive.view.selection.allSelected,
+      archive.view.selection.selectedPaths,
+      archive.view.selection.visibleSelectedPaths,
+    ],
   );
   const focusedPath = archive.view.selection.focusedPath;
   const showSecondaryPath =
@@ -225,13 +231,17 @@ export function ArchiveTable() {
                   disabled={archive.browseState !== "loaded"}
                   checked={
                     archive.view.selection.visibleSelectablePaths.length > 0 &&
-                    archive.view.selection.visibleSelectedCount ===
-                      archive.view.selection.visibleSelectablePaths.length
+                    (archive.view.selection.allSelected
+                      ? archive.view.selection.excludedPaths.length === 0
+                      : archive.view.selection.visibleSelectedCount ===
+                        archive.view.selection.visibleSelectablePaths.length)
                   }
                   indeterminate={
-                    archive.view.selection.visibleSelectedCount > 0 &&
-                    archive.view.selection.visibleSelectedCount <
-                      archive.view.selection.visibleSelectablePaths.length
+                    archive.view.selection.allSelected
+                      ? archive.view.selection.excludedPaths.length > 0
+                      : archive.view.selection.visibleSelectedCount > 0 &&
+                        archive.view.selection.visibleSelectedCount <
+                          archive.view.selection.visibleSelectablePaths.length
                   }
                 />
               </th>

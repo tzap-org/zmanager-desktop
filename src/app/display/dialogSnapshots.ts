@@ -4,6 +4,7 @@ import type {
   ProjectContract,
 } from "../../api/types";
 import { isNativeCapabilityAvailable } from "../../api/generated/nativeCapabilities.generated";
+import type { ShellIntegrationSetup, ShellIntegrationSetupStep } from "../../api/types";
 import {
   APP_TITLE,
   APP_VERSION,
@@ -85,7 +86,107 @@ export type ZManagerDialogSnapshot =
       kind: "about";
       title: string;
       groups: readonly ZManagerAboutDiagnosticsGroup[];
+    }>
+  | Readonly<{
+      kind: "setup";
+      title: string;
+      description: string;
+      steps: readonly ZManagerSetupStepRow[];
+      /** True once nothing is left for the user to approve. */
+      complete: boolean;
     }>;
+
+/** One rendered row of the first-run shell-integration checklist. */
+export type ZManagerSetupStepRow = Readonly<{
+  id: string;
+  title: string;
+  detail: string;
+  /** What to do about it. Empty once the step is satisfied. */
+  instructions: string;
+  stateLabel: string;
+  state: ShellIntegrationSetupStep["state"];
+  settingsUrl: string | null;
+}>;
+
+export type SetupDialogSnapshotInput = Readonly<{
+  display: DisplayContextSnapshot;
+  setup: ShellIntegrationSetup;
+}>;
+
+/**
+ * Turn the platform's checklist into rows the dialog can render.
+ *
+ * Steps that still need the user are listed first: the whole point of this
+ * dialog is that someone who does not know what macOS wants can see the
+ * outstanding item without reading past the ones already done.
+ */
+/**
+ * Steps this build knows how to describe.
+ *
+ * A step the catalogue has no copy for is dropped rather than rendered with a
+ * raw key: a checklist whose whole purpose is to explain things cannot show
+ * someone `setup.step.foo.title`.
+ */
+const SETUP_STEP_COPY = {
+  finderContextMenu: {
+    title: "setup.step.finderContextMenu.title",
+    detail: "setup.step.finderContextMenu.detail",
+    instructions: "setup.step.finderContextMenu.instructions",
+  },
+  quickLook: {
+    title: "setup.step.quickLook.title",
+    detail: "setup.step.quickLook.detail",
+    instructions: "setup.step.quickLook.instructions",
+  },
+  spotlight: {
+    title: "setup.step.spotlight.title",
+    detail: "setup.step.spotlight.detail",
+    instructions: "setup.step.spotlight.instructions",
+  },
+} as const;
+
+const SETUP_STATE_LABELS = {
+  satisfied: "setup.state.satisfied",
+  needsApproval: "setup.state.needsApproval",
+  notRegistered: "setup.state.notRegistered",
+  unknown: "setup.state.unknown",
+} as const;
+
+export function buildSetupDialogSnapshot(
+  input: SetupDialogSnapshotInput,
+): Extract<ZManagerDialogSnapshot, { kind: "setup" }> {
+  const display = input.display;
+  const rows = input.setup.steps.flatMap((step): ZManagerSetupStepRow[] => {
+    const copy = SETUP_STEP_COPY[step.id as keyof typeof SETUP_STEP_COPY];
+    if (!copy) {
+      return [];
+    }
+    return [{
+      id: step.id,
+      title: message(display, copy.title),
+      detail: message(display, copy.detail),
+      instructions: step.state === "satisfied"
+        ? ""
+        : step.state === "notRegistered"
+          ? message(display, "setup.notRegisteredHint")
+          : message(display, copy.instructions),
+      stateLabel: message(display, SETUP_STATE_LABELS[step.state]),
+      state: step.state,
+      settingsUrl: step.settingsUrl,
+    }];
+  });
+
+  const outstanding = rows.filter((row) => row.state !== "satisfied");
+  const satisfied = rows.filter((row) => row.state === "satisfied");
+
+  return {
+    kind: "setup",
+    title: message(display, "setup.title"),
+    description: message(display, "setup.description"),
+    steps: [...outstanding, ...satisfied],
+    complete: input.setup.complete,
+  };
+}
 
 export type DialogInfoDetailRow = Readonly<{
   label: string;

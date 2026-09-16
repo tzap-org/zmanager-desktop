@@ -66,6 +66,7 @@ import type {
   EnqueueShareResponse,
   ShareRecordSnapshot,
   ShareRegistrySnapshot,
+  ShellIntegrationSetup,
 } from "./types";
 
 export async function fetchAccountSnapshot(): Promise<AccountSnapshotDto> {
@@ -431,4 +432,12 @@ export function asCommandError(value: unknown): CommandErrorDto | null {
     severity: candidate.severity ?? "error",
     retryable: Boolean(candidate.retryable),
   };
+}
+
+export async function fetchShellIntegrationSetup(): Promise<ShellIntegrationSetup> {
+  return invoke<ShellIntegrationSetup>("shell_integration_setup");
+}
+
+export async function openShellIntegrationSettings(): Promise<void> {
+  return invoke<void>("open_shell_integration_settings");
 }

@@ -13,6 +13,8 @@
   "permissions": [
     "allow-healthcheck",
     "allow-project-contract",
+    "allow-shell-integration-setup",
+    "allow-open-shell-integration-settings",
     "allow-system-file-icons",
     "allow-default-handler-status",
     "allow-default-handler-set",

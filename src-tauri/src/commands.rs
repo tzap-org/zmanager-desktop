@@ -980,6 +980,13 @@ fn start_extract_internal_with_recipient_key_and_spawner(
         requested_destination_path
     };
     let entry_paths = normalize_optional_entry_paths(request.entry_paths)?;
+    let excluded_entry_paths = normalize_entry_paths(request.excluded_entry_paths);
+    if request.select_all && !entry_paths.is_empty() {
+        return Err(CommandErrorDto::invalid_request("select-all extraction cannot include explicit entry paths"));
+    }
+    if !request.select_all && !excluded_entry_paths.is_empty() {
+        return Err(CommandErrorDto::invalid_request("entry exclusions require select-all extraction"));
+    }
     if recipient_private_key.is_some() && !entry_paths.is_empty() {
         return Err(CommandErrorDto::invalid_request("Recipient-key extraction currently requires a whole-archive operation"));
     }
@@ -1013,6 +1020,8 @@ fn start_extract_internal_with_recipient_key_and_spawner(
                 overwrite: request.overwrite,
                 destination_collision_strategy: request.destination_collision_strategy,
                 entry_paths: entry_paths.clone(),
+                select_all: request.select_all,
+                excluded_entry_paths: excluded_entry_paths.clone(),
                 strip_components: request.strip_components,
                 tzap_restore_policy: request.tzap_restore_policy,
                 tzap_allow_degraded: request.tzap_allow_degraded,
@@ -1025,7 +1034,7 @@ fn start_extract_internal_with_recipient_key_and_spawner(
         .map_err(subscription_error)?;
     let registry_for_thread = registry.clone();
     let job_id = response.job_id.clone();
-    let policy = extraction_policy(request.overwrite, request.strip_components, request.ignore_symlinks);
+    let policy = extraction_policy(request.overwrite, request.strip_components, request.ignore_symlinks, &excluded_entry_paths);
     let tzap_restore_options = TzapRestoreOptions {
         policy: map_tzap_restore_policy(request.tzap_restore_policy),
         allow_degraded: request.tzap_allow_degraded,
@@ -1189,12 +1198,32 @@ pub fn start_native_file_drag(
 ) -> Result<NativeFileDragResponse, CommandErrorDto> {
     let started_at = Instant::now();
     let archive_path = ensure_non_empty_path(request.archive_path, "archivePath")?;
-    let entry_paths = normalize_optional_entry_paths(Some(request.entry_paths))?;
+    let entry_paths = if request.select_all { normalize_entry_paths(request.entry_paths) } else { normalize_optional_entry_paths(Some(request.entry_paths))? };
+    let excluded_entry_paths = normalize_entry_paths(request.excluded_entry_paths);
+    if request.select_all && !entry_paths.is_empty() {
+        return Err(CommandErrorDto::invalid_request("select-all drag cannot include explicit entry paths"));
+    }
+    if !request.select_all && !excluded_entry_paths.is_empty() {
+        return Err(CommandErrorDto::invalid_request("entry exclusions require select-all drag"));
+    }
     let password = request.password.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty());
 
-    let (drag_items, preparation_source) = match archive_index_registry.drag_entries(&archive_path, &entry_paths)? {
-        Some(entries) => (native_drag_items_from_cached_entries(&entries, request.strip_components)?, "archiveIndex"),
-        None => (build_native_drag_items(&archive_path, &entry_paths, request.strip_components, password.as_deref())?, "coreFallback"),
+    let (drag_items, preparation_source) = if request.select_all {
+        match archive_index_registry.drag_all_entries(&archive_path, &excluded_entry_paths)? {
+            Some(entries) => (native_drag_items_from_cached_entries(&entries, request.strip_components)?, "archiveIndexAll"),
+            None => (
+                build_native_drag_items(&archive_path, &entry_paths, request.strip_components, password.as_deref(), true, &excluded_entry_paths)?,
+                "coreFallbackAll",
+            ),
+        }
+    } else {
+        match archive_index_registry.drag_entries(&archive_path, &entry_paths)? {
+            Some(entries) => (native_drag_items_from_cached_entries(&entries, request.strip_components)?, "archiveIndex"),
+            None => (
+                build_native_drag_items(&archive_path, &entry_paths, request.strip_components, password.as_deref(), false, &excluded_entry_paths)?,
+                "coreFallback",
+            ),
+        }
     };
     let _ = diagnostics.record(
         "nativeDrag",
@@ -1203,6 +1232,8 @@ pub fn start_native_file_drag(
             ("elapsedMs", serde_json::Value::from(u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX))),
             ("preparedEntryCount", serde_json::Value::from(drag_items.len())),
             ("requestedEntryCount", serde_json::Value::from(entry_paths.len())),
+            ("selectAll", serde_json::Value::Bool(request.select_all)),
+            ("excludedEntryCount", serde_json::Value::from(excluded_entry_paths.len())),
             ("source", serde_json::Value::String(preparation_source.to_string())),
         ]),
     );
@@ -1757,6 +1788,8 @@ fn build_native_drag_items(
     entry_paths: &[String],
     strip_components: usize,
     password: Option<&str>,
+    select_all: bool,
+    excluded_entry_paths: &[String],
 ) -> Result<Vec<crate::platform::NativeFileDragItem>, CommandErrorDto> {
     let mut entries = Vec::new();
     archive_browser::visit_entries_with_options(Path::new(archive_path), BrowserListOptions { password, ..Default::default() }, |entry| {
@@ -1765,7 +1798,7 @@ fn build_native_drag_items(
     })
     .map_err(crate::platform::map_archive_browser_error)?;
 
-    native_drag_items_from_listing(&entries, entry_paths, strip_components)
+    native_drag_items_from_listing(&entries, entry_paths, strip_components, select_all, excluded_entry_paths)
 }
 
 fn native_drag_items_from_cached_entries(
@@ -1787,39 +1820,24 @@ fn native_drag_items_from_listing(
     entries: &[zmanager_core::archive_browser::BrowserEntry],
     entry_paths: &[String],
     strip_components: usize,
+    select_all: bool,
+    excluded_entry_paths: &[String],
 ) -> Result<Vec<crate::platform::NativeFileDragItem>, CommandErrorDto> {
     let mut selected_entry_keys = HashSet::new();
     let mut selected_entries = Vec::new();
 
-    for entry_path in entry_paths {
-        let requested_key = archive_entry_key(entry_path);
-        let Some(selected) = entries.iter().find(|entry| archive_entry_key(&entry.path) == requested_key) else {
-            let before = selected_entries.len();
-            let folder_key = archive_folder_key(entry_path);
-            for descendant in entries {
-                if descendant.kind != zmanager_core::archive_browser::BrowserEntryKind::File {
-                    continue;
-                }
-                if entry_is_under_folder_key(&archive_entry_key(&descendant.path), &folder_key) {
-                    push_native_drag_listing_entry(descendant, &mut selected_entry_keys, &mut selected_entries);
-                }
+    if select_all {
+        for entry in entries {
+            if entry.kind == zmanager_core::archive_browser::BrowserEntryKind::File && !archive_entry_is_excluded(&entry.path, excluded_entry_paths) {
+                push_native_drag_listing_entry(entry, &mut selected_entry_keys, &mut selected_entries);
             }
-            if selected_entries.len() > before {
-                continue;
-            }
-            return Err(CommandErrorDto::not_found(
-                format!("archive entry not found: {entry_path}"),
-                Some("Open the archive again or choose a visible entry.".to_string()),
-            ));
-        };
-
-        match selected.kind {
-            zmanager_core::archive_browser::BrowserEntryKind::File => {
-                push_native_drag_listing_entry(selected, &mut selected_entry_keys, &mut selected_entries);
-            }
-            zmanager_core::archive_browser::BrowserEntryKind::Directory => {
+        }
+    } else {
+        for entry_path in entry_paths {
+            let requested_key = archive_entry_key(entry_path);
+            let Some(selected) = entries.iter().find(|entry| archive_entry_key(&entry.path) == requested_key) else {
                 let before = selected_entries.len();
-                let folder_key = archive_folder_key(&selected.path);
+                let folder_key = archive_folder_key(entry_path);
                 for descendant in entries {
                     if descendant.kind != zmanager_core::archive_browser::BrowserEntryKind::File {
                         continue;
@@ -1828,12 +1846,37 @@ fn native_drag_items_from_listing(
                         push_native_drag_listing_entry(descendant, &mut selected_entry_keys, &mut selected_entries);
                     }
                 }
-                if selected_entries.len() == before {
-                    return Err(CommandErrorDto::unsupported_format(format!("directory has no regular file entries to drag out: {}", selected.path)));
+                if selected_entries.len() > before {
+                    continue;
                 }
-            }
-            _ => {
-                return Err(CommandErrorDto::unsupported_format(format!("entry cannot be dragged out as a virtual file: {}", selected.path)));
+                return Err(CommandErrorDto::not_found(
+                    format!("archive entry not found: {entry_path}"),
+                    Some("Open the archive again or choose a visible entry.".to_string()),
+                ));
+            };
+
+            match selected.kind {
+                zmanager_core::archive_browser::BrowserEntryKind::File => {
+                    push_native_drag_listing_entry(selected, &mut selected_entry_keys, &mut selected_entries);
+                }
+                zmanager_core::archive_browser::BrowserEntryKind::Directory => {
+                    let before = selected_entries.len();
+                    let folder_key = archive_folder_key(&selected.path);
+                    for descendant in entries {
+                        if descendant.kind != zmanager_core::archive_browser::BrowserEntryKind::File {
+                            continue;
+                        }
+                        if entry_is_under_folder_key(&archive_entry_key(&descendant.path), &folder_key) {
+                            push_native_drag_listing_entry(descendant, &mut selected_entry_keys, &mut selected_entries);
+                        }
+                    }
+                    if selected_entries.len() == before {
+                        return Err(CommandErrorDto::unsupported_format(format!("directory has no regular file entries to drag out: {}", selected.path)));
+                    }
+                }
+                _ => {
+                    return Err(CommandErrorDto::unsupported_format(format!("entry cannot be dragged out as a virtual file: {}", selected.path)));
+                }
             }
         }
     }
@@ -1862,6 +1905,14 @@ fn push_native_drag_listing_entry<'a>(
 
 fn archive_entry_key(path: &str) -> String {
     path.split(['/', '\\']).filter(|component| !component.is_empty()).collect::<Vec<_>>().join("/")
+}
+
+fn archive_entry_is_excluded(path: &str, excluded_entry_paths: &[String]) -> bool {
+    let entry_key = archive_entry_key(path);
+    excluded_entry_paths.iter().any(|excluded| {
+        let excluded_key = archive_entry_key(excluded);
+        entry_key == excluded_key || entry_key.starts_with(&format!("{excluded_key}/"))
+    })
 }
 
 fn archive_folder_key(path: &str) -> String {
@@ -1915,12 +1966,17 @@ fn map_tzap_restore_policy(policy: TzapRestorePolicyDto) -> TzapRestorePolicy {
     }
 }
 
-fn extraction_policy(overwrite: crate::dto::OverwritePolicyDto, strip_components: usize, ignore_symlinks: bool) -> ExtractionPolicy {
+fn extraction_policy(
+    overwrite: crate::dto::OverwritePolicyDto,
+    strip_components: usize,
+    ignore_symlinks: bool,
+    excluded_entry_paths: &[String],
+) -> ExtractionPolicy {
     ExtractionPolicy {
         overwrite: map_overwrite_policy(overwrite),
         unsafe_file: UnsafeFilePolicy::Reject,
         include_patterns: Vec::new(),
-        exclude_patterns: Vec::new(),
+        exclude_patterns: excluded_entry_paths.to_vec(),
         strip_components,
         limits: Default::default(),
         ignore_symlinks,
@@ -1957,6 +2013,10 @@ fn normalize_optional_entry_paths(paths: Option<Vec<String>>) -> Result<Vec<Stri
     }
 
     Ok(normalized)
+}
+
+fn normalize_entry_paths(paths: Vec<String>) -> Vec<String> {
+    paths.into_iter().map(|path| path.trim().to_string()).filter(|path| !path.is_empty()).collect()
 }
 
 fn validate_source_paths_exist(sources: &[PathBuf]) -> Result<(), CommandErrorDto> {
@@ -2376,7 +2436,7 @@ mod tests {
             browser_entry("other.txt", zmanager_core::archive_browser::BrowserEntryKind::File),
         ];
 
-        let items = native_drag_items_from_listing(&entries, &["docs".to_string()], 1).unwrap();
+        let items = native_drag_items_from_listing(&entries, &["docs".to_string()], 1, false, &[]).unwrap();
 
         assert_eq!(
             items.iter().map(|item| item.display_path.as_str()).collect::<Vec<_>>(),
@@ -2392,11 +2452,28 @@ mod tests {
             browser_entry("root.txt", zmanager_core::archive_browser::BrowserEntryKind::File),
         ];
 
-        let items = native_drag_items_from_listing(&entries, &["folder".to_string()], 0).unwrap();
+        let items = native_drag_items_from_listing(&entries, &["folder".to_string()], 0, false, &[]).unwrap();
 
         assert_eq!(
             items.iter().map(|item| item.display_path.as_str()).collect::<Vec<_>>(),
             vec![format!("folder{}alpha.txt", std::path::MAIN_SEPARATOR), format!("folder{}beta.txt", std::path::MAIN_SEPARATOR),]
+        );
+    }
+
+    #[test]
+    fn native_drag_items_expand_archive_wide_selection_and_apply_exclusions() {
+        let entries = vec![
+            browser_entry("docs/a.txt", zmanager_core::archive_browser::BrowserEntryKind::File),
+            browser_entry("docs/nested/b.txt", zmanager_core::archive_browser::BrowserEntryKind::File),
+            browser_entry("other.txt", zmanager_core::archive_browser::BrowserEntryKind::File),
+        ];
+
+        let items =
+            native_drag_items_from_listing(&entries, &[], 0, true, &["docs/nested".to_string()]).expect("archive-wide drag should prepare remaining files");
+
+        assert_eq!(
+            items.iter().map(|item| item.display_path.as_str()).collect::<Vec<_>>(),
+            vec![format!("docs{}a.txt", std::path::MAIN_SEPARATOR), "other.txt".to_string(),],
         );
     }
 
@@ -2407,7 +2484,7 @@ mod tests {
             browser_entry("two/readme.txt", zmanager_core::archive_browser::BrowserEntryKind::File),
         ];
 
-        let error = native_drag_items_from_listing(&entries, &["one/readme.txt".to_string(), "two/readme.txt".to_string()], 1).unwrap_err();
+        let error = native_drag_items_from_listing(&entries, &["one/readme.txt".to_string(), "two/readme.txt".to_string()], 1, false, &[]).unwrap_err();
 
         assert_eq!(error.code, constants::COMMAND_ERROR_INVALID_REQUEST);
     }
@@ -2796,6 +2873,8 @@ mod tests {
                 overwrite: OverwritePolicyDto::Replace,
                 destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
                 entry_paths: None,
+                select_all: false,
+                excluded_entry_paths: Vec::new(),
                 strip_components: 0,
                 tzap_restore_policy: TzapRestorePolicyDto::Portable,
                 tzap_allow_degraded: false,
@@ -2868,6 +2947,8 @@ mod tests {
                 overwrite: OverwritePolicyDto::Replace,
                 destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
                 entry_paths: None,
+                select_all: false,
+                excluded_entry_paths: Vec::new(),
                 strip_components: 0,
                 tzap_restore_policy: TzapRestorePolicyDto::Portable,
                 tzap_allow_degraded: false,
@@ -2947,6 +3028,8 @@ mod tests {
                 overwrite: OverwritePolicyDto::Replace,
                 destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
                 entry_paths: None,
+                select_all: false,
+                excluded_entry_paths: Vec::new(),
                 strip_components: 0,
                 tzap_restore_policy: TzapRestorePolicyDto::Portable,
                 tzap_allow_degraded: false,
@@ -2972,6 +3055,8 @@ mod tests {
                 overwrite: OverwritePolicyDto::Replace,
                 destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
                 entry_paths: None,
+                select_all: false,
+                excluded_entry_paths: Vec::new(),
                 strip_components: 0,
                 tzap_restore_policy: TzapRestorePolicyDto::Portable,
                 tzap_allow_degraded: false,
@@ -3003,6 +3088,8 @@ mod tests {
                 overwrite: OverwritePolicyDto::Replace,
                 destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
                 entry_paths: None,
+                select_all: false,
+                excluded_entry_paths: Vec::new(),
                 strip_components: 0,
                 tzap_restore_policy: TzapRestorePolicyDto::Portable,
                 tzap_allow_degraded: false,
@@ -3724,6 +3811,8 @@ mod tests {
             overwrite: OverwritePolicyDto::Replace,
             destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
             entry_paths: None,
+            select_all: false,
+            excluded_entry_paths: Vec::new(),
             strip_components: 0,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
@@ -3796,6 +3885,8 @@ mod tests {
             overwrite: OverwritePolicyDto::Rename,
             destination_collision_strategy: DestinationCollisionStrategyDto::Rename,
             entry_paths: None,
+            select_all: false,
+            excluded_entry_paths: Vec::new(),
             strip_components: 0,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
@@ -3876,6 +3967,8 @@ mod tests {
             overwrite: OverwritePolicyDto::Rename,
             destination_collision_strategy: DestinationCollisionStrategyDto::Rename,
             entry_paths: None,
+            select_all: false,
+            excluded_entry_paths: Vec::new(),
             strip_components: 0,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
@@ -3966,6 +4059,8 @@ mod tests {
             overwrite: OverwritePolicyDto::Rename,
             destination_collision_strategy: DestinationCollisionStrategyDto::Rename,
             entry_paths: None,
+            select_all: false,
+            excluded_entry_paths: Vec::new(),
             strip_components: 0,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
@@ -4093,6 +4188,8 @@ mod tests {
             overwrite: OverwritePolicyDto::Rename,
             destination_collision_strategy: DestinationCollisionStrategyDto::Rename,
             entry_paths: None,
+            select_all: false,
+            excluded_entry_paths: Vec::new(),
             strip_components: 0,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
@@ -4474,6 +4571,8 @@ mod tests {
             overwrite: OverwritePolicyDto::Replace,
             destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
             entry_paths: None,
+            select_all: false,
+            excluded_entry_paths: Vec::new(),
             strip_components: 0,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
@@ -4540,6 +4639,8 @@ mod tests {
             overwrite: OverwritePolicyDto::Replace,
             destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
             entry_paths: None,
+            select_all: false,
+            excluded_entry_paths: Vec::new(),
             strip_components: 0,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
@@ -4612,6 +4713,8 @@ mod tests {
             overwrite: OverwritePolicyDto::Replace,
             destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
             entry_paths: Some(vec!["sources/keep.txt".to_string()]),
+            select_all: false,
+            excluded_entry_paths: Vec::new(),
             strip_components: 0,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
@@ -4745,7 +4848,7 @@ mod tests {
             "unused-destination",
             &["sources/keep.txt".to_string()],
             None,
-            extraction_policy(OverwritePolicyDto::Replace, 0, false),
+            extraction_policy(OverwritePolicyDto::Replace, 0, false, &[]),
             TzapRestoreOptions::default(),
             &token,
             &mut sink,
@@ -5107,6 +5210,8 @@ mod tests {
             overwrite: OverwritePolicyDto::Rename,
             destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
             entry_paths: None,
+            select_all: false,
+            excluded_entry_paths: Vec::new(),
             strip_components: 0,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
@@ -5123,4 +5228,20 @@ mod tests {
         assert!(extract_destination.join("sources").join("README.md").is_file(), "contents must extract directly into destination folder");
         let _ = fs::remove_dir_all(&workspace);
     }
+}
+
+/// First-run checklist describing which shell integrations still need the
+/// user's approval, and where to go to grant it.
+#[tauri::command]
+pub fn shell_integration_setup() -> crate::dto::ShellIntegrationSetupDto {
+    crate::platform::shell_integration_setup()
+}
+
+/// Open the settings pane that holds the shell-integration switches.
+///
+/// The URL comes from the platform module rather than the caller so a renderer
+/// can never steer this at an arbitrary target.
+#[tauri::command]
+pub fn open_shell_integration_settings() -> Result<(), String> {
+    crate::platform::open_shell_integration_settings()
 }

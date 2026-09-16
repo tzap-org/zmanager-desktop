@@ -565,6 +565,8 @@ export type StartExtractRequest = {
   overwrite: "refuse" | "replace" | "rename" | "ask";
   destinationCollisionStrategy?: "refuse" | "rename";
   entryPaths?: string[];
+  selectAll?: boolean;
+  excludedEntryPaths?: string[];
   stripComponents: number;
   tzapRestorePolicy: "content" | "portable" | "sameOs" | "system";
   tzapAllowDegraded: boolean;
@@ -589,6 +591,8 @@ export type PreviewEntryResponse = {
 export type NativeFileDragRequest = {
   archivePath: string;
   entryPaths: string[];
+  selectAll?: boolean;
+  excludedEntryPaths?: string[];
   password?: string;
   stripComponents: number;
 };
@@ -740,6 +744,8 @@ export type JobRetryDescriptorDto =
       overwrite: StartExtractRequest["overwrite"];
       destinationCollisionStrategy: NonNullable<StartExtractRequest["destinationCollisionStrategy"]>;
       entryPaths: string[];
+      selectAll?: boolean;
+      excludedEntryPaths?: string[];
       stripComponents: number;
       tzapRestorePolicy?: StartExtractRequest["tzapRestorePolicy"];
       tzapAllowDegraded?: boolean;
@@ -912,4 +918,18 @@ export type LocalSendRespondToTransferRequest = {
   decision: LocalSendTransferDecision;
   fileIds?: string[];
   reason?: string | null;
+};
+
+/** One row of the first-run shell-integration checklist. */
+export type ShellIntegrationSetupStep = {
+  /** Stable key the message catalogue uses for this step's copy. */
+  id: string;
+  state: "satisfied" | "needsApproval" | "notRegistered" | "unknown";
+  /** Deep link to the settings pane holding the switch, when one exists. */
+  settingsUrl: string | null;
+};
+
+export type ShellIntegrationSetup = {
+  complete: boolean;
+  steps: ShellIntegrationSetupStep[];
 };

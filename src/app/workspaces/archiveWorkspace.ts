@@ -75,6 +75,8 @@ export type SelectableArchiveWorkspaceRow = Extract<
 >;
 
 export type ArchiveWorkspaceSelectionSnapshot = {
+  allSelected: boolean;
+  excludedPaths: readonly string[];
   selectedPaths: readonly string[];
   selectedCount: number;
   focusedPath: string;
@@ -289,6 +291,8 @@ export type ArchiveWorkspacePreserveStateInput = {
   searchQuery?: string | null;
   flatView?: boolean;
   expandedTreeFolders?: readonly string[];
+  allSelected?: boolean;
+  excludedPaths?: readonly string[];
   selectedPaths?: readonly string[];
   focusedPath?: string | null;
   anchorPath?: string | null;
@@ -337,6 +341,8 @@ export type ArchiveWorkspace = {
   applySortDirection(sortKey: ArchiveSortKey, ascending: boolean): ArchiveWorkspaceSnapshot;
   getSelectedExtractEntryPaths(): readonly string[];
   getExtractReferencePaths(mode: ExtractMode): readonly string[];
+  selectAllEntries(): ArchiveWorkspaceSnapshot;
+  setPathSelected(path: string, selected: boolean): ArchiveWorkspaceSnapshot;
   buildExtractRequest(
     input: BuildArchiveWorkspaceExtractRequestInput,
   ): ArchiveWorkspaceRequestResult<StartExtractRequest, ArchiveWorkspaceExtractUnavailableReason>;
@@ -386,6 +392,8 @@ type MutableArchiveWorkspaceState = Omit<ArchiveWorkspaceSnapshot, "command" | "
     tableColumns: ArchiveTableColumnSettings;
     rowOptions: ArchiveWorkspaceRowOptions;
     selection: {
+      allSelected: boolean;
+      excludedPaths: string[];
       selectedPaths: string[];
       focusedPath: string;
       anchorPath: string;
@@ -511,7 +519,9 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
             state.view.expandedTreeFolders,
             page.parentPath,
           ),
-          selection: selectionFromResult(clearHierarchicalTableSelection()),
+          selection: state.view.selection.allSelected
+            ? state.view.selection
+            : selectionFromResult(clearHierarchicalTableSelection()),
         },
       };
       return currentSnapshot();
@@ -687,8 +697,78 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
 
     getExtractReferencePaths(mode) {
       return mode === "selection"
-        ? selectedExtractEntryPaths(state)
+        ? state.view.selection.allSelected
+          ? state.entries.map((entry) => entry.path)
+          : selectedExtractEntryPaths(state)
         : state.entries.map((entry) => entry.path);
+    },
+
+    selectAllEntries() {
+      const firstVisiblePath = selectableHierarchicalRowPaths(visibleRowsForState(state))[0] ?? "";
+      state = {
+        ...state,
+        view: {
+          ...state.view,
+          selection: {
+            allSelected: true,
+            excludedPaths: [],
+            selectedPaths: [],
+            focusedPath: firstVisiblePath,
+            anchorPath: firstVisiblePath,
+          },
+        },
+      };
+      return currentSnapshot();
+    },
+
+    setPathSelected(path, selected) {
+      const normalizedPath = normalizeArchivePath(path);
+      if (!normalizedPath) {
+        return currentSnapshot();
+      }
+
+      if (state.view.selection.allSelected) {
+        const excludedPaths = new Set(state.view.selection.excludedPaths);
+        if (selected) {
+          excludedPaths.delete(normalizedPath);
+        } else {
+          excludedPaths.add(normalizedPath);
+        }
+        state = {
+          ...state,
+          view: {
+            ...state.view,
+            selection: {
+              ...state.view.selection,
+              excludedPaths: [...excludedPaths],
+              focusedPath: normalizedPath,
+              anchorPath: normalizedPath,
+            },
+          },
+        };
+        return currentSnapshot();
+      }
+
+      const selectedPaths = new Set(state.view.selection.selectedPaths);
+      if (selected) {
+        selectedPaths.add(normalizedPath);
+      } else {
+        selectedPaths.delete(normalizedPath);
+      }
+      state = {
+        ...state,
+        view: {
+          ...state.view,
+          selection: {
+            allSelected: false,
+            excludedPaths: [],
+            selectedPaths: [...selectedPaths],
+            focusedPath: normalizedPath,
+            anchorPath: normalizedPath,
+          },
+        },
+      };
+      return currentSnapshot();
     },
 
     buildExtractRequest(input) {
@@ -696,10 +776,11 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
         return { ok: false, reason: "noArchive" };
       }
 
-      const entryPaths = input.mode === "selection"
+      const allSelected = input.mode === "selection" && state.view.selection.allSelected;
+      const entryPaths = input.mode === "selection" && !allSelected
         ? selectedExtractEntryPaths(state)
         : [];
-      if (input.mode === "selection" && entryPaths.length === 0) {
+      if (input.mode === "selection" && !allSelected && entryPaths.length === 0) {
         return { ok: false, reason: "noSelectedEntries" };
       }
 
@@ -712,7 +793,13 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
           ...(input.destinationCollisionStrategy
             ? { destinationCollisionStrategy: input.destinationCollisionStrategy }
             : {}),
-          ...(input.mode === "selection" ? { entryPaths } : {}),
+          ...(input.mode === "selection" && !allSelected ? { entryPaths } : {}),
+          ...(allSelected ? {
+            selectAll: true,
+            ...(state.view.selection.excludedPaths.length
+              ? { excludedEntryPaths: [...state.view.selection.excludedPaths] }
+              : {}),
+          } : {}),
           stripComponents: input.stripComponents,
           tzapRestorePolicy: input.tzapRestorePolicy ?? "portable",
           tzapAllowDegraded: input.tzapAllowDegraded ?? false,
@@ -772,8 +859,9 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
         return { ok: false, reason: "noArchive" };
       }
 
+      const allSelected = state.view.selection.allSelected;
       const entryPaths = nativeDragEntryPaths(state, input.entryPath);
-      if (entryPaths.length === 0) {
+      if (!allSelected && entryPaths.length === 0) {
         return { ok: false, reason: "noEntryPaths" };
       }
 
@@ -782,6 +870,12 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
         request: {
           archivePath: state.currentArchivePath,
           entryPaths,
+          ...(allSelected ? {
+            selectAll: true,
+            ...(state.view.selection.excludedPaths.length
+              ? { excludedEntryPaths: [...state.view.selection.excludedPaths] }
+              : {}),
+          } : {}),
           stripComponents: nativeDragStripComponentsPolicy({
             entryPaths,
             currentFolder: state.view.currentFolder,
@@ -1006,6 +1100,8 @@ function resetViewState(
     tableColumns: options.tableColumns ?? normalizeColumnSettings({}),
     rowOptions: normalizeRowOptions(options.rowOptions),
     selection: {
+      allSelected: false,
+      excludedPaths: [],
       selectedPaths: [],
       focusedPath: "",
       anchorPath: "",
@@ -1088,6 +1184,8 @@ function restoreViewState(
       currentFolder,
     ),
     selection: {
+      allSelected: preserveState.allSelected ?? false,
+      excludedPaths: normalizeSelectedPaths(preserveState.excludedPaths ?? []),
       selectedPaths: [...selection.selectedPaths],
       focusedPath: selection.focusedPath,
       anchorPath: selection.anchorPath,
@@ -1163,6 +1261,8 @@ function selectionFromResult(
   selection: HierarchicalTableSelectionResult,
 ): MutableArchiveWorkspaceState["view"]["selection"] {
   return {
+    allSelected: false,
+    excludedPaths: [],
     selectedPaths: normalizeSelectedPaths(selection.selectedPaths),
     focusedPath: normalizeArchivePath(selection.focusedPath),
     anchorPath: normalizeArchivePath(selection.anchorPath),
@@ -1392,6 +1492,9 @@ function fileDescendantEntryPaths(
 }
 
 function selectedExtractEntryPaths(state: MutableArchiveWorkspaceState): string[] {
+  if (state.view.selection.allSelected) {
+    return [];
+  }
   const extractPaths = new Set<string>();
 
   for (const selectedPath of state.view.selection.selectedPaths) {
@@ -1471,14 +1574,18 @@ function selectionSnapshotFromState(
   state: MutableArchiveWorkspaceState,
   rows: readonly ArchiveTableRow[],
 ): ArchiveWorkspaceSelectionSnapshot {
+  const allSelected = state.view.selection.allSelected;
+  const excludedPaths = [...state.view.selection.excludedPaths];
   const selectedPaths = [...state.view.selection.selectedPaths];
   const selectedPathSet = new Set(selectedPaths);
   const visibleSelectablePaths = selectableHierarchicalRowPaths(rows);
   const visibleSelectedRows = rows.filter((row): row is SelectableArchiveWorkspaceRow =>
-    isSelectableRow(row) && selectedPathSet.has(row.path)
+    isSelectableRow(row) && (allSelected
+      ? !excludedPaths.includes(row.path)
+      : selectedPathSet.has(row.path))
   );
   const visibleSelectedPaths = visibleSelectedRows.map((row) => row.path);
-  const selectedEntries = selectedPaths
+  const selectedEntries = allSelected ? [] : selectedPaths
     .map((path) => entryByPath(state.entries, path))
     .filter((entry): entry is ArchiveEntryDto => entry !== null);
   const visibleSelectedEntries = visibleSelectedRows
@@ -1492,8 +1599,12 @@ function selectionSnapshotFromState(
   const firstSelectedEntryPath = firstSelectedEntry?.path ?? "";
 
   return {
+    allSelected,
+    excludedPaths,
     selectedPaths,
-    selectedCount: selectedPaths.length,
+    selectedCount: allSelected
+      ? Math.max(0, state.entryCount - excludedPaths.length)
+      : selectedPaths.length,
     focusedPath,
     anchorPath: normalizeArchivePath(state.view.selection.anchorPath),
     visibleSelectablePaths,
@@ -1508,7 +1619,7 @@ function selectionSnapshotFromState(
       const value = row.entry?.size;
       return typeof value === "number" && Number.isFinite(value) ? total + value : total;
     }, 0),
-    hiddenBySearch: selectedPaths.length > 0
+    hiddenBySearch: !allSelected && selectedPaths.length > 0
       && visibleSelectedRows.length === 0
       && Boolean(state.view.searchQuery.trim()),
     firstSelectedEntryPath,
@@ -1547,7 +1658,7 @@ function detailsModelFromState(
     };
   }
 
-  if (selection.visibleSelectedRows.length === 1) {
+  if (!selection.allSelected && selection.visibleSelectedRows.length === 1) {
     const row = selection.visibleSelectedRows[0];
     const entry = row.entry ?? entryByPath(state.entries, row.path);
     if (!entry) {
@@ -1568,7 +1679,9 @@ function detailsModelFromState(
 
   return {
     kind: "multipleSelection",
-    selectedCount: selection.visibleSelectedRows.length,
+    selectedCount: selection.allSelected
+      ? selection.selectedCount
+      : selection.visibleSelectedRows.length,
     selectedFiles: selection.visibleSelectedRows.filter((row) =>
       row.rowType === "entry" && row.entry?.kind !== "directory"
     ).length,
@@ -1750,6 +1863,8 @@ function cloneSelectionSnapshot(
   selection: ArchiveWorkspaceSelectionSnapshot,
 ): ArchiveWorkspaceSelectionSnapshot {
   return {
+    allSelected: selection.allSelected,
+    excludedPaths: [...selection.excludedPaths],
     selectedPaths: [...selection.selectedPaths],
     selectedCount: selection.selectedCount,
     focusedPath: selection.focusedPath,

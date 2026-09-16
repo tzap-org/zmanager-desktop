@@ -888,6 +888,73 @@ describe("archive workspace load state", () => {
     }))).toBe("noSelectedEntries");
   });
 
+  it("keeps archive-wide select-all across pages and records unchecked rows as exclusions", () => {
+    const workspace = createArchiveWorkspace();
+    const allEntries: ArchiveEntryDto[] = [
+      { path: "page-1-a.txt", kind: "file", size: 1 },
+      { path: "page-1-b.txt", kind: "file", size: 2 },
+      { path: "page-2-a.txt", kind: "file", size: 3 },
+      { path: "page-2-b.txt", kind: "file", size: 4 },
+    ];
+
+    workspace.loadSucceeded({
+      archivePath: "C:/tmp/project.zip",
+      entries: allEntries,
+      entryCount: allEntries.length,
+      totalSize: 10,
+    });
+    workspace.acceptPage({
+      archivePath: "C:/tmp/project.zip",
+      parentPath: "",
+      entries: allEntries.slice(0, 2),
+      entryCount: allEntries.length,
+      pageNumber: 1,
+      childCount: allEntries.length,
+      hasNext: true,
+    });
+
+    workspace.selectAllEntries();
+    workspace.setPathSelected("page-1-b.txt", false);
+    workspace.acceptPage({
+      archivePath: "C:/tmp/project.zip",
+      parentPath: "",
+      entries: allEntries.slice(2),
+      entryCount: allEntries.length,
+      pageNumber: 2,
+      childCount: allEntries.length,
+      hasPrevious: true,
+    });
+
+    const snapshot = workspace.getSnapshot();
+    expect(snapshot.view.selection.allSelected).toBe(true);
+    expect(snapshot.view.selection.excludedPaths).toEqual(["page-1-b.txt"]);
+    expect(snapshot.view.selection.selectedCount).toBe(3);
+    expect(snapshot.view.selection.visibleSelectedPaths).toEqual([
+      "page-2-a.txt",
+      "page-2-b.txt",
+    ]);
+
+    const extractRequest = requestOf(workspace.buildExtractRequest({
+      mode: "selection",
+      destinationPath: "D:/out",
+      overwrite: "replace",
+      stripComponents: 0,
+    }));
+    expect(extractRequest).toMatchObject({
+      selectAll: true,
+      excludedEntryPaths: ["page-1-b.txt"],
+    });
+    expect("entryPaths" in extractRequest).toBe(false);
+
+    expect(workspace.buildNativeDragRequest({ entryPath: "page-2-a.txt" })).toMatchObject({
+      ok: true,
+      request: {
+        selectAll: true,
+        excludedEntryPaths: ["page-1-b.txt"],
+      },
+    });
+  });
+
   it("builds test archive requests with selected extract paths when present", () => {
     const workspace = createArchiveWorkspace();
     workspace.loadSucceeded({

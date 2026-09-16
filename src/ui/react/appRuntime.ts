@@ -359,6 +359,8 @@ export type ZManagerDialogIntent =
       type: "columnVisibilityPatch";
       visibility: TableColumnVisibilityPreferences;
     }>
+  | Readonly<{ type: "setupRecheck" }>
+  | Readonly<{ type: "setupOpenSettings" }>
   | Readonly<{ type: "closeCurrent" }>;
 
 export type ZManagerWindowResizeDirection =
@@ -647,6 +649,11 @@ function cloneDialogSnapshot(
           title: group.title,
           rows: group.rows.map(([label, value]) => [label, value] as const),
         })),
+      };
+    case "setup":
+      return {
+        ...dialog,
+        steps: dialog.steps.map((step) => ({ ...step })),
       };
   }
 }

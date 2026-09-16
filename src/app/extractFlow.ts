@@ -52,6 +52,8 @@ export type BuildStartExtractRequestInput = {
   stripComponents: number;
   password?: string;
   entryPaths?: string[];
+  selectAll?: boolean;
+  excludedEntryPaths?: string[];
   tzapRestorePolicy?: TzapRestorePolicy;
   tzapAllowDegraded?: boolean;
   tzapAllowAbsoluteSymlinks?: boolean;
@@ -68,6 +70,10 @@ export function buildStartExtractRequest(input: BuildStartExtractRequestInput): 
       ? { destinationCollisionStrategy: input.destinationCollisionStrategy }
       : {}),
     ...(input.entryPaths ? { entryPaths: [...input.entryPaths] } : {}),
+    ...(input.selectAll ? { selectAll: true } : {}),
+    ...(input.excludedEntryPaths?.length
+      ? { excludedEntryPaths: [...input.excludedEntryPaths] }
+      : {}),
     stripComponents: input.stripComponents,
     tzapRestorePolicy: input.tzapRestorePolicy ?? "portable",
     tzapAllowDegraded: input.tzapAllowDegraded ?? false,

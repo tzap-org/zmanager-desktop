@@ -416,6 +416,36 @@ impl ArchiveIndexRegistry {
         Ok(Some(selected_entries))
     }
 
+    pub fn drag_all_entries(&self, archive_path: &str, excluded_entry_paths: &[String]) -> Result<Option<Vec<ArchiveEntryDto>>, CommandErrorDto> {
+        let normalized_archive_path = archive_path.trim();
+        let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(record) = state
+            .sessions
+            .values()
+            .filter(|record| {
+                record.snapshot.archive_path == normalized_archive_path
+                    && record.snapshot.status != ArchiveIndexStatusDto::Failed
+                    && record.snapshot.status != ArchiveIndexStatusDto::Cancelled
+            })
+            .max_by_key(|record| archive_session_sequence(&record.snapshot.session_id))
+        else {
+            return Ok(None);
+        };
+        if record.snapshot.status == ArchiveIndexStatusDto::Indexing {
+            return Ok(None);
+        }
+
+        let index = record.index.lock().unwrap_or_else(|error| error.into_inner());
+        let mut entries = index
+            .entries
+            .values()
+            .filter(|entry| entry.kind == ArchiveEntryKindDto::File && !archive_entry_is_excluded(&entry.path, excluded_entry_paths))
+            .cloned()
+            .collect::<Vec<_>>();
+        entries.sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(Some(entries))
+    }
+
     fn publish_progress(&self, session_id: &str, statistics: ArchiveIndexStatistics) {
         let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         let Some(record) = state.sessions.get_mut(session_id) else {
@@ -940,6 +970,14 @@ fn normalize_archive_path(path: &str) -> String {
     path.replace('\\', "/").split('/').filter(|segment| !segment.is_empty() && *segment != ".").collect::<Vec<_>>().join("/")
 }
 
+fn archive_entry_is_excluded(path: &str, excluded_entry_paths: &[String]) -> bool {
+    let entry_path = normalize_archive_path(path);
+    excluded_entry_paths.iter().any(|excluded| {
+        let excluded_path = normalize_archive_path(excluded);
+        entry_path == excluded_path || entry_path.starts_with(&format!("{excluded_path}/"))
+    })
+}
+
 fn cursor_signature(session_id: &str, parent: &str, revision: &str) -> u64 {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     session_id.hash(&mut hasher);
@@ -1259,6 +1297,12 @@ mod tests {
             .expect("cached drag selection")
             .expect("ready session should answer");
         assert_eq!(files.iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>(), ["docs/a.txt", "docs/nested/b.txt", "other.txt"]);
+
+        let all_files = registry
+            .drag_all_entries("C:/archives/demo.tzap", &["docs/nested".to_string()])
+            .expect("cached archive-wide drag selection")
+            .expect("ready session should answer archive-wide selection");
+        assert_eq!(all_files.iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>(), ["docs/a.txt", "other.txt"]);
     }
 
     #[test]

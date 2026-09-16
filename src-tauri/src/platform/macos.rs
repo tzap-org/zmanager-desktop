@@ -1,9 +1,9 @@
 use std::ffi::c_void;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
 use tauri::menu::MenuItem;
@@ -388,7 +388,119 @@ pub(super) fn shutdown() {
     eprintln!("ZMANAGER_MACOS_HOST_SHUTDOWN_OK");
 }
 
+/// Settings pane that holds the switches for every app extension macOS
+/// installs on the user's behalf. macOS 14+ groups them under
+/// General > Login Items & Extensions.
+pub(super) const SHELL_INTEGRATION_SETTINGS_URL: &str = "x-apple.systempreferences:com.apple.ExtensionsPreferences";
+
+/// Build the first-run checklist.
+///
+/// What is and is not knowable here matters. Whether a bundle is REGISTERED is
+/// a fact we can read back from LaunchServices and PlugInKit. Whether the user
+/// has switched an extension ON is not: PlugInKit's own flag reports an
+/// extension as elected while System Settings still shows its switch off, so a
+/// "registered but not obviously working" extension is reported as
+/// `needsApproval` rather than being claimed as satisfied. Over-reporting
+/// success is the failure mode that leaves someone staring at a context menu
+/// that never appears, with nothing on screen telling them why.
+pub(super) fn shell_integration_setup() -> crate::dto::ShellIntegrationSetupDto {
+    use crate::dto::{ShellIntegrationSetupDto, ShellIntegrationSetupStepDto};
+
+    let probes = probe_extension_status();
+    let settings = Some(SHELL_INTEGRATION_SETTINGS_URL);
+
+    let finder_state = if !probes.finder.is_installed {
+        "notRegistered"
+    } else if shell_action_has_been_received() {
+        // The extension has actually delivered a request to this app, which is
+        // the only conclusive proof that Finder loaded it and the user switched
+        // it on. Nothing weaker is treated as success.
+        "satisfied"
+    } else {
+        "needsApproval"
+    };
+
+    let quicklook_state = if probes.quicklook.is_installed { "satisfied" } else { "notRegistered" };
+    let spotlight_state = if probes.spotlight.is_installed { "satisfied" } else { "notRegistered" };
+
+    let steps = vec![
+        ShellIntegrationSetupStepDto { id: "finderContextMenu", state: finder_state, settings_url: settings },
+        ShellIntegrationSetupStepDto { id: "quickLook", state: quicklook_state, settings_url: settings },
+        ShellIntegrationSetupStepDto { id: "spotlight", state: spotlight_state, settings_url: settings },
+    ];
+
+    let complete = steps.iter().all(|step| step.state == "satisfied");
+    ShellIntegrationSetupDto { complete, steps }
+}
+
+pub(super) fn open_shell_integration_settings() -> Result<(), String> {
+    Command::new("/usr/bin/open")
+        .arg(SHELL_INTEGRATION_SETTINGS_URL)
+        .status()
+        .map_err(|error| format!("failed to open shell integration settings: {error}"))
+        .and_then(|status| if status.success() { Ok(()) } else { Err("settings pane did not open".to_owned()) })
+}
+
+pub(super) fn app_group_is_available() -> bool {
+    APP_GROUP_AVAILABLE.load(Ordering::Acquire)
+}
+
+/// Block until the native host reports that the App Group container is usable,
+/// or until `timeout` elapses. The Finder Sync extension cannot deliver a
+/// request before the container exists, so `--postinstall` waits for it rather
+/// than exiting into a half-provisioned state.
+pub(super) fn wait_for_app_group(timeout: Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while !app_group_is_available() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    app_group_is_available()
+}
+
+/// `--postinstall` runs before the normal diagnostic directory is chosen, so it
+/// writes to the per-user log directory directly.
+pub(super) fn postinstall_diagnostic_log_directory() -> Option<PathBuf> {
+    current_user_home_directory().map(|home| home.join("Library").join("Logs").join("org.tzap-org.zmanager"))
+}
+
+fn current_user_home_directory() -> Option<PathBuf> {
+    let password = unsafe { libc::getpwuid(libc::getuid()) };
+    if password.is_null() {
+        return std::env::var_os("HOME").filter(|value| !value.is_empty()).map(PathBuf::from);
+    }
+    let directory = unsafe { std::ffi::CStr::from_ptr((*password).pw_dir) };
+    let path = directory.to_str().ok()?;
+    (!path.is_empty()).then(|| PathBuf::from(path))
+}
+
+/// Marker proving the Finder extension has reached this app at least once.
+///
+/// The user's extension switch is not readable, so the setup checklist relies
+/// on this instead: once a request arrives, the whole chain (registered,
+/// switched on, loaded by Finder, App Group reachable) is proven end to end.
+fn shell_action_receipt_marker() -> Option<PathBuf> {
+    current_user_home_directory().map(|home| home.join("Library").join("Application Support").join("org.tzap-org.zmanager").join("shell-action-received"))
+}
+
+fn shell_action_has_been_received() -> bool {
+    shell_action_receipt_marker().is_some_and(|marker| marker.exists())
+}
+
+fn record_shell_action_receipt() {
+    let Some(marker) = shell_action_receipt_marker() else { return };
+    if marker.exists() {
+        return;
+    }
+    if let Some(parent) = marker.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&marker, b"");
+}
+
 fn ingest_macos_native_event(event: crate::native_launch_inbox::NativeInboundEvent, inbox: &crate::native_launch_inbox::NativeLaunchInbox) {
+    if event.kind == crate::native_launch_inbox::NativeInboundEventKind::ShellActionRequest {
+        record_shell_action_receipt();
+    }
     let event = match normalize_macos_inbound_event(event, MacOsPlatform::consume_shell_action_request) {
         Ok(event) => event,
         Err(error_code) => {

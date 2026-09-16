@@ -154,8 +154,6 @@ import {
   focusHierarchicalTablePath,
   invertVisibleHierarchicalSelection,
   replaceHierarchicalTableSelection,
-  selectAllVisibleHierarchicalRows,
-  setHierarchicalTablePathSelected,
   type HierarchicalTableSelectionResult,
 } from "../app/hierarchicalTable";
 import { getPathBasename } from "../app/formatting";
@@ -237,6 +235,7 @@ import {
 } from "../app/display/displayContext";
 import {
   buildAboutDialogSnapshot,
+  buildSetupDialogSnapshot,
   buildArchiveInfoDialogSnapshot,
   buildEntryInfoDialogSnapshot,
   buildSelectionInfoDialogSnapshot,
@@ -270,6 +269,8 @@ import {
   fetchHealthcheck,
   fetchAccountSnapshot,
   fetchProjectContract,
+  fetchShellIntegrationSetup,
+  openShellIntegrationSettings,
   fetchDiagnosticLogInfo,
   fetchQuickActionStartupState,
   fetchSystemFileIcons,
@@ -613,11 +614,7 @@ const archiveRuntimeActions = createArchiveRuntimeActions({
   clearSelection: clearBrowseSelection,
   selectRow: (path, modifiers) => updateSelectionByIntent(path, modifiers),
   setRowSelected: (path, selected) => {
-    applyArchiveTableSelection(setHierarchicalTablePathSelected({
-      ...currentArchiveTableSelectionState(),
-      path,
-      selected,
-    }));
+    publishArchiveSnapshot(archiveWorkspace.setPathSelected(path, selected));
   },
   applySelection: (input) => {
     applyArchiveTableSelection({
@@ -803,7 +800,10 @@ function archiveEntries(): readonly ArchiveEntryDto[] {
 }
 
 function archiveSelectedPathSet(): Set<string> {
-  return new Set(archiveSnapshot().view.selection.selectedPaths);
+  const selection = archiveSnapshot().view.selection;
+  return new Set(selection.allSelected
+    ? selection.visibleSelectedPaths
+    : selection.selectedPaths);
 }
 
 function archiveSelectedCount(): number {
@@ -1228,6 +1228,14 @@ const startupController = createStartupController({
       });
     } else {
       browserDocument.setCustomWindowChrome(false);
+    }
+
+    // Surface the shell-integration checklist once the app is up, but only when
+    // something is actually outstanding. macOS leaves the extension switches off
+    // and says nothing about it, so without this the Finder menu is simply
+    // absent with no indication of why or where to fix it.
+    if (isDesktopRuntime()) {
+      void openSetupDialog(true);
     }
   },
   onBootstrapStateChanged: publishBootstrapStateSnapshot,
@@ -1840,10 +1848,7 @@ async function startNativeDragOut(entryPath: string) {
   }
 
   if (!archiveSelectedPathSet().has(entryPath)) {
-    applyArchiveTableSelection(ensureHierarchicalTablePathSelected({
-      ...currentArchiveTableSelectionState(),
-      path: entryPath,
-    }));
+    publishArchiveSnapshot(archiveWorkspace.setPathSelected(entryPath, true));
   }
 
   let password: string | undefined;
@@ -1854,7 +1859,11 @@ async function startNativeDragOut(entryPath: string) {
   }
   let request = requestResult.request;
 
-  setOperationalMessage("preview.preparingDrag", { count: request.entryPaths.length });
+  setOperationalMessage("preview.preparingDrag", {
+    count: request.selectAll
+      ? Math.max(0, archiveSnapshot().entryCount - (request.excludedEntryPaths?.length ?? 0))
+      : request.entryPaths.length,
+  });
 
   while (true) {
     try {
@@ -2354,6 +2363,15 @@ function handleReactDialogIntent(intent: ZManagerDialogIntent) {
       break;
     case "preferencesCancel":
       cancelReactPreferencesDialog();
+      break;
+    case "setupRecheck":
+      refreshSetupDialogSnapshot();
+      break;
+    case "setupOpenSettings":
+      void openShellIntegrationSettings().catch(() => {
+        // The pane refusing to open is not actionable from here; the dialog
+        // still shows the written steps for reaching it by hand.
+      });
       break;
     case "closeCurrent": {
       if (reactDialogSnapshot.kind !== "none") {
@@ -3125,7 +3143,7 @@ function updateSelectionByIntent(
 }
 
 function selectAllVisibleEntries() {
-  applyArchiveTableSelection(selectAllVisibleHierarchicalRows(getVisibleSelectablePaths()));
+  publishArchiveSnapshot(archiveWorkspace.selectAllEntries());
 }
 
 function invertVisibleSelectionEntries() {
@@ -3526,6 +3544,49 @@ function refreshAboutDialogSnapshot() {
   }
 }
 
+/**
+ * Read the shell-integration checklist and show it.
+ *
+ * `announceOnlyWhenIncomplete` is what the startup path passes: nobody wants a
+ * dialog telling them everything is already fine, so a complete checklist opens
+ * nothing at all.
+ */
+async function openSetupDialog(announceOnlyWhenIncomplete = false) {
+  let setup;
+  try {
+    setup = await fetchShellIntegrationSetup();
+  } catch (error) {
+    // A failed probe is not worth interrupting startup for, but it must not
+    // vanish either: a checklist that silently never appears is the same
+    // failure this dialog exists to prevent.
+    diagnostics.record({
+      scope: "setup",
+      name: "probeFailed",
+      fields: { error: error instanceof Error ? error.message : String(error) },
+    });
+    return;
+  }
+  diagnostics.record({
+    scope: "setup",
+    name: "probed",
+    fields: {
+      complete: setup.complete,
+      outstanding: setup.steps.filter((step) => step.state !== "satisfied").length,
+    },
+  });
+  if (announceOnlyWhenIncomplete && setup.complete) {
+    return;
+  }
+  setReactDialogSnapshot(buildSetupDialogSnapshot({ display: displayContext, setup }));
+  publishReactSnapshot();
+}
+
+function refreshSetupDialogSnapshot() {
+  if (reactDialogSnapshot.kind === "setup") {
+    void openSetupDialog();
+  }
+}
+
 function publishBootstrapStateSnapshot() {
   refreshAboutDialogSnapshot();
   if (normalWorkspaceRendered) {
@@ -3920,6 +3981,8 @@ function loadArchiveListingIntoState(listing: ArchiveFixture, options: ArchiveLo
         searchQuery: previous.view.searchQuery,
         flatView: previous.view.flatView,
         expandedTreeFolders: previous.view.expandedTreeFolders,
+        allSelected: previous.view.selection.allSelected,
+        excludedPaths: previous.view.selection.excludedPaths,
         selectedPaths: previous.view.selection.selectedPaths,
         focusedPath: previous.view.selection.focusedPath,
         anchorPath: previous.view.selection.anchorPath,

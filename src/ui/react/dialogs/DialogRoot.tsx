@@ -16,6 +16,7 @@ import type { ZManagerDialogSnapshot } from "../appRuntime";
 import { PreferencesDialog } from "../preferences/PreferencesDialog";
 import { translatorForSnapshot } from "../shell/shellHelpers";
 import { DesktopDialog } from "./DesktopDialog";
+import { SetupDialog } from "./SetupDialog";
 
 export function DialogRoot() {
   const snapshot = useZManagerSnapshot();
@@ -44,6 +45,10 @@ export function DialogRoot() {
 
   if (snapshot.dialog.kind === "about") {
     return <AboutDialog dialog={snapshot.dialog} />;
+  }
+
+  if (snapshot.dialog.kind === "setup") {
+    return <SetupDialog dialog={snapshot.dialog} />;
   }
 
   return null;

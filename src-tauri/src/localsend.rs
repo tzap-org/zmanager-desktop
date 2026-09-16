@@ -665,6 +665,8 @@ fn build_auto_extract_request(config: &ReceiveConfig, received_path: &Path) -> O
         overwrite: OverwritePolicyDto::Rename,
         destination_collision_strategy: DestinationCollisionStrategyDto::Rename,
         entry_paths: None,
+        select_all: false,
+        excluded_entry_paths: Vec::new(),
         strip_components: 0,
         tzap_restore_policy: TzapRestorePolicyDto::default(),
         tzap_allow_degraded: false,

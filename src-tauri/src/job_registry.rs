@@ -1768,6 +1768,8 @@ mod tests {
                     overwrite: crate::dto::OverwritePolicyDto::Ask,
                     destination_collision_strategy: crate::dto::DestinationCollisionStrategyDto::Refuse,
                     entry_paths: vec!["file.txt".into()],
+                    select_all: false,
+                    excluded_entry_paths: Vec::new(),
                     strip_components: 0,
                     tzap_restore_policy: crate::dto::TzapRestorePolicyDto::Portable,
                     tzap_allow_degraded: false,

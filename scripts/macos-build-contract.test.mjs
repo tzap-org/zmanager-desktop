@@ -121,16 +121,59 @@ test("ordinary application startup never rewrites operating-system shell registr
   assert.match(linuxInstaller, /reload_nautilus_extensions/);
 });
 
-test("macOS application startup has no registration-only postinstall mode", () => {
+test("macOS application provides a headless postinstall launch that registers nothing itself", () => {
   const main = readFileSync(resolve(root, "src-tauri/src/main.rs"), "utf8");
-  assert.doesNotMatch(main, /--postinstall|postinstall_diagnostic_log_directory|register_macos_bundle_after_install/);
+  // PlugInKit registers an appex only after its parent app has been run on the
+  // Mac, so the install step needs a way to run the app once without UI.
+  assert.match(main, /--postinstall/);
+  assert.match(main, /postinstall_diagnostic_log_directory/);
+  assert.match(main, /wait_for_app_group/);
+  // That launch exists to BE a first run, not to issue registration commands.
+  // pluginkit edits are reverted by the next discovery pass; LaunchServices is
+  // driven from the install script, which knows every path the build produced.
+  const executableMain = main
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("//"))
+    .join("\n");
+  assert.doesNotMatch(executableMain, /pluginkit|lsregister|register_macos_bundle_after_install/);
 });
 
-test("macOS installation only copies and verifies the final application bundle", () => {
+test("macOS installation registers exactly one extension provider", () => {
   const build = readFileSync(resolve(root, "scripts/build-macos.sh"), "utf8");
   assert.match(build, /ditto "\$staged_app" "\$temporary"/);
   assert.match(build, /codesign --verify --deep --strict "\$destination"/);
-  assert.doesNotMatch(build, /--postinstall|macos-register-bundle|pluginkit\s+[-+a-z]*a|lsregister\s+[-+a-z]*f/);
+
+  // Retire the build's intermediate bundles before force-registering the
+  // installed one. LaunchServices indexes apps from almost any location, and a
+  // second registered bundle carrying the extensions is what produces duplicate
+  // Finder context-menu entries.
+  assert.match(build, /"\$lsregister" -u "\$stale_bundle"/);
+  assert.match(build, /"\$lsregister" -f "\$destination"/);
+
+  // Run the installed app once so PlugInKit discovers its appexes.
+  assert.match(build, /open -n -W -a "\$destination" --args --postinstall/);
+
+  // And prove the end state rather than assuming it.
+  assert.match(build, /verify-macos-extension-registration\.sh "\$destination"/);
+
+  // pluginkit must never be used to register or enable a shipping build: its
+  // edits are temporary and reverted by the next PlugInKit discovery pass, and
+  // the enabled state is a user setting owned by System Settings.
+  const executableBuild = build
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("#"))
+    .join("\n");
+  assert.doesNotMatch(executableBuild, /pluginkit/);
+  assert.doesNotMatch(executableBuild, /macos-register-bundle/);
+});
+
+test("macOS registration verifier asserts a single provider without touching user state", () => {
+  const verifier = readFileSync(resolve(root, "scripts/verify-macos-extension-registration.sh"), "utf8");
+  assert.match(verifier, /More than one registered bundle carries the Finder Sync extension/);
+  // Read-only probes of pluginkit are fine; mutating registration or the user's
+  // enabled/disabled choice is not.
+  assert.doesNotMatch(verifier, /pluginkit"? +-(?:a|r|e)\b/);
+  assert.doesNotMatch(verifier, /-e +use/);
 });
 
 test("macOS packaging prepares only the staged release bundle", () => {

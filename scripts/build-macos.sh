@@ -9,6 +9,7 @@ skip_tests=0
 install_application=1
 bundle_kind="all"
 install_dir="${ZMANAGER_MACOS_INSTALL_DIR:-/Applications}"
+lsregister="${ZMANAGER_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}"
 architecture="$(uname -m)"
 export LZMA_API_STATIC=1
 local_development_codesign_identity="8014C7D557DE28E3C52971362BA18A3CCC28A723"
@@ -464,11 +465,41 @@ if ((install_application)); then
     exit 1
   fi
   echo "Installed application: $destination"
-  # The installed app is the sole production bundle. macOS discovers its
-  # embedded app extensions through the normal application installation and
-  # signing flow; no runtime registration command or custom context-menu hook
-  # is run here.
   codesign --verify --deep --strict "$destination"
+
+  # Extension registration. PlugInKit derives its registry from the
+  # LaunchServices database, so LaunchServices is the only lever worth pulling
+  # here -- `pluginkit -a` / `-e use` edits are reverted by the next discovery
+  # pass and must never be used to register a shipping build.
+  #
+  # Duplicate context-menu entries come from LaunchServices indexing MORE THAN
+  # ONE bundle that carries the extensions. LaunchServices adds apps from almost
+  # any accessible location, so the build's intermediate bundles have to be
+  # retired explicitly; only the installed bundle may remain registered.
+  installed_physical_path=$(cd "$destination" && pwd -P)
+  for stale_bundle in \
+    "$application" \
+    "$staged_app" \
+    "$stage_dir"/ZManager-*-"$architecture".app; do
+    [[ -d "$stale_bundle" ]] || continue
+    [[ $(cd "$stale_bundle" && pwd -P) != "$installed_physical_path" ]] || continue
+    "$lsregister" -u "$stale_bundle" 2>/dev/null || true
+  done
+  "$lsregister" -f "$destination"
+
+  # PlugInKit registers an appex only once its parent app has been run on this
+  # Mac; installing the bundle is not sufficient. This headless launch performs
+  # that first run, provisions the App Group container the Finder Sync extension
+  # delivers requests through, and exits without showing UI.
+  # -n forces a fresh instance so this never waits on an app the user already
+  # has open; the --postinstall branch exits before any window is created.
+  echo "Running postinstall registration for $destination"
+  if ! open -n -W -a "$destination" --args --postinstall; then
+    echo "Postinstall registration failed for $destination" >&2
+    exit 1
+  fi
+  scripts/verify-macos-extension-registration.sh "$destination"
+  echo "Postinstall completed for $destination"
 else
   echo "Skipping application install because --no-install was set."
 fi

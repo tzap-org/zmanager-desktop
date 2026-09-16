@@ -10,6 +10,8 @@ fn main() {
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(tauri_build::AppManifest::new().commands(&[
         "healthcheck",
         "project_contract",
+        "shell_integration_setup",
+        "open_shell_integration_settings",
         "system_file_icons",
         "default_handler_status",
         "default_handler_set",

@@ -12,6 +12,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 const COMMAND_WRAPPERS = [
   { command: "healthcheck", call: () => api.fetchHealthcheck() },
   { command: "project_contract", call: () => api.fetchProjectContract() },
+  { command: "shell_integration_setup", call: () => api.fetchShellIntegrationSetup() },
+  { command: "open_shell_integration_settings", call: () => api.openShellIntegrationSettings() },
   {
     command: "system_file_icons",
     request: { entries: [{ key: "root", path: "C:/demo/root.txt", isDirectory: false }] },
