@@ -219,12 +219,16 @@ pub(crate) trait NativeFileDragAdapter {
         window: &tauri::WebviewWindow<Wry>,
         items: &[NativeFileDragItem],
         stream_provider: NativeFileDragStreamProvider,
-        registry: &crate::native_drag_session::NativeDragSessionRegistry,
-        cancellation: zmanager_core::jobs::CancellationToken,
-        job_id: &str,
-        job_kind: crate::job_dto::JobKindDto,
-        job_registry: &crate::job_registry::JobRegistry,
+        context: NativeFileDragJobContext<'_>,
     ) -> Result<NativeFileDragStart, NativeFileDragError>;
+}
+
+pub(crate) struct NativeFileDragJobContext<'a> {
+    pub registry: &'a crate::native_drag_session::NativeDragSessionRegistry,
+    pub cancellation: zmanager_core::jobs::CancellationToken,
+    pub job_id: &'a str,
+    pub job_kind: crate::job_dto::JobKindDto,
+    pub job_registry: &'a crate::job_registry::JobRegistry,
 }
 
 #[cfg(target_os = "windows")]
@@ -296,13 +300,9 @@ pub fn start_native_file_drag(
     window: &tauri::WebviewWindow<Wry>,
     items: &[NativeFileDragItem],
     stream_provider: NativeFileDragStreamProvider,
-    registry: &crate::native_drag_session::NativeDragSessionRegistry,
-    cancellation: zmanager_core::jobs::CancellationToken,
-    job_id: &str,
-    job_kind: crate::job_dto::JobKindDto,
-    job_registry: &crate::job_registry::JobRegistry,
+    context: NativeFileDragJobContext<'_>,
 ) -> Result<NativeFileDragStart, NativeFileDragError> {
-    ActivePlatform::start_native_file_drag(window, items, stream_provider, registry, cancellation, job_id, job_kind, job_registry)
+    ActivePlatform::start_native_file_drag(window, items, stream_provider, context)
 }
 
 pub fn handle_run_event(event: &tauri::RunEvent, inbox: &NativeLaunchInbox) {

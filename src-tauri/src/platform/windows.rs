@@ -23,8 +23,8 @@ use windows_sys::Win32::{
 use super::windows_drag_path::prepare_windows_drag_items;
 use super::{
     CapabilityInspector, DefaultHandlerController, DefaultHandlerEntry, DefaultHandlerRequest, DiagnosticLogPolicy, MainWindowConfigurator,
-    NativeCapabilityOperationError, NativeFileDragAdapter, NativeFileDragCandidate, NativeFileDragError, NativeFileDragItem, NativeFileDragOutcome,
-    NativeFileDragStart, NativeFileDragStreamProvider, SecureFileProtector, SystemFileIconProvider,
+    NativeCapabilityOperationError, NativeFileDragAdapter, NativeFileDragCandidate, NativeFileDragError, NativeFileDragItem, NativeFileDragJobContext,
+    NativeFileDragOutcome, NativeFileDragStart, NativeFileDragStreamProvider, SecureFileProtector, SystemFileIconProvider,
 };
 use crate::dto::{SystemFileIconDto, SystemFileIconRequestEntry};
 
@@ -89,11 +89,7 @@ impl NativeFileDragAdapter for WindowsPlatform {
         _window: &tauri::WebviewWindow<Wry>,
         items: &[NativeFileDragItem],
         stream_provider: NativeFileDragStreamProvider,
-        _registry: &crate::native_drag_session::NativeDragSessionRegistry,
-        _cancellation: zmanager_core::jobs::CancellationToken,
-        _job_id: &str,
-        _job_kind: crate::job_dto::JobKindDto,
-        _job_registry: &crate::job_registry::JobRegistry,
+        _context: NativeFileDragJobContext<'_>,
     ) -> Result<NativeFileDragStart, NativeFileDragError> {
         if items.is_empty() {
             return Err(NativeFileDragError::new("No archive files are available to drag.", None::<String>));

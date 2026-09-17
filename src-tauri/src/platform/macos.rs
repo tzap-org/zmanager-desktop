@@ -11,8 +11,8 @@ use tauri::{Builder, Emitter, Manager, Wry};
 
 use super::{
     CapabilityInspector, DefaultHandlerController, DefaultHandlerEntry, DefaultHandlerRequest, DiagnosticLogPolicy, MainWindowConfigurator,
-    NativeCapabilityOperationError, NativeFileDragAdapter, NativeFileDragCandidate, NativeFileDragError, NativeFileDragItem, NativeFileDragStart,
-    NativeFileDragStreamProvider, SecureFileProtector, SystemFileIconProvider,
+    NativeCapabilityOperationError, NativeFileDragAdapter, NativeFileDragCandidate, NativeFileDragError, NativeFileDragItem, NativeFileDragJobContext,
+    NativeFileDragStart, NativeFileDragStreamProvider, SecureFileProtector, SystemFileIconProvider,
     staged_file_drag::{PosixDragPathPolicy, prepare_posix_drag_items},
 };
 use crate::dto::{SystemFileIconDto, SystemFileIconRequestEntry};
@@ -343,16 +343,12 @@ impl NativeFileDragAdapter for MacOsPlatform {
         window: &tauri::WebviewWindow<Wry>,
         items: &[NativeFileDragItem],
         stream_provider: NativeFileDragStreamProvider,
-        registry: &NativeDragSessionRegistry,
-        cancellation: zmanager_core::jobs::CancellationToken,
-        job_id: &str,
-        job_kind: crate::job_dto::JobKindDto,
-        job_registry: &JobRegistry,
+        context: NativeFileDragJobContext<'_>,
     ) -> Result<NativeFileDragStart, NativeFileDragError> {
         if items.is_empty() {
             return Err(NativeFileDragError::invalid_request("No archive files are available to drag."));
         }
-        start_macos_file_promise_drag(window, items, stream_provider, registry, cancellation, job_id, job_kind, job_registry)
+        start_macos_file_promise_drag(window, items, stream_provider, context)
     }
 }
 
@@ -756,14 +752,10 @@ fn start_macos_file_promise_drag(
     window: &tauri::WebviewWindow<Wry>,
     items: &[NativeFileDragItem],
     stream_provider: NativeFileDragStreamProvider,
-    registry: &NativeDragSessionRegistry,
-    cancellation: zmanager_core::jobs::CancellationToken,
-    job_id: &str,
-    job_kind: JobKindDto,
-    job_registry: &JobRegistry,
+    context: NativeFileDragJobContext<'_>,
 ) -> Result<NativeFileDragStart, NativeFileDragError> {
     let descriptors = NativeDragSessionRegistry::descriptors(items)?;
-    let session_id = registry.create_with_job_token(job_id, items, stream_provider, cancellation)?;
+    let session_id = context.registry.create_with_job_token(context.job_id, items, stream_provider, context.cancellation)?;
     let promise_items = descriptors
         .into_iter()
         .map(|descriptor| PromiseDragItemDto {
@@ -776,10 +768,10 @@ fn start_macos_file_promise_drag(
         .map_err(|error| NativeFileDragError::new(format!("Unable to describe macOS file promises: {error}"), None::<String>))?;
     let view = window.ns_view().map_err(|error| NativeFileDragError::new(format!("Unable to access the macOS drag source view: {error}"), None::<String>))?;
     let context = Box::new(PromiseDragContext {
-        registry: registry.clone(),
-        job_registry: job_registry.clone(),
-        job_id: job_id.to_owned(),
-        job_kind,
+        registry: context.registry.clone(),
+        job_registry: context.job_registry.clone(),
+        job_id: context.job_id.to_owned(),
+        job_kind: context.job_kind,
         session_id: session_id.clone(),
         app_handle: window.app_handle().clone(),
     });

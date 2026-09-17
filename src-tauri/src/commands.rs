@@ -1450,23 +1450,27 @@ pub fn start_native_file_drag(
         result.map_err(native_file_drag_error_from_command)
     });
 
-    let start =
-        match crate::platform::start_native_file_drag(&window, &drag_items, stream_provider, &drag_registry, cancellation, &job_id, kind, registry.inner())
-            .map_err(|error| {
-                let mapped = map_native_file_drag_error(error);
-                let _ = diagnostics.record(
-                    "nativeDrag",
-                    "failed",
-                    crate::diagnostics::fields([
-                        ("code", serde_json::Value::String(mapped.code.to_string())),
-                        ("elapsedMs", serde_json::Value::from(u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX))),
-                    ]),
-                );
-                mapped
-            }) {
-            Ok(start) => start,
-            Err(error) => return Err(fail_native_drag_job(&registry, &job_id, native_drag_job_kind(&archive_path), error)),
-        };
+    let start = match crate::platform::start_native_file_drag(
+        &window,
+        &drag_items,
+        stream_provider,
+        crate::platform::NativeFileDragJobContext { registry: &drag_registry, cancellation, job_id: &job_id, job_kind: kind, job_registry: registry.inner() },
+    )
+    .map_err(|error| {
+        let mapped = map_native_file_drag_error(error);
+        let _ = diagnostics.record(
+            "nativeDrag",
+            "failed",
+            crate::diagnostics::fields([
+                ("code", serde_json::Value::String(mapped.code.to_string())),
+                ("elapsedMs", serde_json::Value::from(u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX))),
+            ]),
+        );
+        mapped
+    }) {
+        Ok(start) => start,
+        Err(error) => return Err(fail_native_drag_job(&registry, &job_id, native_drag_job_kind(&archive_path), error)),
+    };
     if let Some(error) = stream_failure.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone() {
         let _ = diagnostics.record(
             "nativeDrag",

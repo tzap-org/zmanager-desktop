@@ -329,6 +329,8 @@ async function installQuickActionTauriStub(
         return 0;
       }
 
+      if (cmd === "register_handoff_coordinator") return "handoff-coordinator-e2e";
+
       if (cmd === "acknowledge_native_event") {
         return undefined;
       }
