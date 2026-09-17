@@ -3,7 +3,7 @@ setlocal enabledelayedexpansion
 
 :: Local builds default to staging so an ordinary build cannot accidentally
 :: generate hosted-account traffic against production. Production remains an
-:: explicit choice: build.bat prod.
+:: explicit choice: build.bat prod. 
 set "BUILD_ENV=%~1"
 if not defined BUILD_ENV set "BUILD_ENV=staging"
 if /I not "%BUILD_ENV%"=="staging" if /I not "%BUILD_ENV%"=="prod" (
