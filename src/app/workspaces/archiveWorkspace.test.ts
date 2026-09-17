@@ -1093,6 +1093,25 @@ describe("archive workspace load state", () => {
     expect(reasonOf(workspace.buildNativeDragRequest({ entryPath: "missing" }))).toBe("noEntryPaths");
   });
 
+  it("preserves the archive tree when dragging an archive-wide select-all", () => {
+    const workspace = createArchiveWorkspace();
+    workspace.loadSucceeded({
+      archivePath: "C:/tmp/project.zip",
+      entries,
+      entryCount: entries.length,
+      totalSize: 72,
+    });
+    workspace.navigateToFolder("docs/guides");
+    workspace.selectAllEntries();
+
+    expect(requestOf(workspace.buildNativeDragRequest({ entryPath: "docs/guides/intro.txt" }))).toEqual({
+      archivePath: "C:/tmp/project.zip",
+      entryPaths: [],
+      selectAll: true,
+      stripComponents: 0,
+    });
+  });
+
   it("copies password input into request output without storing it in snapshots", () => {
     const workspace = createArchiveWorkspace();
     const secret = "dont-store-this-password";

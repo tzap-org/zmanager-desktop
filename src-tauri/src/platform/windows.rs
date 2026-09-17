@@ -717,6 +717,7 @@ mod windows_file_drag {
             let payloads = Arc::new(HashMap::from([
                 ("folder/alpha.txt".to_string(), b"alpha from virtual drag".to_vec()),
                 ("folder/beta.txt".to_string(), b"beta from virtual drag".to_vec()),
+                ("folder/nested/deep/gamma.txt".to_string(), b"gamma from virtual drag".to_vec()),
             ]));
             let provider_payloads = Arc::clone(&payloads);
             let stream_provider: NativeFileDragStreamProvider = Arc::new(move |entry_path, writer| {
@@ -740,6 +741,12 @@ mod windows_file_drag {
                     size: Some(payloads["folder/beta.txt"].len() as u64),
                     modified_unix_seconds: None,
                 },
+                NativeFileDragItem {
+                    entry_path: "folder/nested/deep/gamma.txt".to_string(),
+                    display_path: "folder\\nested\\deep\\gamma.txt".to_string(),
+                    size: Some(payloads["folder/nested/deep/gamma.txt"].len() as u64),
+                    modified_unix_seconds: None,
+                },
             ];
 
             let _ole = OleApartment::initialize().map_err(|error| error.message)?;
@@ -761,6 +768,10 @@ mod windows_file_drag {
 
             wait_for_file_contents(&drop_target.join("folder").join("alpha.txt"), payloads["folder/alpha.txt"].as_slice())?;
             wait_for_file_contents(&drop_target.join("folder").join("beta.txt"), payloads["folder/beta.txt"].as_slice())?;
+            wait_for_file_contents(
+                &drop_target.join("folder").join("nested").join("deep").join("gamma.txt"),
+                payloads["folder/nested/deep/gamma.txt"].as_slice(),
+            )?;
 
             Ok(())
         }

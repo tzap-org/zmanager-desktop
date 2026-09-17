@@ -2483,6 +2483,26 @@ mod tests {
     }
 
     #[test]
+    fn native_drag_items_expand_archive_wide_selection_with_nested_paths() {
+        let entries = vec![
+            browser_entry("docs/a.txt", zmanager_core::archive_browser::BrowserEntryKind::File),
+            browser_entry("docs/nested/b.txt", zmanager_core::archive_browser::BrowserEntryKind::File),
+            browser_entry("other.txt", zmanager_core::archive_browser::BrowserEntryKind::File),
+        ];
+
+        let items = native_drag_items_from_listing(&entries, &[], 0, true, &[]).expect("archive-wide drag should include every file");
+
+        assert_eq!(
+            items.iter().map(|item| item.display_path.as_str()).collect::<Vec<_>>(),
+            vec![
+                format!("docs{}a.txt", std::path::MAIN_SEPARATOR),
+                format!("docs{}nested{}b.txt", std::path::MAIN_SEPARATOR, std::path::MAIN_SEPARATOR),
+                "other.txt".to_string(),
+            ],
+        );
+    }
+
+    #[test]
     fn native_drag_items_reject_duplicate_display_paths_after_stripping() {
         let entries = vec![
             browser_entry("one/readme.txt", zmanager_core::archive_browser::BrowserEntryKind::File),

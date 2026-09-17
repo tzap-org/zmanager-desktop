@@ -860,7 +860,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
       }
 
       const allSelected = state.view.selection.allSelected;
-      const entryPaths = nativeDragEntryPaths(state, input.entryPath);
+      const entryPaths = allSelected ? [] : nativeDragEntryPaths(state, input.entryPath);
       if (!allSelected && entryPaths.length === 0) {
         return { ok: false, reason: "noEntryPaths" };
       }
@@ -876,12 +876,14 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
               ? { excludedEntryPaths: [...state.view.selection.excludedPaths] }
               : {}),
           } : {}),
-          stripComponents: nativeDragStripComponentsPolicy({
-            entryPaths,
-            currentFolder: state.view.currentFolder,
-            flatView: state.view.flatView,
-            searchQuery: state.view.searchQuery,
-          }),
+          stripComponents: allSelected
+            ? 0
+            : nativeDragStripComponentsPolicy({
+              entryPaths,
+              currentFolder: state.view.currentFolder,
+              flatView: state.view.flatView,
+              searchQuery: state.view.searchQuery,
+            }),
           ...(input.password ? { password: input.password } : {}),
         },
       };
