@@ -1110,6 +1110,15 @@ describe("archive workspace load state", () => {
       selectAll: true,
       stripComponents: 0,
     });
+
+    workspace.setPathSelected("docs", false);
+    expect(requestOf(workspace.buildNativeDragRequest({ entryPath: "src/main.rs" }))).toEqual({
+      archivePath: "C:/tmp/project.zip",
+      entryPaths: [],
+      selectAll: true,
+      excludedEntryPaths: ["docs"],
+      stripComponents: 0,
+    });
   });
 
   it("copies password input into request output without storing it in snapshots", () => {
