@@ -239,7 +239,7 @@ export function createArchiveLoadController(options: ArchiveLoadControllerOption
           query: null,
         };
         await acceptFolder(preservedFolder, requestGeneration);
-        if ((terminal.finalEntryCount ?? 0) === 0) {
+        if ((terminal.finalEntryCount ?? 0) === 0 && options.workspace.getSnapshot().entries.length === 0) {
           options.renderPage(options.workspace.setBrowseState("empty"));
         }
         return;

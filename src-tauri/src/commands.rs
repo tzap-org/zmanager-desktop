@@ -1211,7 +1211,11 @@ pub fn start_native_file_drag(
     if !request.select_all && !excluded_entry_paths.is_empty() {
         return Err(CommandErrorDto::invalid_request("entry exclusions require select-all drag"));
     }
-    let password = request.password.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty());
+    let password = request
+        .password
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .or_else(|| archive_index_registry.password_for_archive(&archive_path));
 
     let (drag_items, preparation_source) = if request.select_all {
         match archive_index_registry.drag_all_entries(&archive_path, &excluded_entry_paths)? {

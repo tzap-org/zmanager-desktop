@@ -99,6 +99,24 @@ describe("archive load controller", () => {
     expect(harness.workspace.getSnapshot().entryCount).toBe(1);
   });
 
+  it("keeps an on-demand root page selectable when indexing reports empty", async () => {
+    const harness = createHarness();
+    harness.wait.mockResolvedValueOnce(terminal({ status: "empty", discoveredEntries: 0, finalEntryCount: 0, finalTotalBytes: 0 }));
+    harness.get.mockResolvedValueOnce({
+      sessionId: "archive-1",
+      revision: "2",
+      parentPath: "",
+      entries: [{ path: "src", kind: "directory" }],
+      complete: true,
+      childCount: 1,
+    });
+
+    await harness.controller.loadArchive({ archivePath: "C:/archives/demo.tzap" });
+
+    expect(harness.workspace.getSnapshot().browseState).toBe("loaded");
+    expect(harness.workspace.getSnapshot().entries.map((entry) => entry.path)).toEqual(["src"]);
+  });
+
   it("renders current-folder rows from an indexing revision without waiting for the whole archive", async () => {
     let resolveTerminal!: (snapshot: ArchiveIndexSnapshotDto) => void;
     const terminalWait = new Promise<ArchiveIndexSnapshotDto>((resolve) => { resolveTerminal = resolve; });

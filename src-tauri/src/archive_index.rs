@@ -363,6 +363,7 @@ impl ArchiveIndexRegistry {
 
     pub fn drag_entries(&self, archive_path: &str, entry_paths: &[String]) -> Result<Option<Vec<ArchiveEntryDto>>, CommandErrorDto> {
         let normalized_archive_path = archive_path.trim();
+        let on_demand_archive = archive_browser::supports_on_demand_directories(normalized_archive_path);
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         let Some(record) = state
             .sessions
@@ -382,6 +383,14 @@ impl ArchiveIndexRegistry {
         for requested in entry_paths {
             let requested = normalize_archive_path(requested);
             let direct = index.entries.get(&requested);
+            if on_demand_archive && !direct.is_some_and(|entry| entry.kind == ArchiveEntryKindDto::File) {
+                // TZAP sessions intentionally index only directories that have
+                // been visited. A cached folder result is therefore only a
+                // partial answer; let the drag command relist the archive so
+                // nested files are included even before the user opens that
+                // folder.
+                return Ok(None);
+            }
             if let Some(entry) = direct
                 && entry.kind == ArchiveEntryKindDto::File
             {
@@ -418,6 +427,12 @@ impl ArchiveIndexRegistry {
 
     pub fn drag_all_entries(&self, archive_path: &str, excluded_entry_paths: &[String]) -> Result<Option<Vec<ArchiveEntryDto>>, CommandErrorDto> {
         let normalized_archive_path = archive_path.trim();
+        if archive_browser::supports_on_demand_directories(normalized_archive_path) {
+            // On-demand sessions contain only the directories the user has
+            // visited. Archive-wide drag must always enumerate the complete
+            // archive instead of returning a partial cached result.
+            return Ok(None);
+        }
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         let Some(record) = state
             .sessions
@@ -1254,7 +1269,7 @@ mod tests {
         let stale_snapshot = Arc::new(ArchiveIndexSnapshotDto {
             revision: "2".to_string(),
             session_id: "archive-1".to_string(),
-            archive_path: "C:/archives/demo.tzap".to_string(),
+            archive_path: "C:/archives/demo.zip".to_string(),
             status: ArchiveIndexStatusDto::Ready,
             discovered_entries: stale_build.entry_count,
             discovered_bytes: stale_build.total_bytes,
@@ -1267,7 +1282,7 @@ mod tests {
         let snapshot = Arc::new(ArchiveIndexSnapshotDto {
             revision: "2".to_string(),
             session_id: "archive-2".to_string(),
-            archive_path: "C:/archives/demo.tzap".to_string(),
+            archive_path: "C:/archives/demo.zip".to_string(),
             status: ArchiveIndexStatusDto::Ready,
             discovered_entries: build.entry_count,
             discovered_bytes: build.total_bytes,
@@ -1293,16 +1308,50 @@ mod tests {
         );
 
         let files = registry
-            .drag_entries("C:/archives/demo.tzap", &["docs".to_string(), "other.txt".to_string()])
+            .drag_entries("C:/archives/demo.zip", &["docs".to_string(), "other.txt".to_string()])
             .expect("cached drag selection")
             .expect("ready session should answer");
         assert_eq!(files.iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>(), ["docs/a.txt", "docs/nested/b.txt", "other.txt"]);
 
         let all_files = registry
-            .drag_all_entries("C:/archives/demo.tzap", &["docs/nested".to_string()])
+            .drag_all_entries("C:/archives/demo.zip", &["docs/nested".to_string()])
             .expect("cached archive-wide drag selection")
             .expect("ready session should answer archive-wide selection");
         assert_eq!(all_files.iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>(), ["docs/a.txt", "other.txt"]);
+    }
+
+    #[test]
+    fn on_demand_archive_drag_falls_back_before_expanding_partial_index() {
+        let build = build_index(BrowserListing {
+            entries: vec![
+                entry("docs/a.txt", BrowserEntryKind::File),
+                entry("docs/nested/b.txt", BrowserEntryKind::File),
+                entry("other.txt", BrowserEntryKind::File),
+            ],
+        })
+        .expect("index should build");
+        let registry = ArchiveIndexRegistry::new();
+        let snapshot = Arc::new(ArchiveIndexSnapshotDto {
+            revision: "2".to_string(),
+            session_id: "archive-1".to_string(),
+            archive_path: "C:/archives/demo.tzap".to_string(),
+            status: ArchiveIndexStatusDto::Ready,
+            discovered_entries: build.entry_count,
+            discovered_bytes: build.total_bytes,
+            final_entry_count: Some(build.entry_count),
+            final_total_bytes: build.total_bytes,
+            latest_failure: None,
+            format: Some(crate::dto::ArchiveFormatKindDto::Tzap),
+        });
+        let (sender, _) = watch::channel(snapshot.clone());
+        registry.state.lock().expect("registry lock").sessions.insert(
+            "archive-1".to_string(),
+            SessionRecord { password: None, snapshot, sender, index: Arc::new(Mutex::new(build.index)), cancelled: Arc::new(AtomicBool::new(false)) },
+        );
+
+        assert!(registry.drag_entries("C:/archives/demo.tzap", &["docs".to_string()]).expect("folder drag lookup should succeed").is_none());
+        assert!(registry.drag_all_entries("C:/archives/demo.tzap", &[]).expect("archive-wide drag lookup should succeed").is_none());
+        assert!(registry.drag_entries("C:/archives/demo.tzap", &["other.txt".to_string()]).expect("known file drag lookup should succeed").is_some());
     }
 
     #[test]
