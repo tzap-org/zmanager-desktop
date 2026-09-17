@@ -69,6 +69,10 @@ test("Windows build entry points keep local E2E on staging and production explic
   assert.match(browserObserver, /baselineUrls/u);
   assert.match(browserObserver, /ObservedAtUnixMs/u);
   assert.match(browserObserver, /production_host_observed/u);
+  assert.ok(
+    browserObserver.indexOf("foreach ($value in Get-BrowserAddressValues)") < browserObserver.indexOf("Set-Content -LiteralPath $ReadyFile"),
+    "the Windows browser observer must establish its baseline before signalling readiness",
+  );
   assert.match(protocolProbe, /tzap\\shell\\open\\command/u);
   assert.match(onlineSpec, /countInstalledApplicationProcesses/u);
   assert.match(onlineSpec, /openRegisteredProtocol\(url\)/u);

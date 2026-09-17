@@ -104,15 +104,16 @@ function Get-BrowserAddressValues {
     return $values
 }
 
-# Signal readiness before the initial UI Automation scan. Enumerating a
-# Chromium accessibility tree can take several seconds on a fresh hosted
-# runner, and the caller must be able to start the navigation while this
-# process finishes establishing its baseline and event handlers.
+# Establish the baseline and register address-bar event handlers before
+# allowing the caller to dispatch the navigation. If readiness is signalled
+# first, a fast browser can finish its navigation while this scan is still
+# running; the new URL can then be mistaken for baseline state or its address
+# bar can miss the event handler entirely.
+foreach ($value in Get-BrowserAddressValues) { [void]$baselineUrls.Add($value) }
+
 if (-not [string]::IsNullOrWhiteSpace($ReadyFile)) {
     Set-Content -LiteralPath $ReadyFile -Value "ready" -NoNewline
 }
-
-foreach ($value in Get-BrowserAddressValues) { [void]$baselineUrls.Add($value) }
 
 function Write-Result {
     param(
