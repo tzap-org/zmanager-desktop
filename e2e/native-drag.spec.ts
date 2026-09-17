@@ -87,9 +87,12 @@ test("dragging a selected synthetic folder row starts native drag for the folder
   const [call] = await waitForNativeDragCalls(page);
   expect(call.args).toEqual({
     request: {
-      archivePath: archiveFixture.archivePath,
-      entryPaths: ["folder"],
-      stripComponents: 0,
+      operationId: "native-drag-1",
+      request: {
+        archivePath: archiveFixture.archivePath,
+        entryPaths: ["folder"],
+        stripComponents: 0,
+      },
     },
   });
 });
@@ -180,9 +183,12 @@ test("dragging one selected row starts native drag-out for the selected set", as
   const [call] = await waitForNativeDragCalls(page);
   expect(call.args).toEqual({
     request: {
-      archivePath: archiveFixture.archivePath,
-      entryPaths: ["root.txt", "folder"],
-      stripComponents: 0,
+      operationId: "native-drag-1",
+      request: {
+        archivePath: archiveFixture.archivePath,
+        entryPaths: ["root.txt", "folder"],
+        stripComponents: 0,
+      },
     },
   });
 });
@@ -199,9 +205,12 @@ test("dragging a search result keeps full archive path structure", async ({ page
   const [call] = await waitForNativeDragCalls(page);
   expect(call.args).toEqual({
     request: {
-      archivePath: archiveFixture.archivePath,
-      entryPaths: ["root.txt"],
-      stripComponents: 0,
+      operationId: "native-drag-1",
+      request: {
+        archivePath: archiveFixture.archivePath,
+        entryPaths: ["root.txt"],
+        stripComponents: 0,
+      },
     },
   });
 });
@@ -308,9 +317,12 @@ test("dragging a file row starts native drag for the file and suppresses browser
   const [call] = await waitForNativeDragCalls(page);
   expect(call.args).toEqual({
     request: {
-      archivePath: archiveFixture.archivePath,
-      entryPaths: ["root.txt"],
-      stripComponents: 0,
+      operationId: "native-drag-1",
+      request: {
+        archivePath: archiveFixture.archivePath,
+        entryPaths: ["root.txt"],
+        stripComponents: 0,
+      },
     },
   });
   await expect(rootRow).toHaveAttribute("aria-selected", "true");
