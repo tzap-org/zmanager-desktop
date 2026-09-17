@@ -387,24 +387,34 @@ export async function openTaskWindowForJob(started: StartedTaskJob): Promise<str
     // label fails on Linux WebKitGTK and also leaves the original window
     // behind when the helper exits early.
     if (!(await browser.tauri.listWindows()).includes(label)) {
-      await browser.tauri.execute(
-        async ({ core }, windowLabel: string, windowUrl: string) => core.invoke("plugin:webview|create_webview_window", {
-          options: {
-            label: windowLabel,
-            url: windowUrl,
-            title: "ZManager test task",
-            width: 620,
-            height: 460,
-            minWidth: 520,
-            minHeight: 380,
-            center: true,
-            resizable: true,
-            visible: true,
-          },
-        }),
-        label,
-        url,
-      );
+      try {
+        await browser.tauri.execute(
+          async ({ core }, windowLabel: string, windowUrl: string) => core.invoke("plugin:webview|create_webview_window", {
+            options: {
+              label: windowLabel,
+              url: windowUrl,
+              title: "ZManager test task",
+              width: 620,
+              height: 460,
+              minWidth: 520,
+              minHeight: 380,
+              center: true,
+              resizable: true,
+              visible: true,
+            },
+          }),
+          label,
+          url,
+        );
+      } catch (error) {
+        // The accepted-job feed can create the window after the list check
+        // but before this explicit creation. In that race, the duplicate
+        // label means the production-created window is the one to reuse.
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.includes("already exists") || !message.includes(label)) {
+          throw error;
+        }
+      }
     }
     await browser.waitUntil(
       async () => (await browser.tauri.listWindows()).includes(label),
