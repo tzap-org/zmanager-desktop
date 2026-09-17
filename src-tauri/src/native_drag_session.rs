@@ -4,41 +4,112 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write as _};
 use std::path::{Component, Path};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use unicode_normalization::UnicodeNormalization;
 
+use crate::dto::NativeFileDragRequest;
+use crate::job_dto::JobKindDto;
 use crate::platform::{NativeFileDragError, NativeFileDragItem, NativeFileDragStreamProvider};
+use zmanager_core::jobs::CancellationToken;
 
 const MAX_SESSIONS: usize = 16;
 const SESSION_TIMEOUT: Duration = Duration::from_secs(15 * 60);
+const OPERATION_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Clone)]
 pub struct NativeDragSessionRegistry(Arc<Mutex<RegistryState>>);
 
-struct RegistryState {
+#[derive(Clone)]
+pub struct NativeDragOperationRegistry(Arc<Mutex<OperationRegistryState>>);
+
+struct OperationRegistryState {
     next_id: u64,
-    sessions: HashMap<String, DragSession>,
-    prepared: HashMap<String, PreparedDrag>,
-    shutdown: bool,
+    operations: HashMap<String, NativeDragOperation>,
 }
 
-pub struct PreparedDrag {
+#[derive(Clone)]
+pub struct NativeDragOperation {
     pub job_id: String,
-    pub items: Vec<NativeFileDragItem>,
-    pub stream_provider: NativeFileDragStreamProvider,
+    pub kind: JobKindDto,
+    pub request: NativeDragOperationRequest,
     created: Instant,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NativeDragOperationRequest {
+    pub archive_path: String,
+    pub entry_paths: Vec<String>,
+    pub select_all: bool,
+    pub excluded_entry_paths: Vec<String>,
+    pub strip_components: usize,
+}
+
+impl From<&NativeFileDragRequest> for NativeDragOperationRequest {
+    fn from(request: &NativeFileDragRequest) -> Self {
+        Self {
+            archive_path: request.archive_path.clone(),
+            entry_paths: request.entry_paths.clone(),
+            select_all: request.select_all,
+            excluded_entry_paths: request.excluded_entry_paths.clone(),
+            strip_components: request.strip_components,
+        }
+    }
+}
+
+impl NativeDragOperationRegistry {
+    pub fn new() -> Self {
+        Self(Arc::new(Mutex::new(OperationRegistryState { next_id: 0, operations: HashMap::new() })))
+    }
+
+    pub fn accept(&self, job_id: String, kind: JobKindDto, request: &NativeFileDragRequest) -> Result<String, NativeFileDragError> {
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        if state.operations.len() >= MAX_SESSIONS {
+            return Err(NativeFileDragError::new("Native drag operation capacity is unavailable", None::<String>));
+        }
+        state.next_id = state.next_id.checked_add(1).ok_or_else(|| NativeFileDragError::new("Native drag operation ID space is exhausted", None::<String>))?;
+        let id = format!("native-drag-{}-{}", std::process::id(), state.next_id);
+        state.operations.insert(id.clone(), NativeDragOperation { job_id, kind, request: request.into(), created: Instant::now() });
+        Ok(id)
+    }
+
+    pub fn take(&self, operation_id: &str, request: &NativeFileDragRequest) -> Result<NativeDragOperation, NativeFileDragError> {
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        let Some(operation) = state.operations.get(operation_id.trim()).cloned() else {
+            return Err(NativeFileDragError::invalid_request("Native drag operation is unavailable or expired"));
+        };
+        if operation.request != NativeDragOperationRequest::from(request) {
+            return Err(NativeFileDragError::invalid_request("Native drag request does not match its accepted operation"));
+        }
+        state.operations.remove(operation_id.trim());
+        Ok(operation)
+    }
+
+    pub fn reap_expired(&self) -> Vec<NativeDragOperation> {
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        let expired =
+            state.operations.iter().filter(|(_, operation)| operation.created.elapsed() > OPERATION_TIMEOUT).map(|(id, _)| id.clone()).collect::<Vec<_>>();
+        expired.into_iter().filter_map(|id| state.operations.remove(&id)).collect()
+    }
+}
+
+struct RegistryState {
+    next_id: u64,
+    sessions: HashMap<String, DragSession>,
+    shutdown: bool,
+}
+
 struct DragSession {
+    job_id: String,
     promises: HashMap<String, Vec<NativeFileDragItem>>,
     stream_provider: NativeFileDragStreamProvider,
     created: Instant,
     completed: HashSet<String>,
     active: HashSet<String>,
-    cancelled: Arc<AtomicBool>,
+    written_entries: usize,
+    written_bytes: u64,
+    cancellation: CancellationToken,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -50,44 +121,35 @@ pub struct NativeFilePromiseDescriptor {
 
 impl NativeDragSessionRegistry {
     pub fn new() -> Self {
-        Self(Arc::new(Mutex::new(RegistryState {
-            next_id: 1,
-            sessions: HashMap::new(),
-            prepared: HashMap::new(),
-            shutdown: false,
-        })))
+        Self(Arc::new(Mutex::new(RegistryState { next_id: 1, sessions: HashMap::new(), shutdown: false })))
     }
 
-    pub fn prepare(
+    #[cfg(test)]
+    pub fn create(&self, items: &[NativeFileDragItem], stream_provider: NativeFileDragStreamProvider) -> Result<String, NativeFileDragError> {
+        self.create_with_token(items, stream_provider, CancellationToken::new())
+    }
+
+    #[cfg(test)]
+    pub fn create_with_token(
         &self,
-        job_id: String,
-        items: Vec<NativeFileDragItem>,
+        items: &[NativeFileDragItem],
         stream_provider: NativeFileDragStreamProvider,
+        cancellation: CancellationToken,
+    ) -> Result<String, NativeFileDragError> {
+        self.create_with_job_token("test-native-drag", items, stream_provider, cancellation)
+    }
+
+    pub fn create_with_job_token(
+        &self,
+        job_id: &str,
+        items: &[NativeFileDragItem],
+        stream_provider: NativeFileDragStreamProvider,
+        cancellation: CancellationToken,
     ) -> Result<String, NativeFileDragError> {
         if items.is_empty() {
             return Err(NativeFileDragError::invalid_request("Native drag has no items"));
         }
         let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        state.retain_live();
-        if state.shutdown || state.prepared.len() >= MAX_SESSIONS {
-            return Err(NativeFileDragError::new("Native drag capacity is unavailable", None::<String>));
-        }
-        let id = format!("prepared-drag-{}-{}", std::process::id(), state.next_id);
-        state.next_id = state.next_id.saturating_add(1);
-        state.prepared.insert(id.clone(), PreparedDrag { job_id, items, stream_provider, created: Instant::now() });
-        Ok(id)
-    }
-
-    pub fn take_prepared(&self, id: &str) -> Option<PreparedDrag> {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).prepared.remove(id)
-    }
-
-    pub fn create(&self, items: &[NativeFileDragItem], stream_provider: NativeFileDragStreamProvider) -> Result<String, NativeFileDragError> {
-        if items.is_empty() {
-            return Err(NativeFileDragError::invalid_request("Native drag has no items"));
-        }
-        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        state.retain_live();
         if state.shutdown || state.sessions.len() >= MAX_SESSIONS {
             return Err(NativeFileDragError::new("Native drag session capacity is unavailable", None::<String>));
         }
@@ -97,15 +159,33 @@ impl NativeDragSessionRegistry {
         state.sessions.insert(
             id.clone(),
             DragSession {
+                job_id: job_id.to_owned(),
                 promises,
                 stream_provider,
                 created: Instant::now(),
                 completed: HashSet::new(),
                 active: HashSet::new(),
-                cancelled: Arc::new(AtomicBool::new(false)),
+                written_entries: 0,
+                written_bytes: 0,
+                cancellation,
             },
         );
         Ok(id)
+    }
+
+    pub fn reap_expired(&self) -> Vec<String> {
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        let mut expired = Vec::new();
+        state.sessions.retain(|_, session| {
+            if session.created.elapsed() > SESSION_TIMEOUT {
+                session.cancellation.cancel();
+                expired.push(session.job_id.clone());
+                false
+            } else {
+                true
+            }
+        });
+        expired
     }
 
     pub fn descriptors(items: &[NativeFileDragItem]) -> Result<Vec<NativeFilePromiseDescriptor>, NativeFileDragError> {
@@ -124,7 +204,7 @@ impl NativeDragSessionRegistry {
 
     pub fn write_promise(&self, session_id: &str, promise_path: &str, destination: &Path) -> Result<u64, NativeFileDragError> {
         validate_destination(destination)?;
-        let (members, provider, cancelled) = {
+        let (members, provider, cancellation) = {
             let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
             let session = state.sessions.get_mut(session_id).ok_or_else(|| NativeFileDragError::invalid_request("Native drag session expired"))?;
             let Some(members) = session.promises.get(promise_path) else {
@@ -134,14 +214,14 @@ impl NativeDragSessionRegistry {
                 return Err(NativeFileDragError::invalid_request("Native drag item is already being written or was completed"));
             }
             session.active.insert(promise_path.to_string());
-            (members.clone(), Arc::clone(&session.stream_provider), Arc::clone(&session.cancelled))
+            (members.clone(), Arc::clone(&session.stream_provider), session.cancellation.clone())
         };
 
         let is_directory = members.iter().any(|member| member.display_path != promise_path);
         let result = if is_directory {
-            write_directory_promise(destination, promise_path, &members, &provider, &cancelled)
+            write_directory_promise(destination, promise_path, &members, &provider, &cancellation)
         } else {
-            write_file_promise(destination, &members[0].entry_path, &provider, &cancelled)
+            write_file_promise(destination, &members[0].entry_path, &provider, &cancellation)
         };
 
         let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -149,9 +229,8 @@ impl NativeDragSessionRegistry {
             session.active.remove(promise_path);
             if result.is_ok() {
                 session.completed.insert(promise_path.to_string());
-                if session.completed.len() >= session.promises.len() {
-                    state.sessions.remove(session_id);
-                }
+                session.written_entries = session.written_entries.saturating_add(members.len());
+                session.written_bytes = session.written_bytes.saturating_add(result.as_ref().copied().unwrap_or_default());
             }
         }
         result
@@ -159,18 +238,27 @@ impl NativeDragSessionRegistry {
 
     pub fn cancel(&self, session_id: &str) {
         if let Some(session) = self.0.lock().unwrap_or_else(|e| e.into_inner()).sessions.remove(session_id) {
-            session.cancelled.store(true, Ordering::Release);
+            session.cancellation.cancel();
         }
+    }
+
+    pub fn take_completed_summary(&self, session_id: &str) -> Option<(usize, u64)> {
+        let mut state = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        let session = state.sessions.get(session_id)?;
+        if session.completed.len() < session.promises.len() || !session.active.is_empty() {
+            return None;
+        }
+        let session = state.sessions.remove(session_id)?;
+        Some((session.written_entries, session.written_bytes))
     }
 
     pub fn shutdown(&self) {
         let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
         state.shutdown = true;
         for session in state.sessions.values() {
-            session.cancelled.store(true, Ordering::Release);
+            session.cancellation.cancel();
         }
         state.sessions.clear();
-        state.prepared.clear();
     }
 
     #[cfg(test)]
@@ -235,7 +323,7 @@ fn write_directory_promise(
     promise_path: &str,
     members: &[NativeFileDragItem],
     provider: &NativeFileDragStreamProvider,
-    cancelled: &Arc<AtomicBool>,
+    cancellation: &CancellationToken,
 ) -> Result<u64, NativeFileDragError> {
     fs::create_dir(destination).map_err(io_drag_error)?;
     let result = (|| {
@@ -253,7 +341,7 @@ fn write_directory_promise(
             {
                 return Err(NativeFileDragError::invalid_request("Invalid promised directory member"));
             }
-            total = total.saturating_add(write_file_promise(&destination.join(relative_path), &member.entry_path, provider, cancelled)?);
+            total = total.saturating_add(write_file_promise(&destination.join(relative_path), &member.entry_path, provider, cancellation)?);
         }
         Ok(total)
     })();
@@ -267,19 +355,19 @@ fn write_file_promise(
     destination: &Path,
     entry_path: &str,
     provider: &NativeFileDragStreamProvider,
-    cancelled: &Arc<AtomicBool>,
+    cancellation: &CancellationToken,
 ) -> Result<u64, NativeFileDragError> {
-    if cancelled.load(Ordering::Acquire) {
+    if cancellation.is_cancelled() {
         return Err(cancelled_drag_error());
     }
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).map_err(io_drag_error)?;
     }
     let mut file = OpenOptions::new().write(true).create_new(true).open(destination).map_err(io_drag_error)?;
-    let mut writer = CancellationWriter { inner: &mut file, cancelled };
+    let mut writer = CancellationWriter { inner: &mut file, cancellation };
     let streamed = provider(entry_path, &mut writer);
     let result = streamed.and_then(|written| {
-        if cancelled.load(Ordering::Acquire) {
+        if cancellation.is_cancelled() {
             return Err(cancelled_drag_error());
         }
         file.flush().map_err(io_drag_error)?;
@@ -293,12 +381,12 @@ fn write_file_promise(
 
 struct CancellationWriter<'a> {
     inner: &'a mut fs::File,
-    cancelled: &'a AtomicBool,
+    cancellation: &'a CancellationToken,
 }
 
 impl io::Write for CancellationWriter<'_> {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        if self.cancelled.load(Ordering::Acquire) {
+        if self.cancellation.is_cancelled() {
             return Err(io::Error::new(io::ErrorKind::ConnectionAborted, "native drag cancelled"));
         }
         self.inner.write(buffer)
@@ -311,19 +399,6 @@ impl io::Write for CancellationWriter<'_> {
 
 fn cancelled_drag_error() -> NativeFileDragError {
     NativeFileDragError::new("Native drag was cancelled", None::<String>)
-}
-
-impl RegistryState {
-    fn retain_live(&mut self) {
-        self.sessions.retain(|_, session| {
-            let live = session.created.elapsed() <= SESSION_TIMEOUT;
-            if !live {
-                session.cancelled.store(true, Ordering::Release);
-            }
-            live
-        });
-        self.prepared.retain(|_, prepared| prepared.created.elapsed() <= SESSION_TIMEOUT);
-    }
 }
 
 fn validate_destination(path: &Path) -> Result<(), NativeFileDragError> {
@@ -365,6 +440,7 @@ mod tests {
         assert_eq!(registry.write_promise(&id, "demo.txt", &destination).unwrap(), 7);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
         assert_eq!(fs::read(&destination).unwrap(), b"payload");
+        assert_eq!(registry.take_completed_summary(&id), Some((1, 7)));
         assert_eq!(registry.count(), 0);
         let _ = fs::remove_dir_all(root);
     }
@@ -424,6 +500,7 @@ mod tests {
         assert_eq!(fs::read(root.join("a.txt")).unwrap(), b"docs/a.txt");
         assert_eq!(fs::read(root.join("nested/b.txt")).unwrap(), b"docs/nested/b.txt");
         assert_eq!(calls.lock().unwrap().len(), 2);
+        assert_eq!(registry.take_completed_summary(&id), Some((2, 27)));
         assert_eq!(registry.count(), 0);
         let _ = fs::remove_dir_all(root);
     }
@@ -478,6 +555,7 @@ mod tests {
         assert!(second.join().unwrap().is_ok());
         assert_eq!(fs::read(root.join("one.txt")).unwrap(), b"one.txt");
         assert_eq!(fs::read(root.join("two.txt")).unwrap(), b"two.txt");
+        assert_eq!(registry.take_completed_summary(&id), Some((2, 14)));
         assert_eq!(registry.count(), 0);
         let _ = fs::remove_dir_all(root);
     }

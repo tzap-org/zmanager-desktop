@@ -140,6 +140,10 @@ impl NativeFileDragAdapter for LinuxPlatform {
         items: &[NativeFileDragItem],
         stream_provider: NativeFileDragStreamProvider,
         _registry: &crate::native_drag_session::NativeDragSessionRegistry,
+        _cancellation: zmanager_core::jobs::CancellationToken,
+        _job_id: &str,
+        _job_kind: crate::job_dto::JobKindDto,
+        _job_registry: &crate::job_registry::JobRegistry,
     ) -> Result<NativeFileDragStart, NativeFileDragError> {
         if items.is_empty() {
             return Err(NativeFileDragError::new("No archive files are available to drag.", None::<String>));

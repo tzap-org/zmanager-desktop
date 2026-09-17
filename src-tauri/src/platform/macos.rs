@@ -16,6 +16,8 @@ use super::{
     staged_file_drag::{PosixDragPathPolicy, prepare_posix_drag_items},
 };
 use crate::dto::{SystemFileIconDto, SystemFileIconRequestEntry};
+use crate::job_dto::{JobEventDto, JobKindDto, JobTerminalSummaryDto};
+use crate::job_registry::JobRegistry;
 use crate::native_drag_session::NativeDragSessionRegistry;
 
 pub struct MacOsPlatform;
@@ -342,11 +344,15 @@ impl NativeFileDragAdapter for MacOsPlatform {
         items: &[NativeFileDragItem],
         stream_provider: NativeFileDragStreamProvider,
         registry: &NativeDragSessionRegistry,
+        cancellation: zmanager_core::jobs::CancellationToken,
+        job_id: &str,
+        job_kind: crate::job_dto::JobKindDto,
+        job_registry: &JobRegistry,
     ) -> Result<NativeFileDragStart, NativeFileDragError> {
         if items.is_empty() {
             return Err(NativeFileDragError::invalid_request("No archive files are available to drag."));
         }
-        start_macos_file_promise_drag(window, items, stream_provider, registry)
+        start_macos_file_promise_drag(window, items, stream_provider, registry, cancellation, job_id, job_kind, job_registry)
     }
 }
 
@@ -673,6 +679,9 @@ struct PromiseDragOutcomeEvent {
 
 struct PromiseDragContext {
     registry: NativeDragSessionRegistry,
+    job_registry: JobRegistry,
+    job_id: String,
+    job_kind: JobKindDto,
     session_id: String,
     app_handle: tauri::AppHandle<Wry>,
 }
@@ -714,6 +723,22 @@ extern "C" fn promise_outcome_callback(outcome: i32, context: *mut c_void) {
     let outcome = if outcome == 0 { "dropped" } else { "cancelled" };
     if outcome == "cancelled" {
         context.registry.cancel(&context.session_id);
+        context.job_registry.emit_direct_event(&context.job_id, JobEventDto::cancelled(Some(context.job_kind), "Native drag was cancelled."));
+    } else if let Some((written_entries, written_bytes)) = context.registry.take_completed_summary(&context.session_id) {
+        let _ = context.job_registry.commit_completed(
+            &context.job_id,
+            context.job_kind,
+            JobTerminalSummaryDto { written_entries, skipped_entries: None, written_bytes, warnings: Vec::new() },
+        );
+    } else {
+        context.job_registry.emit_direct_event(
+            &context.job_id,
+            JobEventDto::failed_from_command_error(
+                context.job_kind,
+                crate::error::CommandErrorDto::operation_failed("Finder reported a drop before all promised files were written."),
+            ),
+        );
+        context.registry.cancel(&context.session_id);
     }
     let _ = context.app_handle.emit("native-file-drag-outcome", PromiseDragOutcomeEvent { session_id: context.session_id.clone(), outcome });
 }
@@ -724,6 +749,7 @@ extern "C" fn promise_release_callback(context: *mut c_void) {
     }
     let context = unsafe { Box::from_raw(context.cast::<PromiseDragContext>()) };
     context.registry.cancel(&context.session_id);
+    context.job_registry.emit_direct_event(&context.job_id, JobEventDto::cancelled(Some(context.job_kind), "Native drag was released before completion."));
 }
 
 fn start_macos_file_promise_drag(
@@ -731,9 +757,13 @@ fn start_macos_file_promise_drag(
     items: &[NativeFileDragItem],
     stream_provider: NativeFileDragStreamProvider,
     registry: &NativeDragSessionRegistry,
+    cancellation: zmanager_core::jobs::CancellationToken,
+    job_id: &str,
+    job_kind: JobKindDto,
+    job_registry: &JobRegistry,
 ) -> Result<NativeFileDragStart, NativeFileDragError> {
     let descriptors = NativeDragSessionRegistry::descriptors(items)?;
-    let session_id = registry.create(items, stream_provider)?;
+    let session_id = registry.create_with_job_token(job_id, items, stream_provider, cancellation)?;
     let promise_items = descriptors
         .into_iter()
         .map(|descriptor| PromiseDragItemDto {
@@ -745,7 +775,14 @@ fn start_macos_file_promise_drag(
     let item_json = serde_json::to_vec(&promise_items)
         .map_err(|error| NativeFileDragError::new(format!("Unable to describe macOS file promises: {error}"), None::<String>))?;
     let view = window.ns_view().map_err(|error| NativeFileDragError::new(format!("Unable to access the macOS drag source view: {error}"), None::<String>))?;
-    let context = Box::new(PromiseDragContext { registry: registry.clone(), session_id: session_id.clone(), app_handle: window.app_handle().clone() });
+    let context = Box::new(PromiseDragContext {
+        registry: registry.clone(),
+        job_registry: job_registry.clone(),
+        job_id: job_id.to_owned(),
+        job_kind,
+        session_id: session_id.clone(),
+        app_handle: window.app_handle().clone(),
+    });
     let context = Box::into_raw(context).cast::<c_void>();
     let result = unsafe {
         zmanager_macos_start_promise_drag(

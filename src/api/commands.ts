@@ -23,18 +23,21 @@ import type {
   CreatePlanResponse,
   DefaultHandlerSnapshotDto,
   DesktopJobSnapshotDto,
+  AcceptedJobAckRequest,
+  AcceptedJobEnvelopeDto,
+  AcceptedJobOrigin,
   DiagnosticEventRequest,
   DiagnosticLogInfoDto,
   DismissJobRequest,
   HealthcheckResponse,
+  HandoffCoordinatorLeaseRequest,
   JobControlResponseDto,
   JobCatalogEnvelopeDto,
   JobSnapshotEnvelopeDto,
   NativeFileDragRequest,
-  NativeFileDragPreparationResponse,
+  NativeFileDragAcceptanceResponse,
   NativeFileDragResponse,
-  NativeFileDragFinishRequest,
-  NativeFileDragStartRequest,
+  StartNativeFileDragRequest,
   PauseJobRequest,
   PlanCreateRequest,
   PreviewEntryRequest,
@@ -280,9 +283,10 @@ export async function runStartCreate(request: StartCreateRequest): Promise<Start
   });
 }
 
-export async function runStartExtract(request: StartExtractRequest): Promise<StartJobResponseDto> {
+export async function runStartExtract(request: StartExtractRequest, origin?: AcceptedJobOrigin): Promise<StartJobResponseDto> {
   return invoke<StartJobResponseDto>("start_extract", {
     request,
+    ...(origin ? { origin } : {}),
   });
 }
 
@@ -305,25 +309,17 @@ export async function runPreviewEntry(request: PreviewEntryRequest): Promise<Pre
 }
 
 export async function runStartNativeFileDrag(
-  request: NativeFileDragStartRequest,
+  request: StartNativeFileDragRequest,
 ): Promise<NativeFileDragResponse> {
   return invoke<NativeFileDragResponse>("start_native_file_drag", {
     request,
   });
 }
 
-export async function runPrepareNativeFileDrag(
+export async function runAcceptNativeFileDrag(
   request: NativeFileDragRequest,
-): Promise<NativeFileDragPreparationResponse> {
-  return invoke<NativeFileDragPreparationResponse>("prepare_native_file_drag", {
-    request,
-  });
-}
-
-export async function finishNativeFileDrag(
-  request: NativeFileDragFinishRequest,
-): Promise<void> {
-  return invoke<void>("finish_native_file_drag", { request });
+): Promise<NativeFileDragAcceptanceResponse> {
+  return invoke<NativeFileDragAcceptanceResponse>("accept_native_file_drag", { request });
 }
 
 export async function cleanupPreviewRoots(): Promise<void> {
@@ -344,6 +340,28 @@ export function getJobSnapshot(request: { jobId: string }): Promise<DesktopJobSn
 }
 export function subscribeJobCatalog(onSnapshot: Channel<JobCatalogEnvelopeDto>): Promise<string> {
   return invoke<string>("subscribe_job_catalog", { onSnapshot });
+}
+
+export function subscribeAcceptedJobs(
+  lastAcceptanceRevision: string,
+  onAcceptedJob: Channel<AcceptedJobEnvelopeDto>,
+): Promise<string> {
+  return invoke<string>("subscribe_accepted_jobs", {
+    request: { lastAcceptanceRevision },
+    onAcceptedJob,
+  });
+}
+
+export function acknowledgeAcceptedJob(request: AcceptedJobAckRequest): Promise<void> {
+  return invoke<void>("acknowledge_accepted_job", { request });
+}
+
+export function registerHandoffCoordinator(): Promise<string> {
+  return invoke<string>("register_handoff_coordinator");
+}
+
+export function revokeHandoffCoordinator(request: HandoffCoordinatorLeaseRequest): Promise<void> {
+  return invoke<void>("revoke_handoff_coordinator", { request });
 }
 export function ackSubscription(request: { subscriptionId: string; revision: string }): Promise<void> {
   return invoke<void>("ack_subscription", { request });

@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fs,
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
@@ -13,9 +13,9 @@ use crate::error::ErrorSeverityDto;
 #[cfg(test)]
 use crate::job_dto::TestJobEventsSnapshot;
 use crate::job_dto::{
-    CancelJobResponseDto, DesktopJobSnapshotDto, JobAvailableActionDto, JobCatalogDescriptorDto, JobCatalogSnapshotDto, JobControlResponseDto, JobEventDto,
-    JobEventKindDto, JobKindDto, JobOutputArtifactDto, JobPhaseDto, JobProgressFactsDto, JobRecordSnapshot, JobRetryDescriptorDto, JobStatusDto,
-    JobTerminalSummaryDto, StartJobResponseDto,
+    AcceptedJobEnvelopeDto, AcceptedJobOriginDto, CancelJobResponseDto, DesktopJobSnapshotDto, JobAvailableActionDto, JobCatalogDescriptorDto,
+    JobCatalogSnapshotDto, JobControlResponseDto, JobEventDto, JobEventKindDto, JobKindDto, JobOutputArtifactDto, JobPhaseDto, JobProgressFactsDto,
+    JobRecordSnapshot, JobRetryDescriptorDto, JobStatusDto, JobTerminalSummaryDto, StartJobResponseDto,
 };
 #[cfg(test)]
 use zmanager_core::jobs::JobKind;
@@ -101,11 +101,16 @@ impl PauseControl {
 
 struct RegistryState {
     next_job_id: u64,
+    next_acceptance_revision: u64,
+    next_coordinator_lease_id: u64,
     catalog_revision: u64,
     catalog_publication_closed: bool,
     jobs: HashMap<String, JobRecord>,
     preview_roots: VecDeque<PathBuf>,
     catalog_sender: watch::Sender<Arc<JobCatalogSnapshotDto>>,
+    accepted_jobs: VecDeque<AcceptedJobEnvelopeDto>,
+    accepted_sender: watch::Sender<Arc<Vec<AcceptedJobEnvelopeDto>>>,
+    coordinator_leases: HashSet<String>,
     next_subscription_id: u64,
     subscriptions: HashMap<String, SubscriptionRecord>,
 }
@@ -193,13 +198,19 @@ pub(crate) async fn forward_latest_values<T, FRevision, FSend>(
 impl RegistryState {
     fn new() -> Self {
         let (catalog_sender, _) = watch::channel(Arc::new(JobCatalogSnapshotDto { catalog_revision: "0".to_string(), jobs: Vec::new() }));
+        let (accepted_sender, _) = watch::channel(Arc::new(Vec::new()));
         Self {
             next_job_id: 0,
+            next_acceptance_revision: 0,
+            next_coordinator_lease_id: 0,
             catalog_revision: 0,
             catalog_publication_closed: false,
             jobs: HashMap::new(),
             preview_roots: VecDeque::new(),
             catalog_sender,
+            accepted_jobs: VecDeque::new(),
+            accepted_sender,
+            coordinator_leases: HashSet::new(),
             next_subscription_id: 0,
             subscriptions: HashMap::new(),
         }
@@ -209,6 +220,80 @@ impl RegistryState {
 #[derive(Clone)]
 pub struct JobRegistry {
     state: Arc<Mutex<RegistryState>>,
+}
+
+fn try_create_job_locked(state: &mut RegistryState, kind: JobKindDto) -> Result<(StartJobResponseDto, CancellationToken), &'static str> {
+    let job_id = state.next_job_id.saturating_add(1).to_string();
+    state.next_job_id = state.next_job_id.saturating_add(1);
+
+    let token = CancellationToken::new();
+    let created_at = now_timestamp();
+    evict_oldest_terminal_jobs(state);
+    if state.jobs.len() >= MAX_ADMITTED_JOBS {
+        return Err("job_capacity");
+    }
+    let progress = JobProgressFactsDto::default();
+    let initial_snapshot = Arc::new(DesktopJobSnapshotDto {
+        revision: "1".to_string(),
+        job_id: job_id.clone(),
+        kind,
+        status: JobStatusDto::Queued,
+        created_at: created_at.clone(),
+        updated_at: created_at.clone(),
+        can_pause: true,
+        can_resume: false,
+        can_cancel: true,
+        can_dismiss: false,
+        progress_facts: progress.clone(),
+        latest_failure: None,
+        bounded_notices: Vec::new(),
+        available_actions: Vec::new(),
+        output_artifacts: Vec::new(),
+        retry_descriptor: None,
+        terminal_summary: None,
+    });
+    let (snapshot_sender, _) = watch::channel(initial_snapshot);
+    state.jobs.insert(
+        job_id.clone(),
+        JobRecord {
+            id: job_id.clone(),
+            kind,
+            created_at: created_at.clone(),
+            status: JobStatusDto::Queued,
+            paused_from_status: None,
+            #[cfg(test)]
+            test_events: VecDeque::new(),
+            terminal_summary: None,
+            cancellation_token: Some(token.clone()),
+            pause_control: PauseControl::new(),
+            processed_entries: 0,
+            total_entries: None,
+            revision: 1,
+            updated_at: created_at.clone(),
+            progress,
+            notices: VecDeque::new(),
+            latest_failure: None,
+            available_actions: Vec::new(),
+            output_artifacts: Vec::new(),
+            retry_descriptor: None,
+            terminal_sequence: None,
+            publication_closed: false,
+            started_at: Instant::now(),
+            paused_at: None,
+            paused_duration: Duration::ZERO,
+            finished_at: None,
+            phase_started_at: None,
+            phase_paused_duration: Duration::ZERO,
+            snapshot_sender,
+            core_progress: JobProgressState::default(),
+        },
+    );
+    if let Err(error) = publish_catalog(state) {
+        state.jobs.remove(&job_id);
+        return Err(error);
+    }
+
+    Ok((StartJobResponseDto { job_id, kind, status: JobStatusDto::Queued, created_at }, token))
 }
 
 impl JobRegistry {
@@ -227,80 +312,46 @@ impl JobRegistry {
         self.try_create_job(kind).expect("job registry capacity exceeded")
     }
 
+    #[cfg(test)]
     pub fn try_create_job(&self, kind: JobKindDto) -> Result<(StartJobResponseDto, CancellationToken), &'static str> {
+        self.with_lock(|state| try_create_job_locked(state, kind))
+    }
+
+    pub fn try_accept_job(&self, kind: JobKindDto, origin: AcceptedJobOriginDto) -> Result<(AcceptedJobEnvelopeDto, CancellationToken), &'static str> {
         self.with_lock(|state| {
-            let job_id = state.next_job_id.saturating_add(1).to_string();
-            state.next_job_id = state.next_job_id.saturating_add(1);
-
-            let token = CancellationToken::new();
-            let created_at = now_timestamp();
-            evict_oldest_terminal_jobs(state);
-            if state.jobs.len() >= MAX_ADMITTED_JOBS {
-                return Err("job_capacity");
+            if state.next_acceptance_revision == u64::MAX {
+                return Err("acceptance_revision_exhausted");
             }
-            let progress = JobProgressFactsDto::default();
-            let initial_snapshot = Arc::new(DesktopJobSnapshotDto {
-                revision: "1".to_string(),
-                job_id: job_id.clone(),
-                kind,
-                status: JobStatusDto::Queued,
-                created_at: created_at.clone(),
-                updated_at: created_at.clone(),
-                can_pause: true,
-                can_resume: false,
-                can_cancel: true,
-                can_dismiss: false,
-                progress_facts: progress.clone(),
-                latest_failure: None,
-                bounded_notices: Vec::new(),
-                available_actions: Vec::new(),
-                output_artifacts: Vec::new(),
-                retry_descriptor: None,
-                terminal_summary: None,
-            });
-            let (snapshot_sender, _) = watch::channel(initial_snapshot);
-            state.jobs.insert(
-                job_id.clone(),
-                JobRecord {
-                    id: job_id.clone(),
-                    kind,
-                    created_at: created_at.clone(),
-                    status: JobStatusDto::Queued,
-                    paused_from_status: None,
-                    #[cfg(test)]
-                    test_events: VecDeque::new(),
-                    terminal_summary: None,
-                    cancellation_token: Some(token.clone()),
-                    pause_control: PauseControl::new(),
-                    processed_entries: 0,
-                    total_entries: None,
-                    revision: 1,
-                    updated_at: created_at.clone(),
-                    progress,
-                    notices: VecDeque::new(),
-                    latest_failure: None,
-                    available_actions: Vec::new(),
-                    output_artifacts: Vec::new(),
-                    retry_descriptor: None,
-                    terminal_sequence: None,
-                    publication_closed: false,
-                    started_at: Instant::now(),
-                    paused_at: None,
-                    paused_duration: Duration::ZERO,
-                    finished_at: None,
-                    phase_started_at: None,
-                    phase_paused_duration: Duration::ZERO,
-                    snapshot_sender,
-                    core_progress: JobProgressState::default(),
-                },
-            );
-            if let Err(error) = publish_catalog(state) {
-                state.jobs.remove(&job_id);
-                return Err(error);
-            }
-
-            Ok((StartJobResponseDto { job_id: job_id.clone(), kind, status: JobStatusDto::Queued, created_at }, token))
+            let (job, token) = try_create_job_locked(state, kind)?;
+            state.next_acceptance_revision = state.next_acceptance_revision.checked_add(1).ok_or("acceptance_revision_exhausted")?;
+            let envelope = AcceptedJobEnvelopeDto { acceptance_revision: state.next_acceptance_revision.to_string(), job, origin };
+            state.accepted_jobs.push_back(envelope.clone());
+            publish_accepted_jobs(state);
+            Ok((envelope, token))
         })
+    }
+
+    pub(crate) fn register_handoff_coordinator(&self, owner: &str) -> Result<String, &'static str> {
+        if owner != "main" {
+            return Err("handoff_coordinator_forbidden");
+        }
+        self.with_lock(|state| {
+            state.next_coordinator_lease_id = state.next_coordinator_lease_id.checked_add(1).ok_or("handoff_lease_id_exhausted")?;
+            let lease = format!("handoff-{}-{}", std::process::id(), state.next_coordinator_lease_id);
+            state.coordinator_leases.insert(lease.clone());
+            Ok(lease)
+        })
+    }
+
+    pub(crate) fn revoke_handoff_coordinator(&self, owner: &str, lease: &str) -> Result<(), &'static str> {
+        if owner != "main" {
+            return Err("handoff_coordinator_forbidden");
+        }
+        self.with_lock(|state| if state.coordinator_leases.remove(lease.trim()) { Ok(()) } else { Err("handoff_lease_not_found") })
+    }
+
+    pub(crate) fn has_live_handoff_coordinator(&self) -> bool {
+        self.with_lock(|state| !state.coordinator_leases.is_empty())
     }
 
     pub fn remove_job_if_terminal(&self, job_id: &str) -> Option<JobKindDto> {
@@ -368,6 +419,51 @@ impl JobRegistry {
     #[cfg(test)]
     pub fn subscribe_catalog_snapshot(&self) -> watch::Receiver<Arc<JobCatalogSnapshotDto>> {
         self.with_lock(|state| state.catalog_sender.subscribe())
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub(crate) fn register_accepted_subscription(
+        &self,
+        owner: &str,
+    ) -> Result<(String, watch::Receiver<Arc<Vec<AcceptedJobEnvelopeDto>>>, mpsc::Receiver<SubscriptionCommand>), &'static str> {
+        self.with_lock(|state| {
+            if owner != "main" {
+                return Err("accepted_jobs_forbidden");
+            }
+            if state.subscriptions.len() >= MAX_PROCESS_SUBSCRIBERS {
+                return Err("subscription_capacity");
+            }
+            state.next_subscription_id = state.next_subscription_id.checked_add(1).ok_or("subscription_id_exhausted")?;
+            let id = format!("subscription-{}", state.next_subscription_id);
+            let (commands, receiver_commands) = mpsc::channel(4);
+            let flow = Arc::new(Mutex::new(SubscriptionFlowState::default()));
+            state.subscriptions.insert(id.clone(), SubscriptionRecord { owner: owner.to_owned(), job_id: None, commands, flow });
+            Ok((id, state.accepted_sender.subscribe(), receiver_commands))
+        })
+    }
+
+    pub(crate) fn acknowledge_accepted_job(&self, owner: &str, job_id: &str, acceptance_revision: u64) -> Result<(), &'static str> {
+        if owner != "main" {
+            return Err("accepted_jobs_forbidden");
+        }
+        self.with_lock(|state| {
+            if !state
+                .accepted_jobs
+                .iter()
+                .any(|record| record.job.job_id == job_id && record.acceptance_revision.parse::<u64>().ok() == Some(acceptance_revision))
+            {
+                return Err("accepted_job_not_found");
+            }
+            while state
+                .accepted_jobs
+                .front()
+                .is_some_and(|record| record.acceptance_revision.parse::<u64>().ok().is_some_and(|revision| revision <= acceptance_revision))
+            {
+                state.accepted_jobs.pop_front();
+            }
+            publish_accepted_jobs(state);
+            Ok(())
+        })
     }
 
     #[allow(clippy::type_complexity)]
@@ -519,6 +615,10 @@ impl JobRegistry {
                 None
             }
         })
+    }
+
+    pub fn cancellation_token(&self, job_id: &str) -> Option<CancellationToken> {
+        self.with_lock(|state| state.jobs.get(job_id).and_then(|record| record.cancellation_token.clone()))
     }
 
     pub fn request_pause(&self, job_id: &str) -> Option<JobControlResponseDto> {
@@ -1207,6 +1307,10 @@ fn publish_catalog(state: &mut RegistryState) -> Result<(), &'static str> {
     jobs.sort_by(|left, right| left.job_id.cmp(&right.job_id));
     let _ = state.catalog_sender.send_replace(Arc::new(JobCatalogSnapshotDto { catalog_revision: state.catalog_revision.to_string(), jobs }));
     Ok(())
+}
+
+fn publish_accepted_jobs(state: &mut RegistryState) {
+    let _ = state.accepted_sender.send_replace(Arc::new(state.accepted_jobs.iter().cloned().collect()));
 }
 
 fn evict_oldest_terminal_jobs(state: &mut RegistryState) {

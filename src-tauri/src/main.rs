@@ -80,6 +80,7 @@ fn main() {
     let account_runtime = account::AccountRuntime::new();
     let initial_account_auth_status = account_runtime.initial_auth_status();
     let native_drag_sessions = native_drag_session::NativeDragSessionRegistry::new();
+    let native_drag_operations = native_drag_session::NativeDragOperationRegistry::new();
     let quick_action_launch_coordinator = quick_action::QuickActionLaunchCoordinator::from_startup_state(forwarded_startup_state);
     let single_instance_coordinator = quick_action_launch_coordinator.clone();
     let single_instance_inbox = native_launch_inbox.clone();
@@ -97,6 +98,7 @@ fn main() {
         .manage(archive_index_registry)
         .manage(account_runtime)
         .manage(native_drag_sessions.clone())
+        .manage(native_drag_operations.clone())
         .manage(diagnostics.clone())
         .manage(quick_action_launch_coordinator)
         .manage(native_launch_inbox.clone())
@@ -142,6 +144,28 @@ fn main() {
                 .map_err(|error| std::io::Error::other(format!("failed to attach native inbox emitter: {error:?}")))?;
             let app_data_dir = app.path().app_data_dir().map_err(|error| std::io::Error::other(format!("failed to resolve app data dir: {error}")))?;
             let local_send = localsend::LocalSendState::new(app_data_dir);
+            let operation_reaper = app.state::<native_drag_session::NativeDragOperationRegistry>().inner().clone();
+            let session_reaper = app.state::<native_drag_session::NativeDragSessionRegistry>().inner().clone();
+            let job_registry_for_reaper = app.state::<job_registry::JobRegistry>().inner().clone();
+            let reaper_diagnostics = setup_diagnostics.clone();
+            std::thread::spawn(move || {
+                loop {
+                    std::thread::sleep(std::time::Duration::from_secs(30));
+                    for operation in operation_reaper.reap_expired() {
+                        job_registry_for_reaper.emit_direct_event(
+                            &operation.job_id,
+                            job_dto::JobEventDto::failed_from_command_error(
+                                operation.kind,
+                                error::CommandErrorDto::operation_failed("Native drag start timed out before preparation began."),
+                            ),
+                        );
+                    }
+                    for job_id in session_reaper.reap_expired() {
+                        job_registry_for_reaper.emit_direct_event(&job_id, job_dto::JobEventDto::cancelled(None, "Native drag session timed out."));
+                        let _ = reaper_diagnostics.record("nativeDrag", "sessionTimedOut", diagnostics::fields([]));
+                    }
+                }
+            });
             let share_queue = share_queue::ShareRegistry::new(
                 app.state::<job_registry::JobRegistry>().inner().clone(),
                 local_send.clone(),
@@ -153,7 +177,7 @@ fn main() {
             app.manage(local_send.clone());
             app.manage(share_queue.clone());
             local_send.register_outgoing_event_sink(std::sync::Arc::new(move |event| share_queue_for_events.on_localsend_event(event)));
-            local_send.start_event_pump(app.handle().clone(), app.state::<job_registry::JobRegistry>().inner().clone());
+            local_send.start_event_pump(app.handle().clone(), app.state::<job_registry::JobRegistry>().inner().clone(), setup_diagnostics.clone());
             if let Some(window) = app.get_webview_window("main") {
                 platform::configure_main_window(&window)?;
             }
@@ -221,15 +245,18 @@ fn main() {
             commands::verify_tzap_certificate,
             commands::validate_tzap_signing_identity,
             commands::preview_entry,
+            commands::accept_native_file_drag,
             commands::start_native_file_drag,
-            commands::prepare_native_file_drag,
-            commands::finish_native_file_drag,
             commands::cleanup_preview_roots,
             commands::test_archive,
             commands::detect_archive_format,
             commands::subscribe_job,
             commands::get_job_snapshot,
             commands::subscribe_job_catalog,
+            commands::subscribe_accepted_jobs,
+            commands::acknowledge_accepted_job,
+            commands::register_handoff_coordinator,
+            commands::revoke_handoff_coordinator,
             commands::ack_subscription,
             commands::unsubscribe_job,
             commands::cancel_job,

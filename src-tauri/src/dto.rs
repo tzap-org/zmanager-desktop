@@ -611,7 +611,7 @@ pub struct PreviewEntryResponse {
     pub written_bytes: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeFileDragRequest {
     pub archive_path: String,
@@ -628,23 +628,9 @@ pub struct NativeFileDragRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct NativeFileDragStartRequest {
-    pub session_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NativeFileDragFinishRequest {
-    pub job_id: String,
-    pub outcome: NativeFileDragOutcomeDto,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct NativeFileDragPreparationResponse {
-    pub session_id: String,
-    pub job: crate::job_dto::StartJobResponseDto,
-    pub dragged_entries: Vec<String>,
+pub struct StartNativeFileDragRequest {
+    pub operation_id: String,
+    pub request: NativeFileDragRequest,
 }
 
 #[derive(Debug, Serialize)]
@@ -656,13 +642,40 @@ pub struct NativeFileDragResponse {
     pub dragged_entries: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeFileDragAcceptanceResponse {
+    pub accepted_job: crate::job_dto::AcceptedJobEnvelopeDto,
+    pub operation_id: String,
+}
+
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum NativeFileDragOutcomeDto {
     Pending,
     Dropped,
     Cancelled,
     NoDrop,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscribeAcceptedJobsRequest {
+    #[serde(default)]
+    pub last_acceptance_revision: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcknowledgeAcceptedJobRequest {
+    pub job_id: String,
+    pub acceptance_revision: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HandoffCoordinatorLeaseRequest {
+    pub lease_id: String,
 }
 
 #[derive(Debug, Deserialize)]

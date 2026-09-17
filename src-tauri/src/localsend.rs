@@ -19,6 +19,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::diagnostics::DiagnosticLog;
 use crate::dto::{DestinationCollisionStrategyDto, OverwritePolicyDto, StartExtractRequest, TzapRestorePolicyDto};
 use crate::error::CommandErrorDto;
 use crate::job_registry::JobRegistry;
@@ -151,7 +152,7 @@ impl LocalSendState {
         *self.outgoing_event_sink.lock().unwrap_or_else(|error| error.into_inner()) = Some(sink);
     }
 
-    pub(crate) fn start_event_pump(&self, app: AppHandle, job_registry: JobRegistry) {
+    pub(crate) fn start_event_pump(&self, app: AppHandle, job_registry: JobRegistry, diagnostics: DiagnosticLog) {
         let mut stop_guard = self.poll_stop.lock().unwrap_or_else(|error| error.into_inner());
         if stop_guard.is_some() {
             return;
@@ -160,7 +161,7 @@ impl LocalSendState {
         *stop_guard = Some(stop_flag.clone());
         drop(stop_guard);
         let shared = self.clone();
-        let thread = thread::spawn(move || spawn_event_pump(app, shared, job_registry, stop_flag));
+        let thread = thread::spawn(move || spawn_event_pump(app, shared, job_registry, diagnostics, stop_flag));
         *self.poll_thread.lock().unwrap_or_else(|error| error.into_inner()) = Some(thread);
     }
 
@@ -577,7 +578,7 @@ pub fn localsend_untrust_device(fingerprint: String, state: State<'_, LocalSendS
 // frontend (trusted-fingerprint auto-accept, auto-extract).
 // ---------------------------------------------------------------------
 
-fn spawn_event_pump(app: AppHandle, shared: LocalSendState, job_registry: JobRegistry, stop_flag: Arc<AtomicBool>) {
+fn spawn_event_pump(app: AppHandle, shared: LocalSendState, job_registry: JobRegistry, diagnostics: DiagnosticLog, stop_flag: Arc<AtomicBool>) {
     while !stop_flag.load(Ordering::Relaxed) {
         let drained = shared.registry.poll_events();
         for event in drained.events {
@@ -595,13 +596,19 @@ fn spawn_event_pump(app: AppHandle, shared: LocalSendState, job_registry: JobReg
                     rate_bytes_per_second: *rate_bytes_per_second,
                 });
             }
-            handle_queued_event(&app, &shared, &job_registry, event);
+            handle_queued_event(&app, &shared, &job_registry, &diagnostics, event);
         }
         thread::sleep(EVENT_POLL_INTERVAL);
     }
 }
 
-fn handle_queued_event(app: &AppHandle, shared: &LocalSendState, job_registry: &JobRegistry, event: zmanager_localsend::QueuedEvent) {
+fn handle_queued_event(
+    app: &AppHandle,
+    shared: &LocalSendState,
+    job_registry: &JobRegistry,
+    diagnostics: &DiagnosticLog,
+    event: zmanager_localsend::QueuedEvent,
+) {
     if let zmanager_localsend::QueuedEvent::TransferRequest { request_id, sender, .. } = &event
         && shared.trust_store.is_trusted(&sender.fingerprint)
     {
@@ -619,24 +626,44 @@ fn handle_queued_event(app: &AppHandle, shared: &LocalSendState, job_registry: &
     }
 
     if let zmanager_localsend::QueuedEvent::FileReceived { path, .. } = &event {
-        maybe_auto_extract(shared, job_registry, path);
+        maybe_auto_extract(shared, job_registry, diagnostics, path);
     }
 
     let dto = LocalSendEventDto::from(event);
     let _ = app.emit(LOCALSEND_EVENT_NAME, &dto);
 }
 
-fn maybe_auto_extract(shared: &LocalSendState, job_registry: &JobRegistry, received_path: &Path) {
+fn maybe_auto_extract(shared: &LocalSendState, job_registry: &JobRegistry, diagnostics: &DiagnosticLog, received_path: &Path) {
     let config = shared.receive_config.lock().unwrap_or_else(|error| error.into_inner()).clone();
     let Some(config) = config else {
         return;
     };
+    if !job_registry.has_live_handoff_coordinator() {
+        let _ = diagnostics.record(
+            "localSend",
+            "autoExtractDeferredNoCoordinator",
+            crate::diagnostics::fields([(
+                "archiveExtension",
+                serde_json::Value::String(received_path.extension().and_then(|value| value.to_str()).unwrap_or_default().to_owned()),
+            )]),
+        );
+        return;
+    }
     let Some(request) = build_auto_extract_request(&config, received_path) else {
         return;
     };
 
-    if let Err(error) = crate::commands::start_extract_internal_with_recipient_key(request, job_registry, None) {
-        eprintln!("zmanager-localsend: auto-extract of {} failed: {error:?}", received_path.display());
+    if let Err(error) = crate::commands::start_extract_internal_with_recipient_key_and_origin(
+        request,
+        job_registry,
+        None,
+        crate::job_dto::AcceptedJobOriginDto::LocalSendAutoExtract,
+    ) {
+        let _ = diagnostics.record(
+            "localSend",
+            "autoExtractRejected",
+            crate::diagnostics::fields([("errorCode", serde_json::Value::String(error.code.to_owned()))]),
+        );
     }
 }
 

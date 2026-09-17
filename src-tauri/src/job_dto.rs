@@ -56,6 +56,14 @@ pub enum JobRetryDescriptorDto {
         archive_path: String,
         entry_paths: Vec<String>,
     },
+    NativeDrag {
+        action_id: String,
+        archive_path: String,
+        entry_paths: Vec<String>,
+        select_all: bool,
+        excluded_entry_paths: Vec<String>,
+        strip_components: usize,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
@@ -215,6 +223,25 @@ pub struct JobEventDto {
 }
 
 impl JobEventDto {
+    pub fn cancelled(job_kind: Option<JobKindDto>, message: impl Into<String>) -> Self {
+        Self {
+            event_type: JobEventKindDto::Cancelled,
+            job_kind,
+            phase: None,
+            code: Some(crate::constants::COMMAND_ERROR_CANCELLED),
+            hint: None,
+            severity: Some(ErrorSeverityDto::Info),
+            retryable: Some(true),
+            path: None,
+            bytes: None,
+            total_bytes: None,
+            total_bytes_processed: None,
+            entries: None,
+            total_entries: None,
+            message: Some(message.into()),
+        }
+    }
+
     pub fn failed_from_command_error(job_kind: JobKindDto, error: CommandErrorDto) -> Self {
         Self {
             event_type: if error.code == crate::constants::COMMAND_ERROR_CANCELLED { JobEventKindDto::Cancelled } else { JobEventKindDto::Failed },
@@ -273,6 +300,24 @@ pub struct StartJobResponseDto {
     pub kind: JobKindDto,
     pub status: JobStatusDto,
     pub created_at: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AcceptedJobOriginDto {
+    MainWindow,
+    QuickAction,
+    LocalSendAutoExtract,
+    NativeDrag,
+    PasswordRetry,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AcceptedJobEnvelopeDto {
+    pub acceptance_revision: String,
+    pub job: StartJobResponseDto,
+    pub origin: AcceptedJobOriginDto,
 }
 
 #[cfg(test)]

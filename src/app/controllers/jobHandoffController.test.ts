@@ -46,9 +46,49 @@ describe("job handoff controller", () => {
 
     await expect(controller.handoffAcceptedJob(job, {
       resetSubmittedState,
-    })).resolves.toBeUndefined();
+    })).resolves.toBe(false);
 
     expect(resetSubmittedState).toHaveBeenCalledOnce();
     expect(reportPresentationFailure).toHaveBeenCalledWith(job, failure);
+  });
+
+  it("claims concurrent accepted deliveries once and acknowledges after presentation", async () => {
+    let resolvePresentation!: () => void;
+    const presentTaskWindow = vi.fn(() => new Promise<void>((resolve) => { resolvePresentation = resolve; }));
+    const acknowledgeAcceptedJob = vi.fn(async () => {});
+    const controller = createJobHandoffController({
+      recordAccepted: vi.fn(),
+      presentTaskWindow,
+      acknowledgeAcceptedJob,
+      reportPresentationFailure: vi.fn(),
+    });
+    const accepted = { acceptanceRevision: "7", job, origin: "nativeDrag" as const };
+
+    const first = controller.handoffAcceptedJob(accepted);
+    const second = controller.handoffAcceptedJob(accepted);
+    expect(presentTaskWindow).toHaveBeenCalledOnce();
+    resolvePresentation();
+    await Promise.all([first, second]);
+
+    expect(acknowledgeAcceptedJob).toHaveBeenCalledOnce();
+    expect(acknowledgeAcceptedJob).toHaveBeenCalledWith(accepted);
+  });
+
+  it("treats the synchronous response and accepted-feed envelope as one delivery", async () => {
+    const presentTaskWindow = vi.fn(async () => {});
+    const acknowledgeAcceptedJob = vi.fn(async () => {});
+    const controller = createJobHandoffController({
+      recordAccepted: vi.fn(),
+      presentTaskWindow,
+      acknowledgeAcceptedJob,
+      reportPresentationFailure: vi.fn(),
+    });
+    const accepted = { acceptanceRevision: "8", job, origin: "mainWindow" as const };
+
+    await controller.handoffAcceptedJob(job);
+    await controller.handoffAcceptedJob(accepted);
+
+    expect(presentTaskWindow).toHaveBeenCalledOnce();
+    expect(acknowledgeAcceptedJob).toHaveBeenCalledOnce();
   });
 });

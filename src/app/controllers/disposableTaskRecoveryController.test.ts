@@ -78,7 +78,7 @@ describe("disposable task recovery controller", () => {
       tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
       password: "secret",
-    });
+    }, "passwordRetry");
     expect(handoffAcceptedJob).toHaveBeenCalledWith(nextJob);
   });
 

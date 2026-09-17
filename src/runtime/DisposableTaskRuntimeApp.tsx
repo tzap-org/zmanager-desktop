@@ -5,10 +5,12 @@ import {
   cancelJob,
   pauseJob,
   resumeJob,
+  runAcceptNativeFileDrag,
   runStartExtract,
+  runStartNativeFileDrag,
   runTestArchive,
 } from "../api/commands";
-import type { JobEventDto, JobKind, JobStatus, StartJobResponseDto } from "../api/types";
+import type { JobEventDto, JobKind, JobStatus, NativeFileDragRequest, StartJobResponseDto } from "../api/types";
 import { createDisposableTaskRecoveryController } from "../app/controllers/disposableTaskRecoveryController";
 import {
   createDisposableTask,
@@ -64,6 +66,12 @@ function DisposableTaskRuntime({ bootstrap }: Readonly<{ bootstrap: DisposableTa
       ),
     startExtract: runStartExtract,
     startTest: runTestArchive,
+    startNativeDrag: async (request: NativeFileDragRequest) => {
+      const accepted = await runAcceptNativeFileDrag(request);
+      await requestDisposableTaskJobHandoff(accepted.acceptedJob.job);
+      await runStartNativeFileDrag({ operationId: accepted.operationId, request });
+      return accepted.acceptedJob.job;
+    },
     handoffAcceptedJob: requestDisposableTaskJobHandoff,
     toCommandError: asCommandError,
     reportFailure: setSurfaceError,

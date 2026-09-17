@@ -1,34 +1,26 @@
 import { listen, type Event } from "@tauri-apps/api/event";
 
 import {
-  runPrepareNativeFileDrag,
+  runAcceptNativeFileDrag,
   runStartNativeFileDrag,
-  finishNativeFileDrag,
 } from "../api/commands";
 import type {
-  NativeFileDragPreparationResponse,
-  NativeFileDragFinishRequest,
+  NativeFileDragAcceptanceResponse,
   NativeFileDragRequest,
   NativeFileDragResponse,
-  NativeFileDragStartRequest,
+  StartNativeFileDragRequest,
 } from "../api/types";
 
-export async function prepareNativeFileDrag(
+export async function acceptNativeFileDrag(
   request: NativeFileDragRequest,
-): Promise<NativeFileDragPreparationResponse> {
-  return runPrepareNativeFileDrag(request);
+): Promise<NativeFileDragAcceptanceResponse> {
+  return runAcceptNativeFileDrag(request);
 }
 
 export async function startNativeFileDrag(
-  request: NativeFileDragStartRequest,
+  request: StartNativeFileDragRequest,
 ): Promise<NativeFileDragResponse> {
   return runStartNativeFileDrag(request);
-}
-
-export async function finishNativeDrag(
-  request: NativeFileDragFinishRequest,
-): Promise<void> {
-  return finishNativeFileDrag(request);
 }
 
 export const NATIVE_FILE_DRAG_OUTCOME_EVENT = "native-file-drag-outcome";

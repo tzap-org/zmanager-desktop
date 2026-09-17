@@ -27,9 +27,8 @@ pub const COMMAND_PLAN_CREATE: &str = "plan_create";
 pub const COMMAND_START_CREATE: &str = "start_create";
 pub const COMMAND_START_EXTRACT: &str = "start_extract";
 pub const COMMAND_PREVIEW_ENTRY: &str = "preview_entry";
+pub const COMMAND_ACCEPT_NATIVE_FILE_DRAG: &str = "accept_native_file_drag";
 pub const COMMAND_START_NATIVE_FILE_DRAG: &str = "start_native_file_drag";
-pub const COMMAND_PREPARE_NATIVE_FILE_DRAG: &str = "prepare_native_file_drag";
-pub const COMMAND_FINISH_NATIVE_FILE_DRAG: &str = "finish_native_file_drag";
 pub const COMMAND_CLEANUP_PREVIEW_ROOTS: &str = "cleanup_preview_roots";
 pub const COMMAND_DETECT_ARCHIVE_FORMAT: &str = "detect_archive_format";
 pub const COMMAND_CANCEL_JOB: &str = "cancel_job";
@@ -62,9 +61,8 @@ pub const PLANNED_COMMANDS: &[&str] = &[
     COMMAND_START_CREATE,
     COMMAND_START_EXTRACT,
     COMMAND_PREVIEW_ENTRY,
+    COMMAND_ACCEPT_NATIVE_FILE_DRAG,
     COMMAND_START_NATIVE_FILE_DRAG,
-    COMMAND_PREPARE_NATIVE_FILE_DRAG,
-    COMMAND_FINISH_NATIVE_FILE_DRAG,
     COMMAND_CLEANUP_PREVIEW_ROOTS,
     COMMAND_CANCEL_JOB,
     COMMAND_PAUSE_JOB,

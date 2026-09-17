@@ -294,27 +294,24 @@ const COMMAND_WRAPPERS = [
     }),
   },
   {
+    command: "accept_native_file_drag",
+    request: { archivePath: "C:/archives/demo.zip", entryPaths: ["root.txt"], stripComponents: 0 },
+    call: () => api.runAcceptNativeFileDrag({ archivePath: "C:/archives/demo.zip", entryPaths: ["root.txt"], stripComponents: 0 }),
+  },
+  {
     command: "start_native_file_drag",
-    request: { sessionId: "prepared-drag-1" },
-    call: () => api.runStartNativeFileDrag({ sessionId: "prepared-drag-1" }),
-  },
-  {
-    command: "prepare_native_file_drag",
     request: {
-      archivePath: "C:/archives/demo.zip",
-      entryPaths: ["root.txt"],
-      stripComponents: 0,
+      operationId: "native-drag-1",
+      request: { archivePath: "C:/archives/demo.zip", entryPaths: ["root.txt"], stripComponents: 0 },
     },
-    call: () => api.runPrepareNativeFileDrag({
-      archivePath: "C:/archives/demo.zip",
-      entryPaths: ["root.txt"],
-      stripComponents: 0,
+    call: () => api.runStartNativeFileDrag({
+      operationId: "native-drag-1",
+      request: {
+        archivePath: "C:/archives/demo.zip",
+        entryPaths: ["root.txt"],
+        stripComponents: 0,
+      },
     }),
-  },
-  {
-    command: "finish_native_file_drag",
-    request: { jobId: "job-1", outcome: "dropped" },
-    call: () => api.finishNativeFileDrag({ jobId: "job-1", outcome: "dropped" }),
   },
   { command: "cleanup_preview_roots", call: () => api.cleanupPreviewRoots() },
   {
@@ -330,6 +327,10 @@ const COMMAND_WRAPPERS = [
   { command: "subscribe_job", args: { request: { jobId: "job-1" }, onSnapshot: null }, call: () => api.subscribeJob({ jobId: "job-1" }, null as never) },
   { command: "get_job_snapshot", request: { jobId: "job-1" }, call: () => api.getJobSnapshot({ jobId: "job-1" }) },
   { command: "subscribe_job_catalog", args: { onSnapshot: null }, call: () => api.subscribeJobCatalog(null as never) },
+  { command: "subscribe_accepted_jobs", args: { request: { lastAcceptanceRevision: "0" }, onAcceptedJob: null }, call: () => api.subscribeAcceptedJobs("0", null as never) },
+  { command: "acknowledge_accepted_job", request: { jobId: "job-1", acceptanceRevision: "1" }, call: () => api.acknowledgeAcceptedJob({ jobId: "job-1", acceptanceRevision: "1" }) },
+  { command: "register_handoff_coordinator", call: () => api.registerHandoffCoordinator() },
+  { command: "revoke_handoff_coordinator", request: { leaseId: "lease-1" }, call: () => api.revokeHandoffCoordinator({ leaseId: "lease-1" }) },
   { command: "ack_subscription", request: { subscriptionId: "subscription-1", revision: "1" }, call: () => api.ackSubscription({ subscriptionId: "subscription-1", revision: "1" }) },
   { command: "unsubscribe_job", request: { subscriptionId: "subscription-1" }, call: () => api.unsubscribeJob({ subscriptionId: "subscription-1" }) },
   {

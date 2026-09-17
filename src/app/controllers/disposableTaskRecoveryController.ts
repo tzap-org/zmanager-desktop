@@ -4,6 +4,7 @@ import type {
   StartExtractRequest,
   StartJobResponseDto,
   TestArchiveRequest,
+  NativeFileDragRequest,
 } from "../../api/types";
 import { isPasswordErrorCode } from "../jobs";
 import { resolveDestinationCollisionStrategy } from "../collisionPolicy";
@@ -17,8 +18,9 @@ export type DisposableTaskRecoveryResult =
 
 export type DisposableTaskRecoveryControllerOptions = Readonly<{
   promptForPassword(commandCode: string): string | null;
-  startExtract(request: StartExtractRequest): Promise<StartJobResponseDto>;
+  startExtract(request: StartExtractRequest, origin?: "passwordRetry"): Promise<StartJobResponseDto>;
   startTest(request: TestArchiveRequest): Promise<StartJobResponseDto>;
+  startNativeDrag?(request: NativeFileDragRequest): Promise<StartJobResponseDto>;
   handoffAcceptedJob(job: StartJobResponseDto): Promise<void>;
   toCommandError(error: unknown): CommandErrorDto | null;
   reportFailure(message: string): void;
@@ -48,6 +50,18 @@ export function createDisposableTaskRecoveryController(
 
       let job: StartJobResponseDto;
       try {
+        if (descriptor.retryKind === "nativeDrag") {
+          if (!options.startNativeDrag) return "unavailable";
+          job = await options.startNativeDrag({
+            archivePath: descriptor.archivePath,
+            entryPaths: [...descriptor.entryPaths],
+            selectAll: descriptor.selectAll,
+            excludedEntryPaths: [...descriptor.excludedEntryPaths],
+            stripComponents: descriptor.stripComponents,
+            password,
+          });
+          return "started";
+        }
         job = descriptor.retryKind === "testArchive"
           ? await options.startTest({
               archivePath: descriptor.archivePath,
@@ -74,7 +88,7 @@ export function createDisposableTaskRecoveryController(
               tzapAllowAbsoluteSymlinks: descriptor.tzapAllowAbsoluteSymlinks ?? false,
               ignoreSymlinks: descriptor.ignoreSymlinks ?? false,
               password,
-            });
+            }, "passwordRetry");
       } catch (error) {
         options.reportFailure(
           options.toCommandError(error)?.message

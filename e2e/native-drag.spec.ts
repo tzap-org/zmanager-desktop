@@ -159,9 +159,12 @@ test("dragging an unselected file row selects it when native drag-out starts", a
   const [call] = await waitForNativeDragCalls(page);
   expect(call.args).toEqual({
     request: {
-      archivePath: archiveFixture.archivePath,
-      entryPaths: ["root.txt"],
-      stripComponents: 0,
+      operationId: "native-drag-1",
+      request: {
+        archivePath: archiveFixture.archivePath,
+        entryPaths: ["root.txt"],
+        stripComponents: 0,
+      },
     },
   });
 
@@ -331,7 +334,6 @@ test.describe("linux native drag arming", () => {
 
     await expect(rootRow).toHaveAttribute("aria-selected", "false");
     expect(await nativeDragCalls(page)).toEqual([]);
-    expect(await preparedNativeDragCalls(page)).toEqual([]);
 
     await page.mouse.up();
   });
@@ -350,19 +352,20 @@ test.describe("linux native drag arming", () => {
     await page.mouse.move(startX + 3, startY, { steps: 2 });
 
     expect(await nativeDragCalls(page)).toEqual([]);
-    expect(await preparedNativeDragCalls(page)).toEqual([]);
 
     await page.mouse.move(startX + 12, startY + 2, { steps: 3 });
 
     const [call] = await waitForNativeDragCalls(page);
     expect(call.args).toEqual({
       request: {
-        archivePath: archiveFixture.archivePath,
-        entryPaths: ["root.txt"],
-        stripComponents: 0,
+        operationId: "native-drag-1",
+        request: {
+          archivePath: archiveFixture.archivePath,
+          entryPaths: ["root.txt"],
+          stripComponents: 0,
+        },
       },
     });
-    expect(await preparedNativeDragCalls(page)).toEqual([]);
     await expect(rootRow).toHaveAttribute("aria-selected", "true");
 
     await page.mouse.up();
@@ -377,20 +380,17 @@ test.describe("linux native drag arming", () => {
 
     await expect(rootRow).toHaveAttribute("aria-selected", "true");
     await expect(folderRow).toHaveAttribute("aria-selected", "true");
-    expect(await preparedNativeDragCalls(page)).toEqual([]);
 
     await rootRow.locator("[data-row-primary]").click({ modifiers: ["Shift"] });
 
     await expect(rootRow).toHaveAttribute("aria-selected", "true");
     await expect(folderRow).toHaveAttribute("aria-selected", "true");
-    expect(await preparedNativeDragCalls(page)).toEqual([]);
   });
 
   test("linux table row DOM dragstart is suppressed so WebKit does not start a DOM drag", async ({ page }) => {
     const rootRow = entryRow(page, "root.txt");
 
     await expect(await dispatchDragStartFromIcon(rootRow)).toBe(true);
-    expect(await preparedNativeDragCalls(page)).toEqual([]);
   });
 });
 
@@ -441,7 +441,7 @@ async function installTauriStub(page: Page, options?: { platform?: "windows" | "
 
       if (cmd === "project_contract") {
         return {
-          commands: ["start_native_file_drag"],
+          commands: ["accept_native_file_drag", "start_native_file_drag"],
           platformStrategy: "e2e",
           coreDependency: "stub",
           platformIntegration: {
@@ -495,19 +495,29 @@ async function installTauriStub(page: Page, options?: { platform?: "windows" | "
         };
       }
 
-      if (cmd === "start_native_file_drag") {
-        const request = args.request as { entryPaths: string[] };
+      if (cmd === "accept_native_file_drag") {
         return {
-          outcome: "dropped",
-          draggedEntries: request.entryPaths,
+          acceptedJob: {
+            acceptanceRevision: "1",
+            job: {
+              jobId: "job-native-drag-1",
+              kind: "zipExtract",
+              status: "queued",
+              createdAt: "2026-01-01T00:00:00Z",
+            },
+            origin: "nativeDrag",
+          },
+          operationId: "native-drag-1",
         };
       }
 
-      if (cmd === "prepare_native_file_drag") {
-        const request = args.request as { entryPaths: string[] };
+      if (cmd === "start_native_file_drag") {
+        const request = args.request as { request: { entryPaths: string[] } };
         return {
-          draggedEntries: request.entryPaths,
-          uris: request.entryPaths.map((entryPath) => `file:///tmp/zmanager-drag-proof/${entryPath}`),
+          outcome: "dropped",
+          sessionId: null,
+          jobId: "job-native-drag-1",
+          draggedEntries: request.request.entryPaths,
         };
       }
 
@@ -606,14 +616,6 @@ async function nativeDragCalls(page: Page): Promise<IpcCall[]> {
   return page.evaluate(() =>
     (window.__zmanagerE2E?.ipcCalls ?? []).filter(
       (call) => call.cmd === "start_native_file_drag",
-    ),
-  );
-}
-
-async function preparedNativeDragCalls(page: Page): Promise<IpcCall[]> {
-  return page.evaluate(() =>
-    (window.__zmanagerE2E?.ipcCalls ?? []).filter(
-      (call) => call.cmd === "prepare_native_file_drag",
     ),
   );
 }

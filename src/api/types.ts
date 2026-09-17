@@ -597,26 +597,21 @@ export type NativeFileDragRequest = {
   stripComponents: number;
 };
 
-export type NativeFileDragPreparationResponse = {
-  sessionId: string;
-  job: StartJobResponseDto;
-  draggedEntries: string[];
-};
-
-export type NativeFileDragStartRequest = {
-  sessionId: string;
-};
-
-export type NativeFileDragFinishRequest = {
-  jobId: string;
-  outcome: "dropped" | "cancelled" | "noDrop";
-};
-
 export type NativeFileDragResponse = {
   outcome: "pending" | "dropped" | "cancelled" | "noDrop";
   sessionId: string | null;
   jobId: string;
   draggedEntries: string[];
+};
+
+export type NativeFileDragAcceptanceResponse = {
+  acceptedJob: AcceptedJobEnvelopeDto;
+  operationId: string;
+};
+
+export type StartNativeFileDragRequest = {
+  operationId: string;
+  request: NativeFileDragRequest;
 };
 
 export type DefaultHandlerEntryDto = {
@@ -692,6 +687,28 @@ export type StartJobResponseDto = {
   kind: JobKind;
   status: JobStatus;
   createdAt: string;
+};
+
+export type AcceptedJobOrigin =
+  | "mainWindow"
+  | "quickAction"
+  | "localSendAutoExtract"
+  | "nativeDrag"
+  | "passwordRetry";
+
+export type AcceptedJobEnvelopeDto = {
+  acceptanceRevision: string;
+  job: StartJobResponseDto;
+  origin: AcceptedJobOrigin;
+};
+
+export type AcceptedJobAckRequest = {
+  jobId: string;
+  acceptanceRevision: string;
+};
+
+export type HandoffCoordinatorLeaseRequest = {
+  leaseId: string;
 };
 
 export type BaseJobSnapshotDto = {
@@ -773,6 +790,15 @@ export type JobRetryDescriptorDto =
       actionId: string;
       archivePath: string;
       entryPaths: string[];
+    }
+  | {
+      retryKind: "nativeDrag";
+      actionId: string;
+      archivePath: string;
+      entryPaths: string[];
+      selectAll: boolean;
+      excludedEntryPaths: string[];
+      stripComponents: number;
     };
 
 export type JobSnapshotEnvelopeDto = { subscriptionId: string; revision: string; payload: DesktopJobSnapshotDto };

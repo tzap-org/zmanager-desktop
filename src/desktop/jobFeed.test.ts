@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { DesktopJobSnapshotDto, JobSnapshotEnvelopeDto } from "../api/types";
+import type { AcceptedJobEnvelopeDto, DesktopJobSnapshotDto, JobSnapshotEnvelopeDto } from "../api/types";
 
 const mocks = vi.hoisted(() => ({
   channels: [] as Array<{ onmessage?: (message: unknown) => void }>,
   subscribeJob: vi.fn(),
   subscribeJobCatalog: vi.fn(),
+  subscribeAcceptedJobs: vi.fn(),
+  acknowledgeAcceptedJob: vi.fn(),
   ackSubscription: vi.fn(),
   unsubscribeJob: vi.fn(),
 }));
@@ -18,6 +20,8 @@ vi.mock("@tauri-apps/api/core", () => ({
 vi.mock("../api/commands", () => ({
   subscribeJob: mocks.subscribeJob,
   subscribeJobCatalog: mocks.subscribeJobCatalog,
+  subscribeAcceptedJobs: mocks.subscribeAcceptedJobs,
+  acknowledgeAcceptedJob: mocks.acknowledgeAcceptedJob,
   ackSubscription: mocks.ackSubscription,
   unsubscribeJob: mocks.unsubscribeJob,
 }));
@@ -35,7 +39,9 @@ describe("job feed", () => {
     vi.clearAllMocks();
     mocks.subscribeJob.mockResolvedValue("subscription-1");
     mocks.subscribeJobCatalog.mockResolvedValue("catalog-1");
+    mocks.subscribeAcceptedJobs.mockResolvedValue("accepted-1");
     mocks.ackSubscription.mockResolvedValue(undefined);
+    mocks.acknowledgeAcceptedJob.mockResolvedValue(undefined);
     mocks.unsubscribeJob.mockResolvedValue(undefined);
   });
 
@@ -114,5 +120,22 @@ describe("job feed", () => {
     expect(onConnectionError).toHaveBeenCalledOnce();
     await subscription.unsubscribe();
     vi.useRealTimers();
+  });
+
+  it("replays accepted Jobs from the last acknowledged revision and acknowledges after presentation", async () => {
+    mocks.subscribeAcceptedJobs
+      .mockResolvedValueOnce("subscription-accepted-1")
+      .mockResolvedValueOnce("subscription-accepted-2");
+    const accept = vi.fn(async () => true);
+    const subscription = await createTauriJobFeed().subscribeAcceptedJobs(accept);
+    const accepted: AcceptedJobEnvelopeDto = {
+      acceptanceRevision: "9",
+      job: { jobId: "job-9", kind: "zipExtract", status: "queued", createdAt: "2026-01-01T00:00:00Z" },
+      origin: "nativeDrag",
+    };
+    mocks.channels[0].onmessage?.(accepted);
+    await vi.waitFor(() => expect(mocks.acknowledgeAcceptedJob).toHaveBeenCalledWith({ jobId: "job-9", acceptanceRevision: "9" }));
+    expect(accept).toHaveBeenCalledWith(accepted);
+    await subscription.unsubscribe();
   });
 });

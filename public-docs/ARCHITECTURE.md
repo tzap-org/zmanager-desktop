@@ -27,6 +27,20 @@ browsing, selection, drops, or the commands used to launch another operation.
 Job Handoff is a one-way accepted-start action, not a state machine that follows
 the Job to completion.
 
+All durable extraction starts use a replayable accepted-Job feed. Rust accepts
+the Job before native-drag preparation, and the shell presents exactly one task
+window by Job ID; feed acknowledgements are sent only after presentation. The
+same seam covers Main Window and Quick Action extraction, native drag-out,
+LocalSend auto-extract while a shell coordinator lease is live, and password
+retry replacement Jobs. Preview is the explicit temporary-extraction
+exception.
+
+Native drag completion, cancellation, timeout, release, partial failure, and
+shutdown are owned by the Rust Job Registry. Platform adapters provide only
+the operating-system drag mechanics, while the shared Job cancellation token
+interrupts native streams. Progress counts unique logical files and bytes,
+including nested files represented by one macOS file promise.
+
 ```text
 Main Window
   browse/select/configure

@@ -11,6 +11,8 @@
     "allow-dismiss-job",
     "allow-start-extract",
     "allow-test-archive",
+    "allow-accept-native-file-drag",
+    "allow-start-native-file-drag",
     "allow-subscribe-job",
     "allow-ack-subscription",
     "allow-unsubscribe-job",

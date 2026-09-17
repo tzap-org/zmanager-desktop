@@ -220,6 +220,10 @@ pub(crate) trait NativeFileDragAdapter {
         items: &[NativeFileDragItem],
         stream_provider: NativeFileDragStreamProvider,
         registry: &crate::native_drag_session::NativeDragSessionRegistry,
+        cancellation: zmanager_core::jobs::CancellationToken,
+        job_id: &str,
+        job_kind: crate::job_dto::JobKindDto,
+        job_registry: &crate::job_registry::JobRegistry,
     ) -> Result<NativeFileDragStart, NativeFileDragError>;
 }
 
@@ -293,8 +297,12 @@ pub fn start_native_file_drag(
     items: &[NativeFileDragItem],
     stream_provider: NativeFileDragStreamProvider,
     registry: &crate::native_drag_session::NativeDragSessionRegistry,
+    cancellation: zmanager_core::jobs::CancellationToken,
+    job_id: &str,
+    job_kind: crate::job_dto::JobKindDto,
+    job_registry: &crate::job_registry::JobRegistry,
 ) -> Result<NativeFileDragStart, NativeFileDragError> {
-    ActivePlatform::start_native_file_drag(window, items, stream_provider, registry)
+    ActivePlatform::start_native_file_drag(window, items, stream_provider, registry, cancellation, job_id, job_kind, job_registry)
 }
 
 pub fn handle_run_event(event: &tauri::RunEvent, inbox: &NativeLaunchInbox) {

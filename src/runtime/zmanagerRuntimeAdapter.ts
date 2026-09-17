@@ -58,7 +58,6 @@ import {
 } from "../app/controllers/extractStartController";
 import { createJobHandoffController } from "../app/controllers/jobHandoffController";
 import { createJobTerminationWatcher } from "../app/controllers/jobTerminationWatcher";
-import { createNativeDragController } from "../app/controllers/nativeDragController";
 import {
   createQuickActionController,
 } from "../app/controllers/quickActionController";
@@ -283,6 +282,7 @@ import {
   cancelShare,
   removeShare,
   getJobSnapshot,
+  registerHandoffCoordinator,
   validateTzapSigningIdentity as validateTzapSigningIdentityCommand,
   generateAccountRecipientKey,
   generateAccountSigningIdentity,
@@ -373,9 +373,7 @@ import { localSendTrustDesktopAdapter } from "../desktop/localSendTrust";
 import { listenLocalSendEvents } from "../desktop/localSendEvents";
 import { listenShareQueueChanged } from "../desktop/shareQueueEvents";
 import {
-  finishNativeDrag,
-  listenNativeFileDragOutcomes,
-  prepareNativeFileDrag,
+  acceptNativeFileDrag,
   startNativeFileDrag,
 } from "../desktop/nativeDrag";
 import {
@@ -504,7 +502,6 @@ let activeExtractDialogForm: ExtractDialogFormSnapshot = createExtractDialogForm
 let activeExtractDialogMessage = "";
 
 let dropUnlisten: (() => void) | null = null;
-const pendingNativeDragCounts = new Map<string, { count: number; jobId: string }>();
 
 let normalWorkspaceRendered = false;
 const disposableTaskLifecycle = createDisposableTaskLifecycle();
@@ -558,11 +555,6 @@ const jobHandoff = createJobHandoffController({
     }
   },
   reportPresentationFailure: reportJobPresentationFailure,
-});
-const nativeDragController = createNativeDragController({
-  prepare: prepareNativeFileDrag,
-  handoffAcceptedJob: (job) => jobHandoff.handoffAcceptedJob(job),
-  start: (sessionId) => startNativeFileDrag({ sessionId }),
 });
 let latestHealthcheck: HealthcheckResponse | null = null;
 let latestContract: ProjectContract | null = null;
@@ -891,6 +883,8 @@ const jobFeed = createTauriJobFeed({
   },
 });
 let catalogSubscription: JobFeedSubscription | null = null;
+let acceptedJobSubscription: JobFeedSubscription | null = null;
+let handoffCoordinatorLease: string | null = null;
 
 /**
  * Lets code in the Main Window learn when a specific Job it started (and
@@ -912,6 +906,13 @@ async function subscribeToJobCatalog(): Promise<void> {
     jobTerminationWatcher.observe(catalog);
     maybeCloseQuickActionOnlyCoordinator();
   });
+}
+
+async function subscribeToAcceptedJobs(): Promise<void> {
+  if (acceptedJobSubscription) return;
+  acceptedJobSubscription = await jobFeed.subscribeAcceptedJobs((accepted) => (
+    jobHandoff.handoffAcceptedJob(accepted)
+  ));
 }
 let activeArchiveLoadTiming: {
   startedAt: number;
@@ -994,9 +995,9 @@ const archiveTestController = createArchiveTestController({
   hasCurrentArchive: () => Boolean(archiveCurrentPath()),
   initialPassword: () => undefined,
   runTestArchive,
-  handoffAcceptedJob: (response, resetSubmittedState) => (
-    jobHandoff.handoffAcceptedJob(response, { resetSubmittedState })
-  ),
+  handoffAcceptedJob: async (response, resetSubmittedState) => {
+    await jobHandoff.handoffAcceptedJob(response, { resetSubmittedState });
+  },
   resetSubmittedState: () => {
     archiveWorkspace.resetAfterAcceptedOperation();
     publishReactSnapshot();
@@ -1051,9 +1052,9 @@ const extractStartController = createExtractStartController({
   },
   recordDestination: recordExtractDestinationHistory,
   closeExtractDialog: closeReactDialog,
-  handoffAcceptedJob: (response, resetSubmittedState) => (
-    jobHandoff.handoffAcceptedJob(response, { resetSubmittedState })
-  ),
+  handoffAcceptedJob: async (response, resetSubmittedState) => {
+    await jobHandoff.handoffAcceptedJob(response, { resetSubmittedState });
+  },
   resetSubmittedState: () => {
     archiveWorkspace.resetAfterAcceptedOperation();
     extractWorkspace.setOptions({ passwordPromptOpen: false });
@@ -1133,7 +1134,9 @@ const quickActionController = createQuickActionController({
   promptForCommandRetry: jobPasswordPrompts.promptForCommandRetry,
   recordCreateDestination: recordCreateDestinationHistory,
   recordExtractDestination: recordExtractDestinationHistory,
-  handoffAcceptedJob: (response) => jobHandoff.handoffAcceptedJob(response),
+  handoffAcceptedJob: async (response) => {
+    await jobHandoff.handoffAcceptedJob(response);
+  },
   showCreateWorkspace,
   readCreateSnapshot: () => createWorkspace.getSnapshot(),
   addCreateSources: (sources) => createWorkspace.addSources(sources).snapshot,
@@ -1859,13 +1862,12 @@ async function startNativeDragOut(entryPath: string) {
     publishArchiveSnapshot(archiveWorkspace.setPathSelected(entryPath, true));
   }
 
-  let password: string | undefined;
-  let requestResult = archiveWorkspace.buildNativeDragRequest({ entryPath, password });
+  const requestResult = archiveWorkspace.buildNativeDragRequest({ entryPath });
   if (!requestResult.ok) {
     setOperationalMessage("preview.selectEntryToDrag");
     return;
   }
-  let request = requestResult.request;
+  const request = requestResult.request;
 
   setOperationalMessage("preview.preparingDrag", {
     count: request.selectAll
@@ -1873,51 +1875,23 @@ async function startNativeDragOut(entryPath: string) {
       : request.entryPaths.length,
   });
 
-  while (true) {
-    try {
-      const { preparation, response } = await nativeDragController.start(request);
-      archiveWorkspace.clearPasswordRetry();
-      if (response.outcome === "pending") {
-        if (response.sessionId) {
-          pendingNativeDragCounts.set(response.sessionId, {
-            count: preparation.draggedEntries.length,
-            jobId: response.jobId,
-          });
-        }
-        setOperationalMessage("preview.dragPromiseStarted", {
-          count: preparation.draggedEntries.length,
-        });
-      } else if (response.outcome === "cancelled") {
-        setOperationalMessage("preview.dragCancelled");
-      } else if (response.outcome === "noDrop") {
-        setOperationalMessage("preview.dragNoDrop");
-      } else {
-        setOperationalMessage("preview.draggedOut", { count: preparation.draggedEntries.length });
-      }
-      return;
-    } catch (error) {
-      const commandError = asCommandError(error);
-      const retry = requestArchivePasswordRetry("nativeDragOut", commandError);
-      if (retry) {
-        const nextPassword = promptForArchivePasswordRetry(retry);
-        if (!nextPassword) {
-          archiveWorkspace.clearPasswordRetry();
-          setOperationalStatus(commandError?.message ?? message("preview.unableStartDrag"));
-          return;
-        }
-        password = nextPassword;
-        requestResult = archiveWorkspace.buildNativeDragRequest({ entryPath, password });
-        if (!requestResult.ok) {
-          setOperationalMessage("preview.selectEntryToDrag");
-          return;
-        }
-        request = requestResult.request;
-        continue;
-      }
-
-      setOperationalStatus(commandError?.message ?? message("preview.unableStartDrag"));
-      return;
+  try {
+    const accepted = await acceptNativeFileDrag(request);
+    await jobHandoff.handoffAcceptedJob(accepted.acceptedJob);
+    const response = await startNativeFileDrag({ operationId: accepted.operationId, request });
+    archiveWorkspace.clearPasswordRetry();
+    if (response.outcome === "pending") {
+      setOperationalMessage("preview.dragPromiseStarted", { count: response.draggedEntries.length });
+    } else if (response.outcome === "cancelled") {
+      setOperationalMessage("preview.dragCancelled");
+    } else if (response.outcome === "noDrop") {
+      setOperationalMessage("preview.dragNoDrop");
+    } else {
+      setOperationalMessage("preview.draggedOut", { count: response.draggedEntries.length });
     }
+  } catch (error) {
+    const commandError = asCommandError(error);
+    setOperationalStatus(commandError?.message ?? message("preview.unableStartDrag"));
   }
 }
 
@@ -4225,29 +4199,26 @@ async function initializeDeferredDesktopRuntime() {
   await listenLocalSendEvents(({ payload }) => {
     handleLocalSendEvent(payload);
   });
+  if (!handoffCoordinatorLease) {
+    handoffCoordinatorLease = await registerHandoffCoordinator();
+  }
   await shareQueueController.initialize();
   await listenNativeMenuCommands((commandId) => runRoutedCommand(commandId));
-  await listenNativeFileDragOutcomes(({ payload }) => {
-    const pending = pendingNativeDragCounts.get(payload.sessionId);
-    pendingNativeDragCounts.delete(payload.sessionId);
-    if (pending) {
-      void finishNativeDrag({
-        jobId: pending.jobId,
-        outcome: payload.outcome === "cancelled" ? "cancelled" : "dropped",
-      });
-    }
-    if (payload.outcome === "cancelled") {
-      setOperationalMessage("preview.dragCancelled");
-    } else {
-      setOperationalMessage("preview.draggedOut", { count: pending?.count ?? 0 });
-    }
-  });
   await subscribeToJobCatalog().catch((error) => {
     diagnostics.record({
       scope: "jobCatalog",
       name: "subscriptionFailed",
       fields: {
         error: unknownErrorMessage(error, "Unable to subscribe to the Job catalog."),
+      },
+    });
+  });
+  await subscribeToAcceptedJobs().catch((error) => {
+    diagnostics.record({
+      scope: "acceptedJobs",
+      name: "subscriptionFailed",
+      fields: {
+        error: unknownErrorMessage(error, "Unable to subscribe to accepted Jobs."),
       },
     });
   });
