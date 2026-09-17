@@ -337,6 +337,11 @@ export async function runJobToCompletion(command: string, request: Record<string
   if ("error" in outcome) {
     throw new Error(`${command} failed: ${outcome.error}`);
   }
+  // Direct command tests still publish accepted-job events, so the desktop
+  // runtime may have opened a task window even though this helper observes
+  // completion through the catalog. Do not leak those windows into the next
+  // native spec.
+  await closeTaskWindow(`task-${outcome.jobId.replace(/[^a-zA-Z0-9-]/g, "-")}`);
   return outcome;
 }
 
@@ -376,31 +381,42 @@ export async function openTaskWindowForJob(started: StartedTaskJob): Promise<str
     createdAt: started.createdAt,
   }).toString()}`;
 
-  await browser.tauri.execute(
-    async ({ core }, windowLabel: string, windowUrl: string) => core.invoke("plugin:webview|create_webview_window", {
-      options: {
-        label: windowLabel,
-        url: windowUrl,
-        title: "ZManager test task",
-        width: 620,
-        height: 460,
-        minWidth: 520,
-        minHeight: 380,
-        center: true,
-        resizable: true,
-        visible: true,
-      },
-    }),
-    label,
-    url,
-  );
-  await browser.waitUntil(
-    async () => (await browser.tauri.listWindows()).includes(label),
-    { timeout: 10_000, timeoutMsg: `task window ${label} was not created` },
-  );
-  await browser.tauri.switchWindow(label);
-  await $("[data-task-content]").waitForExist({ timeout: 10_000 });
-  return label;
+  try {
+    // The accepted-job feed normally presents this window for us. Reuse it
+    // when it is already present; creating another webview with the same
+    // label fails on Linux WebKitGTK and also leaves the original window
+    // behind when the helper exits early.
+    if (!(await browser.tauri.listWindows()).includes(label)) {
+      await browser.tauri.execute(
+        async ({ core }, windowLabel: string, windowUrl: string) => core.invoke("plugin:webview|create_webview_window", {
+          options: {
+            label: windowLabel,
+            url: windowUrl,
+            title: "ZManager test task",
+            width: 620,
+            height: 460,
+            minWidth: 520,
+            minHeight: 380,
+            center: true,
+            resizable: true,
+            visible: true,
+          },
+        }),
+        label,
+        url,
+      );
+    }
+    await browser.waitUntil(
+      async () => (await browser.tauri.listWindows()).includes(label),
+      { timeout: 10_000, timeoutMsg: `task window ${label} was not created` },
+    );
+    await browser.tauri.switchWindow(label);
+    await $("[data-task-content]").waitForExist({ timeout: 10_000 });
+    return label;
+  } catch (error) {
+    await closeTaskWindow(label);
+    throw error;
+  }
 }
 
 export async function closeTaskWindow(label: string): Promise<void> {
