@@ -222,6 +222,8 @@ fn main() {
             commands::validate_tzap_signing_identity,
             commands::preview_entry,
             commands::start_native_file_drag,
+            commands::prepare_native_file_drag,
+            commands::finish_native_file_drag,
             commands::cleanup_preview_roots,
             commands::test_archive,
             commands::detect_archive_format,

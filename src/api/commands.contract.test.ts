@@ -295,16 +295,26 @@ const COMMAND_WRAPPERS = [
   },
   {
     command: "start_native_file_drag",
+    request: { sessionId: "prepared-drag-1" },
+    call: () => api.runStartNativeFileDrag({ sessionId: "prepared-drag-1" }),
+  },
+  {
+    command: "prepare_native_file_drag",
     request: {
       archivePath: "C:/archives/demo.zip",
       entryPaths: ["root.txt"],
       stripComponents: 0,
     },
-    call: () => api.runStartNativeFileDrag({
+    call: () => api.runPrepareNativeFileDrag({
       archivePath: "C:/archives/demo.zip",
       entryPaths: ["root.txt"],
       stripComponents: 0,
     }),
+  },
+  {
+    command: "finish_native_file_drag",
+    request: { jobId: "job-1", outcome: "dropped" },
+    call: () => api.finishNativeFileDrag({ jobId: "job-1", outcome: "dropped" }),
   },
   { command: "cleanup_preview_roots", call: () => api.cleanupPreviewRoots() },
   {

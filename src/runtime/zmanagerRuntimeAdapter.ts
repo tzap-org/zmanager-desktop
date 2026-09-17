@@ -58,6 +58,7 @@ import {
 } from "../app/controllers/extractStartController";
 import { createJobHandoffController } from "../app/controllers/jobHandoffController";
 import { createJobTerminationWatcher } from "../app/controllers/jobTerminationWatcher";
+import { createNativeDragController } from "../app/controllers/nativeDragController";
 import {
   createQuickActionController,
 } from "../app/controllers/quickActionController";
@@ -372,7 +373,9 @@ import { localSendTrustDesktopAdapter } from "../desktop/localSendTrust";
 import { listenLocalSendEvents } from "../desktop/localSendEvents";
 import { listenShareQueueChanged } from "../desktop/shareQueueEvents";
 import {
+  finishNativeDrag,
   listenNativeFileDragOutcomes,
+  prepareNativeFileDrag,
   startNativeFileDrag,
 } from "../desktop/nativeDrag";
 import {
@@ -501,7 +504,7 @@ let activeExtractDialogForm: ExtractDialogFormSnapshot = createExtractDialogForm
 let activeExtractDialogMessage = "";
 
 let dropUnlisten: (() => void) | null = null;
-const pendingNativeDragCounts = new Map<string, number>();
+const pendingNativeDragCounts = new Map<string, { count: number; jobId: string }>();
 
 let normalWorkspaceRendered = false;
 const disposableTaskLifecycle = createDisposableTaskLifecycle();
@@ -555,6 +558,11 @@ const jobHandoff = createJobHandoffController({
     }
   },
   reportPresentationFailure: reportJobPresentationFailure,
+});
+const nativeDragController = createNativeDragController({
+  prepare: prepareNativeFileDrag,
+  handoffAcceptedJob: (job) => jobHandoff.handoffAcceptedJob(job),
+  start: (sessionId) => startNativeFileDrag({ sessionId }),
 });
 let latestHealthcheck: HealthcheckResponse | null = null;
 let latestContract: ProjectContract | null = null;
@@ -1867,21 +1875,24 @@ async function startNativeDragOut(entryPath: string) {
 
   while (true) {
     try {
-      const response = await startNativeFileDrag(request);
+      const { preparation, response } = await nativeDragController.start(request);
       archiveWorkspace.clearPasswordRetry();
       if (response.outcome === "pending") {
         if (response.sessionId) {
-          pendingNativeDragCounts.set(response.sessionId, response.draggedEntries.length);
+          pendingNativeDragCounts.set(response.sessionId, {
+            count: preparation.draggedEntries.length,
+            jobId: response.jobId,
+          });
         }
         setOperationalMessage("preview.dragPromiseStarted", {
-          count: response.draggedEntries.length,
+          count: preparation.draggedEntries.length,
         });
       } else if (response.outcome === "cancelled") {
         setOperationalMessage("preview.dragCancelled");
       } else if (response.outcome === "noDrop") {
         setOperationalMessage("preview.dragNoDrop");
       } else {
-        setOperationalMessage("preview.draggedOut", { count: response.draggedEntries.length });
+        setOperationalMessage("preview.draggedOut", { count: preparation.draggedEntries.length });
       }
       return;
     } catch (error) {
@@ -4217,12 +4228,18 @@ async function initializeDeferredDesktopRuntime() {
   await shareQueueController.initialize();
   await listenNativeMenuCommands((commandId) => runRoutedCommand(commandId));
   await listenNativeFileDragOutcomes(({ payload }) => {
-    const count = pendingNativeDragCounts.get(payload.sessionId) ?? 0;
+    const pending = pendingNativeDragCounts.get(payload.sessionId);
     pendingNativeDragCounts.delete(payload.sessionId);
+    if (pending) {
+      void finishNativeDrag({
+        jobId: pending.jobId,
+        outcome: payload.outcome === "cancelled" ? "cancelled" : "dropped",
+      });
+    }
     if (payload.outcome === "cancelled") {
       setOperationalMessage("preview.dragCancelled");
     } else {
-      setOperationalMessage("preview.draggedOut", { count });
+      setOperationalMessage("preview.draggedOut", { count: pending?.count ?? 0 });
     }
   });
   await subscribeToJobCatalog().catch((error) => {

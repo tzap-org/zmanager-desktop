@@ -53,6 +53,8 @@ fn main() {
         "validate_tzap_signing_identity",
         "preview_entry",
         "start_native_file_drag",
+        "prepare_native_file_drag",
+        "finish_native_file_drag",
         "cleanup_preview_roots",
         "test_archive",
         "detect_archive_format",

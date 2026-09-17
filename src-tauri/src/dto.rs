@@ -626,15 +626,37 @@ pub struct NativeFileDragRequest {
     pub strip_components: usize,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeFileDragStartRequest {
+    pub session_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeFileDragFinishRequest {
+    pub job_id: String,
+    pub outcome: NativeFileDragOutcomeDto,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeFileDragPreparationResponse {
+    pub session_id: String,
+    pub job: crate::job_dto::StartJobResponseDto,
+    pub dragged_entries: Vec<String>,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeFileDragResponse {
     pub outcome: NativeFileDragOutcomeDto,
     pub session_id: Option<String>,
+    pub job_id: String,
     pub dragged_entries: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum NativeFileDragOutcomeDto {
     Pending,

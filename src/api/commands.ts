@@ -31,7 +31,10 @@ import type {
   JobCatalogEnvelopeDto,
   JobSnapshotEnvelopeDto,
   NativeFileDragRequest,
+  NativeFileDragPreparationResponse,
   NativeFileDragResponse,
+  NativeFileDragFinishRequest,
+  NativeFileDragStartRequest,
   PauseJobRequest,
   PlanCreateRequest,
   PreviewEntryRequest,
@@ -302,11 +305,25 @@ export async function runPreviewEntry(request: PreviewEntryRequest): Promise<Pre
 }
 
 export async function runStartNativeFileDrag(
-  request: NativeFileDragRequest,
+  request: NativeFileDragStartRequest,
 ): Promise<NativeFileDragResponse> {
   return invoke<NativeFileDragResponse>("start_native_file_drag", {
     request,
   });
+}
+
+export async function runPrepareNativeFileDrag(
+  request: NativeFileDragRequest,
+): Promise<NativeFileDragPreparationResponse> {
+  return invoke<NativeFileDragPreparationResponse>("prepare_native_file_drag", {
+    request,
+  });
+}
+
+export async function finishNativeFileDrag(
+  request: NativeFileDragFinishRequest,
+): Promise<void> {
+  return invoke<void>("finish_native_file_drag", { request });
 }
 
 export async function cleanupPreviewRoots(): Promise<void> {

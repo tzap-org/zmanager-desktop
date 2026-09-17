@@ -21,7 +21,15 @@ pub struct NativeDragSessionRegistry(Arc<Mutex<RegistryState>>);
 struct RegistryState {
     next_id: u64,
     sessions: HashMap<String, DragSession>,
+    prepared: HashMap<String, PreparedDrag>,
     shutdown: bool,
+}
+
+pub struct PreparedDrag {
+    pub job_id: String,
+    pub items: Vec<NativeFileDragItem>,
+    pub stream_provider: NativeFileDragStreamProvider,
+    created: Instant,
 }
 
 struct DragSession {
@@ -42,7 +50,36 @@ pub struct NativeFilePromiseDescriptor {
 
 impl NativeDragSessionRegistry {
     pub fn new() -> Self {
-        Self(Arc::new(Mutex::new(RegistryState { next_id: 1, sessions: HashMap::new(), shutdown: false })))
+        Self(Arc::new(Mutex::new(RegistryState {
+            next_id: 1,
+            sessions: HashMap::new(),
+            prepared: HashMap::new(),
+            shutdown: false,
+        })))
+    }
+
+    pub fn prepare(
+        &self,
+        job_id: String,
+        items: Vec<NativeFileDragItem>,
+        stream_provider: NativeFileDragStreamProvider,
+    ) -> Result<String, NativeFileDragError> {
+        if items.is_empty() {
+            return Err(NativeFileDragError::invalid_request("Native drag has no items"));
+        }
+        let mut state = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.retain_live();
+        if state.shutdown || state.prepared.len() >= MAX_SESSIONS {
+            return Err(NativeFileDragError::new("Native drag capacity is unavailable", None::<String>));
+        }
+        let id = format!("prepared-drag-{}-{}", std::process::id(), state.next_id);
+        state.next_id = state.next_id.saturating_add(1);
+        state.prepared.insert(id.clone(), PreparedDrag { job_id, items, stream_provider, created: Instant::now() });
+        Ok(id)
+    }
+
+    pub fn take_prepared(&self, id: &str) -> Option<PreparedDrag> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).prepared.remove(id)
     }
 
     pub fn create(&self, items: &[NativeFileDragItem], stream_provider: NativeFileDragStreamProvider) -> Result<String, NativeFileDragError> {
@@ -133,6 +170,7 @@ impl NativeDragSessionRegistry {
             session.cancelled.store(true, Ordering::Release);
         }
         state.sessions.clear();
+        state.prepared.clear();
     }
 
     #[cfg(test)]
@@ -284,6 +322,7 @@ impl RegistryState {
             }
             live
         });
+        self.prepared.retain(|_, prepared| prepared.created.elapsed() <= SESSION_TIMEOUT);
     }
 }
 

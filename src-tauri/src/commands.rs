@@ -21,7 +21,9 @@ use crate::{
     constants, destination_reservation,
     dto::{
         AckSubscriptionRequest, ArchiveEntryDto, ArchiveEntryKindDto, CreatePlanEntryDto, CreatePlanResponse, DestinationCollisionStrategyDto,
-        NativeFileDragOutcomeDto, NativeFileDragRequest, NativeFileDragResponse, PauseJobRequest, PlanCreateRequest, PreviewEntryRequest, PreviewEntryResponse,
+        NativeFileDragFinishRequest, NativeFileDragOutcomeDto, NativeFileDragPreparationResponse, NativeFileDragRequest, NativeFileDragResponse,
+        NativeFileDragStartRequest, PauseJobRequest,
+        PlanCreateRequest, PreviewEntryRequest, PreviewEntryResponse,
         ProjectContract, ProjectIntegrationContract, ResumeJobRequest, StartCreateRequest, StartExtractRequest, SubscribeJobRequest, SubscriptionRequest,
         SystemFileIconRequest, SystemFileIconResponse, TestArchiveRequest, TzapRestorePolicyDto, ValidateDirectoryRequest, ValidateDirectoryResponse,
     },
@@ -1003,16 +1005,7 @@ fn start_extract_internal_with_recipient_key_and_spawner(
     if recipient_private_key.is_some() && format_kind != zmanager_core::archive_format::ArchiveFormatKind::Tzap {
         return Err(CommandErrorDto::invalid_request("Recipient-key extraction is available only for TZAP archives"));
     }
-    let kind = match format_kind {
-        zmanager_core::archive_format::ArchiveFormatKind::Zip | zmanager_core::archive_format::ArchiveFormatKind::SplitZip => JobKindDto::ZipExtract,
-        zmanager_core::archive_format::ArchiveFormatKind::TarZst => JobKindDto::TarZstdExtract,
-        zmanager_core::archive_format::ArchiveFormatKind::SevenZ => JobKindDto::SevenZExtract,
-        zmanager_core::archive_format::ArchiveFormatKind::Rar => JobKindDto::RarExtract,
-        zmanager_core::archive_format::ArchiveFormatKind::Tzap => JobKindDto::TzapExtract,
-        zmanager_core::archive_format::ArchiveFormatKind::AppleArchive => JobKindDto::AppleArchiveExtract,
-        zmanager_core::archive_format::ArchiveFormatKind::RawStream => JobKindDto::RawStreamExtract,
-        _ => JobKindDto::ArchiveExtract,
-    };
+    let kind = extract_job_kind_for_archive(&archive_path);
 
     let (response, token) = registry.try_create_job(kind).map_err(subscription_error)?;
     registry
@@ -1193,14 +1186,13 @@ pub fn preview_entry(
 }
 
 #[tauri::command]
-pub fn start_native_file_drag(
-    window: tauri::WebviewWindow,
+pub fn prepare_native_file_drag(
     request: NativeFileDragRequest,
-    _registry: State<'_, JobRegistry>,
+    registry: State<'_, JobRegistry>,
     archive_index_registry: State<'_, ArchiveIndexRegistry>,
     drag_registry: State<'_, crate::native_drag_session::NativeDragSessionRegistry>,
     diagnostics: State<'_, crate::diagnostics::DiagnosticLog>,
-) -> Result<NativeFileDragResponse, CommandErrorDto> {
+) -> Result<NativeFileDragPreparationResponse, CommandErrorDto> {
     let started_at = Instant::now();
     let archive_path = ensure_non_empty_path(request.archive_path, "archivePath")?;
     let entry_paths = if request.select_all { normalize_entry_paths(request.entry_paths) } else { normalize_optional_entry_paths(Some(request.entry_paths))? };
@@ -1246,81 +1238,194 @@ pub fn start_native_file_drag(
             ("source", serde_json::Value::String(preparation_source.to_string())),
         ]),
     );
+    let kind = extract_job_kind_for_archive(&archive_path);
+    let (job, token) = registry.try_create_job(kind).map_err(subscription_error)?;
     let stream_archive_path = archive_path.clone();
     let stream_password = password.clone();
-    let successful_streams = Arc::new(Mutex::new(HashSet::<String>::new()));
-    let streamed_bytes = Arc::new(AtomicU64::new(0));
-    let stream_failure = Arc::new(Mutex::new(None::<CommandErrorDto>));
-    let provider_successes = Arc::clone(&successful_streams);
-    let provider_streamed_bytes = Arc::clone(&streamed_bytes);
-    let provider_failure = Arc::clone(&stream_failure);
+    let progress = Arc::new(NativeDragJobProgress {
+        registry: registry.inner().clone(),
+        job_id: job.job_id.clone(),
+        kind,
+        expected_entries: drag_items.len(),
+        token,
+        successful_streams: Mutex::new(HashSet::new()),
+        streamed_bytes: AtomicU64::new(0),
+    });
+    let provider_progress = Arc::clone(&progress);
     let stream_provider: crate::platform::NativeFileDragStreamProvider = Arc::new(move |entry_path, writer| {
+        if provider_progress.token.is_cancelled() {
+            return Err(crate::platform::NativeFileDragError::new("Native drag was cancelled", None::<String>));
+        }
+        provider_progress.registry.emit_direct_event(&provider_progress.job_id, JobEventDto {
+            event_type: JobEventKindDto::EntryStarted,
+            job_kind: Some(provider_progress.kind),
+            phase: None,
+            code: None,
+            hint: None,
+            severity: None,
+            retryable: None,
+            path: Some(entry_path.to_string()),
+            bytes: None,
+            total_bytes: None,
+            total_bytes_processed: None,
+            entries: None,
+            total_entries: Some(provider_progress.expected_entries),
+            message: None,
+        });
         let result = stream_native_drag_entry(&stream_archive_path, stream_password.as_deref(), entry_path, writer);
         match &result {
             Ok(written_bytes) => {
-                provider_successes.lock().unwrap_or_else(|error| error.into_inner()).insert(entry_path.to_string());
-                provider_streamed_bytes.fetch_add(*written_bytes, AtomicOrdering::Relaxed);
+                provider_progress.successful_streams.lock().unwrap_or_else(|error| error.into_inner()).insert(entry_path.to_string());
+                let total_streamed_bytes = provider_progress.streamed_bytes.fetch_add(*written_bytes, AtomicOrdering::Relaxed).saturating_add(*written_bytes);
+                provider_progress.registry.emit_direct_event(&provider_progress.job_id, JobEventDto {
+                    event_type: JobEventKindDto::EntryFinished,
+                    job_kind: Some(provider_progress.kind),
+                    phase: None,
+                    code: None,
+                    hint: None,
+                    severity: None,
+                    retryable: None,
+                    path: Some(entry_path.to_string()),
+                    bytes: Some(*written_bytes),
+                    total_bytes: None,
+                    total_bytes_processed: Some(total_streamed_bytes),
+                    entries: None,
+                    total_entries: Some(provider_progress.expected_entries),
+                    message: None,
+                });
             }
             Err(error) => {
-                let mut failure = provider_failure.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                if failure.is_none() {
-                    *failure = Some(error.clone());
-                }
+                provider_progress.registry.emit_direct_event(&provider_progress.job_id, JobEventDto::failed_from_command_error(provider_progress.kind, error.clone()));
             }
         }
         result.map_err(native_file_drag_error_from_command)
     });
+    let session_id = match drag_registry.prepare(job.job_id.clone(), drag_items.clone(), stream_provider) {
+        Ok(session_id) => session_id,
+        Err(error) => {
+            let mapped = map_native_file_drag_error(error);
+            registry.emit_direct_event(&job.job_id, JobEventDto::failed_from_command_error(kind, mapped.clone()));
+            return Err(mapped);
+        }
+    };
+    let _ = diagnostics.record(
+        "nativeDrag",
+        "jobPrepared",
+        crate::diagnostics::fields([
+            ("elapsedMs", serde_json::Value::from(u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX))),
+            ("jobKind", serde_json::Value::String(format!("{kind:?}"))),
+            ("preparedEntryCount", serde_json::Value::from(drag_items.len())),
+        ]),
+    );
+    Ok(NativeFileDragPreparationResponse { session_id, job, dragged_entries: drag_items.into_iter().map(|item| item.entry_path).collect() })
+}
 
-    let start = crate::platform::start_native_file_drag(&window, &drag_items, stream_provider, &drag_registry).map_err(|error| {
+#[tauri::command]
+pub fn start_native_file_drag(
+    window: tauri::WebviewWindow,
+    request: NativeFileDragStartRequest,
+    registry: State<'_, JobRegistry>,
+    drag_registry: State<'_, crate::native_drag_session::NativeDragSessionRegistry>,
+    diagnostics: State<'_, crate::diagnostics::DiagnosticLog>,
+) -> Result<NativeFileDragResponse, CommandErrorDto> {
+    let prepared = drag_registry
+        .take_prepared(&request.session_id)
+        .ok_or_else(|| CommandErrorDto::not_found("Native drag preparation expired", None))?;
+    let job_id = prepared.job_id.clone();
+    let dragged_entries = prepared.items.iter().map(|item| item.entry_path.clone()).collect::<Vec<_>>();
+    let snapshot = registry.current_job_snapshot(&job_id).ok_or_else(|| CommandErrorDto::not_found("Native drag Job is unavailable", None))?;
+    let kind = snapshot.kind;
+    registry.emit_direct_event(&job_id, JobEventDto {
+        event_type: JobEventKindDto::Started,
+        job_kind: Some(kind),
+        phase: None,
+        code: None,
+        hint: None,
+        severity: None,
+        retryable: None,
+        path: None,
+        bytes: None,
+        total_bytes: None,
+        total_bytes_processed: None,
+        entries: None,
+        total_entries: Some(prepared.items.len()),
+        message: None,
+    });
+    let start = crate::platform::start_native_file_drag(&window, &prepared.items, prepared.stream_provider, &drag_registry).map_err(|error| {
         let mapped = map_native_file_drag_error(error);
-        let _ = diagnostics.record(
-            "nativeDrag",
-            "failed",
-            crate::diagnostics::fields([
-                ("code", serde_json::Value::String(mapped.code.to_string())),
-                ("elapsedMs", serde_json::Value::from(u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX))),
-            ]),
-        );
+        registry.emit_direct_event(&job_id, JobEventDto::failed_from_command_error(kind, mapped.clone()));
         mapped
     })?;
-    if let Some(error) = stream_failure.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone() {
-        let _ = diagnostics.record(
-            "nativeDrag",
-            "streamFailed",
-            crate::diagnostics::fields([
-                ("code", serde_json::Value::String(error.code.to_string())),
-                ("elapsedMs", serde_json::Value::from(u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX))),
-            ]),
-        );
-        return Err(error);
-    }
-
-    let streamed_entry_count = successful_streams.lock().unwrap_or_else(|error| error.into_inner()).len();
-    let (mut outcome, session_id) = match start {
+    let (outcome, session_id) = match start {
         crate::platform::NativeFileDragStart::Pending { session_id } => (NativeFileDragOutcomeDto::Pending, Some(session_id)),
         crate::platform::NativeFileDragStart::Settled { outcome } => (map_native_file_drag_outcome(outcome), None),
     };
-    if matches!(outcome, NativeFileDragOutcomeDto::Dropped) && streamed_entry_count < drag_items.len() {
-        if streamed_entry_count == 0 {
-            outcome = NativeFileDragOutcomeDto::NoDrop;
-        } else {
-            return Err(CommandErrorDto::operation_failed(format!(
-                "The drop target materialized {streamed_entry_count} of {} dragged files.",
-                drag_items.len()
-            )));
-        }
+    if !matches!(outcome, NativeFileDragOutcomeDto::Pending) {
+        finish_native_drag_job(&registry, &job_id, outcome);
     }
     let _ = diagnostics.record(
         "nativeDrag",
-        "settled",
+        "started",
         crate::diagnostics::fields([
-            ("elapsedMs", serde_json::Value::from(u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX))),
-            ("outcome", serde_json::Value::String(format!("{outcome:?}").to_lowercase())),
-            ("streamedBytes", serde_json::Value::from(streamed_bytes.load(AtomicOrdering::Relaxed))),
-            ("streamedEntryCount", serde_json::Value::from(streamed_entry_count)),
+            ("jobKind", serde_json::Value::String(format!("{kind:?}"))),
+            ("outcome", serde_json::Value::String(format!("{outcome:?}"))),
         ]),
     );
-    Ok(NativeFileDragResponse { outcome, session_id, dragged_entries: drag_items.iter().map(|item| item.entry_path.clone()).collect() })
+    Ok(NativeFileDragResponse { outcome, session_id, job_id, dragged_entries })
+}
+
+#[tauri::command]
+pub fn finish_native_file_drag(
+    request: NativeFileDragFinishRequest,
+    registry: State<'_, JobRegistry>,
+) -> Result<(), CommandErrorDto> {
+    finish_native_drag_job(&registry, &request.job_id, request.outcome);
+    Ok(())
+}
+
+struct NativeDragJobProgress {
+    registry: JobRegistry,
+    job_id: String,
+    kind: JobKindDto,
+    expected_entries: usize,
+    token: CancellationToken,
+    successful_streams: Mutex<HashSet<String>>,
+    streamed_bytes: AtomicU64,
+}
+
+fn finish_native_drag_job(registry: &JobRegistry, job_id: &str, outcome: NativeFileDragOutcomeDto) {
+    let Some(snapshot) = registry.current_job_snapshot(job_id) else { return };
+    if snapshot.status.is_terminal() || matches!(outcome, NativeFileDragOutcomeDto::Pending) {
+        return;
+    }
+    if matches!(outcome, NativeFileDragOutcomeDto::Cancelled | NativeFileDragOutcomeDto::NoDrop)
+        || (matches!(outcome, NativeFileDragOutcomeDto::Dropped) && snapshot.progress_facts.processed_entries == 0)
+    {
+        registry.emit_direct_event(job_id, JobEventDto {
+            event_type: JobEventKindDto::Cancelled,
+            job_kind: Some(snapshot.kind),
+            phase: None,
+            code: Some(constants::COMMAND_ERROR_CANCELLED),
+            hint: None,
+            severity: Some(ErrorSeverityDto::Info),
+            retryable: Some(true),
+            path: None,
+            bytes: None,
+            total_bytes: None,
+            total_bytes_processed: None,
+            entries: None,
+            total_entries: None,
+            message: Some("Native drag-out ended without a drop.".to_string()),
+        });
+        return;
+    }
+    let entries = snapshot.progress_facts.processed_entries as usize;
+    let bytes = snapshot.progress_facts.processed_bytes;
+    let _ = registry.commit_completed(
+        job_id,
+        snapshot.kind,
+        JobTerminalSummaryDto { written_entries: entries, skipped_entries: None, written_bytes: bytes, warnings: Vec::new() },
+    );
 }
 
 #[tauri::command]
@@ -1789,6 +1894,19 @@ fn map_native_file_drag_outcome(outcome: crate::platform::NativeFileDragOutcome)
         crate::platform::NativeFileDragOutcome::Dropped => NativeFileDragOutcomeDto::Dropped,
         crate::platform::NativeFileDragOutcome::Cancelled => NativeFileDragOutcomeDto::Cancelled,
         crate::platform::NativeFileDragOutcome::NoDrop => NativeFileDragOutcomeDto::NoDrop,
+    }
+}
+
+fn extract_job_kind_for_archive(archive_path: &str) -> JobKindDto {
+    match zmanager_core::archive_format::detect_archive_format(archive_path) {
+        zmanager_core::archive_format::ArchiveFormatKind::Zip | zmanager_core::archive_format::ArchiveFormatKind::SplitZip => JobKindDto::ZipExtract,
+        zmanager_core::archive_format::ArchiveFormatKind::TarZst => JobKindDto::TarZstdExtract,
+        zmanager_core::archive_format::ArchiveFormatKind::SevenZ => JobKindDto::SevenZExtract,
+        zmanager_core::archive_format::ArchiveFormatKind::Rar => JobKindDto::RarExtract,
+        zmanager_core::archive_format::ArchiveFormatKind::Tzap => JobKindDto::TzapExtract,
+        zmanager_core::archive_format::ArchiveFormatKind::AppleArchive => JobKindDto::AppleArchiveExtract,
+        zmanager_core::archive_format::ArchiveFormatKind::RawStream => JobKindDto::RawStreamExtract,
+        _ => JobKindDto::ArchiveExtract,
     }
 }
 

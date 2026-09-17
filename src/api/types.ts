@@ -597,9 +597,25 @@ export type NativeFileDragRequest = {
   stripComponents: number;
 };
 
+export type NativeFileDragPreparationResponse = {
+  sessionId: string;
+  job: StartJobResponseDto;
+  draggedEntries: string[];
+};
+
+export type NativeFileDragStartRequest = {
+  sessionId: string;
+};
+
+export type NativeFileDragFinishRequest = {
+  jobId: string;
+  outcome: "dropped" | "cancelled" | "noDrop";
+};
+
 export type NativeFileDragResponse = {
   outcome: "pending" | "dropped" | "cancelled" | "noDrop";
   sessionId: string | null;
+  jobId: string;
   draggedEntries: string[];
 };
 

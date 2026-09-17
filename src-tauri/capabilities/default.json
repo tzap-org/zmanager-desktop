@@ -55,6 +55,8 @@
     "allow-verify-tzap-certificate",
     "allow-validate-tzap-signing-identity",
     "allow-start-native-file-drag",
+    "allow-prepare-native-file-drag",
+    "allow-finish-native-file-drag",
     "allow-preview-entry",
     "allow-cleanup-preview-roots",
     "allow-test-archive",
