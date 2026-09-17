@@ -223,6 +223,7 @@ pub(crate) trait NativeFileDragAdapter {
     ) -> Result<NativeFileDragStart, NativeFileDragError>;
 }
 
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) struct NativeFileDragJobContext<'a> {
     pub registry: &'a crate::native_drag_session::NativeDragSessionRegistry,
     pub cancellation: zmanager_core::jobs::CancellationToken,
