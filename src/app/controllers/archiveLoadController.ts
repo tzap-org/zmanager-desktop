@@ -95,9 +95,9 @@ export function createArchiveLoadController(options: ArchiveLoadControllerOption
     previousCursors: readonly (string | null)[] = [],
     query: string | null = null,
     renderUnchanged = true,
-  ): Promise<void> {
+  ): Promise<ArchiveChildrenPageDto | null> {
     const session = active;
-    if (!session) return;
+    if (!session) return null;
     const requestId = ++pageRequestId;
     const sort = options.workspace.getSnapshot().view.sort;
     const page = await (query === null ? options.getArchiveChildren({
@@ -115,7 +115,7 @@ export function createArchiveLoadController(options: ArchiveLoadControllerOption
       sortKey: sort.key,
       sortAscending: sort.ascending,
     }));
-    if (requestId !== pageRequestId || expectedGeneration !== generation || active?.sessionId !== page.sessionId) return;
+    if (requestId !== pageRequestId || expectedGeneration !== generation || active?.sessionId !== page.sessionId) return null;
     active = {
       ...session,
       parentPath: page.parentPath,
@@ -138,7 +138,7 @@ export function createArchiveLoadController(options: ArchiveLoadControllerOption
       ]),
     });
     if (!renderUnchanged && pageSignature === lastRenderedPageSignature) {
-      return;
+      return page;
     }
     lastRenderedPageSignature = pageSignature;
     options.renderPage(options.workspace.acceptPage({
@@ -152,6 +152,7 @@ export function createArchiveLoadController(options: ArchiveLoadControllerOption
       hasPrevious: previousCursors.length > 0,
       hasNext: Boolean(page.nextCursor),
     }));
+    return page;
   }
 
   async function loadArchive(request: ListArchiveRequest, loadOptions: ArchiveLoadOptions = {}): Promise<void> {
@@ -238,8 +239,8 @@ export function createArchiveLoadController(options: ArchiveLoadControllerOption
           pageNumber: 1,
           query: null,
         };
-        await acceptFolder(preservedFolder, requestGeneration);
-        if ((terminal.finalEntryCount ?? 0) === 0 && options.workspace.getSnapshot().entries.length === 0) {
+        const initialPage = await acceptFolder(preservedFolder, requestGeneration);
+        if ((terminal.finalEntryCount ?? 0) === 0 && initialPage?.childCount === 0) {
           options.renderPage(options.workspace.setBrowseState("empty"));
         }
         return;
@@ -270,12 +271,14 @@ export function createArchiveLoadController(options: ArchiveLoadControllerOption
 
   return {
     loadArchive,
-    loadFolder(parentPath) {
-      return acceptFolder(parentPath, generation);
+    async loadFolder(parentPath) {
+      await acceptFolder(parentPath, generation);
     },
-    loadSearch(query) {
+    async loadSearch(query) {
       const session = active;
-      return session ? acceptFolder(session.parentPath, generation, null, 1, [], query) : Promise.resolve();
+      if (session) {
+        await acceptFolder(session.parentPath, generation, null, 1, [], query);
+      }
     },
     async loadTreeFolder(parentPath) {
       const session = active;
@@ -296,10 +299,10 @@ export function createArchiveLoadController(options: ArchiveLoadControllerOption
         cursor = page.nextCursor;
       } while (cursor && loadedEntries < MAX_TREE_SUMMARY_ENTRIES);
     },
-    loadNextPage() {
+    async loadNextPage() {
       const session = active;
-      if (!session?.nextCursor) return Promise.resolve();
-      return acceptFolder(
+      if (!session?.nextCursor) return;
+      await acceptFolder(
         session.parentPath,
         generation,
         session.nextCursor,
@@ -308,12 +311,12 @@ export function createArchiveLoadController(options: ArchiveLoadControllerOption
         session.query,
       );
     },
-    loadPreviousPage() {
+    async loadPreviousPage() {
       const session = active;
-      if (!session || session.previousCursors.length === 0) return Promise.resolve();
+      if (!session || session.previousCursors.length === 0) return;
       const previousCursors = [...session.previousCursors];
       const cursor = previousCursors.pop() ?? null;
-      return acceptFolder(
+      await acceptFolder(
         session.parentPath,
         generation,
         cursor,
