@@ -7,7 +7,7 @@ import {
 import { extractHerePathOptions } from "./extractionPolicy";
 
 describe("extract flow helpers", () => {
-  it("prepares Extract Here to remove a wrapper root while preserving archive paths", () => {
+  it("prepares Extract Here to preserve the archive root in the current folder", () => {
     const input = {
       destinationBasePath: "C:/tmp",
       useSubfolder: false,
@@ -21,7 +21,7 @@ describe("extract flow helpers", () => {
     expect(extractHerePathOptions(input, { mode: "archive" })).toMatchObject({
       pathMode: "full",
       stripComponents: 0,
-      deduplicateRoot: true,
+      deduplicateRoot: false,
     });
     expect(extractHerePathOptions(input, {
       mode: "selection",

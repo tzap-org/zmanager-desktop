@@ -88,7 +88,7 @@ describe("quick action helpers", () => {
     expect(quickExtractDestinationCollisionStrategy("extractToFolder")).toBe("rename");
   });
 
-  it("detects folder-wrapped archives for extract-here root renaming", () => {
+  it("detects a single archive root without changing its extraction layout", () => {
     expect(quickExtractSingleRootFolder([
       { path: "photos/", kind: "directory" },
       { path: "photos/raw/image.jpg" },
@@ -112,7 +112,7 @@ describe("quick action helpers", () => {
     ]),
     ).toEqual({
       destinationPath: "/tmp",
-      stripComponents: 1,
+      stripComponents: 0,
     });
 
     expect(
@@ -237,6 +237,33 @@ describe("quick action helpers", () => {
     expect(handlers.startCreate).toHaveBeenNthCalledWith(3, ["/tmp/source"], "sevenZ", false);
     expect(handlers.startCreate).toHaveBeenNthCalledWith(4, ["/tmp/source"], "tarZst", false);
     expect(handlers.startCreate).toHaveBeenNthCalledWith(5, ["/tmp/source"], "tarGz", false);
+  });
+
+  it("uses the per-format clean-source preference for Add to .tzst", async () => {
+    const handlers = {
+      openArchive: vi.fn().mockResolvedValue(undefined),
+      openCreateReview: vi.fn().mockResolvedValue(undefined),
+      startCreate: vi.fn().mockResolvedValue(undefined),
+      openExtractReview: vi.fn().mockResolvedValue(undefined),
+      startExtract: vi.fn().mockResolvedValue(undefined),
+    };
+
+    await runQuickActionRequest(
+      { kind: "compressTarZst", paths: ["/tmp/source"] },
+      {
+        ...DEFAULT_APP_PREFERENCES,
+        createFormatDefaults: {
+          ...DEFAULT_APP_PREFERENCES.createFormatDefaults,
+          tarZst: {
+            ...DEFAULT_APP_PREFERENCES.createFormatDefaults.tarZst,
+            cleanSource: true,
+          },
+        },
+      },
+      handlers,
+    );
+
+    expect(handlers.startCreate).toHaveBeenCalledWith(["/tmp/source"], "tarZst", true);
   });
 
   it("routes associated archive opens to browsing regardless of extraction defaults", async () => {

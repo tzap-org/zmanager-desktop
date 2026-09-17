@@ -301,20 +301,19 @@ function storedTzapSigningDefault(value: unknown, fallback: TzapSigningDefault):
     : fallback;
 }
 
-function defaultCreateFormatDefaults(cleanSource: boolean): CreateFormatDefaultsMap {
+function defaultCreateFormatDefaults(): CreateFormatDefaultsMap {
   return Object.fromEntries(
     ARCHIVE_FORMATS.map((format) => [
       format,
       {
         ...DEFAULT_APP_PREFERENCES.createFormatDefaults[format],
-        cleanSource,
       },
     ]),
   ) as CreateFormatDefaultsMap;
 }
 
-function loadCreateFormatDefaults(value: string | null, cleanSourceFallback: boolean): CreateFormatDefaultsMap {
-  const defaults = defaultCreateFormatDefaults(cleanSourceFallback);
+function loadCreateFormatDefaults(value: string | null): CreateFormatDefaultsMap {
+  const defaults = defaultCreateFormatDefaults();
   if (!value) {
     return defaults;
   }
@@ -417,10 +416,7 @@ export function loadAppPreferences(storage = resolvePreferenceStorage()): AppPre
       ? defaultArchiveFormat
       : DEFAULT_APP_PREFERENCES.defaultArchiveFormat,
     defaultCleanSourceEnabled,
-    createFormatDefaults: loadCreateFormatDefaults(
-      storage.getItem(PREFERENCE_KEYS.createFormatDefaults),
-      defaultCleanSourceEnabled,
-    ),
+    createFormatDefaults: loadCreateFormatDefaults(storage.getItem(PREFERENCE_KEYS.createFormatDefaults)),
     defaultOutputLocation: isOneOf(OUTPUT_LOCATIONS, defaultOutputLocation)
       ? defaultOutputLocation
       : DEFAULT_APP_PREFERENCES.defaultOutputLocation,

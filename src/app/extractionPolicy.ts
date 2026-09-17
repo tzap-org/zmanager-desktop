@@ -17,7 +17,9 @@ export type ArchiveExtractionPolicy = Readonly<{
 export const ARCHIVE_EXTRACTION_POLICIES: Readonly<Record<ArchiveExtractionAction, ArchiveExtractionPolicy>> = {
   extractHere: {
     destination: "archiveParent",
-    wrapperRoot: "stripSingleRoot",
+    // Extract Here writes the archive's members into the current directory
+    // without inventing a destination folder or removing one from the archive.
+    wrapperRoot: "preserve",
   },
   extractToFolder: {
     destination: "archiveNamedFolder",
@@ -111,7 +113,7 @@ export function extractHerePathOptions(
   return {
     pathMode: "full",
     stripComponents: Math.max(NO_STRIPPED_COMPONENTS, numberOrZero(input.stripComponents)),
-    deduplicateRoot: true,
+    deduplicateRoot: false,
   };
 }
 

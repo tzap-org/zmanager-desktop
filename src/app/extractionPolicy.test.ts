@@ -13,7 +13,7 @@ describe("extraction policy", () => {
   it("keeps parent-folder and collision decisions together", () => {
     expect(archiveExtractionPolicy("extractHere")).toEqual({
       destination: "archiveParent",
-      wrapperRoot: "stripSingleRoot",
+      wrapperRoot: "preserve",
     });
     expect(archiveExtractionPolicy("extractToFolder")).toEqual({
       destination: "archiveNamedFolder",
@@ -21,7 +21,7 @@ describe("extraction policy", () => {
       destinationCollisionStrategy: "rename",
     });
     expect(quickExtractPathPolicy("extractHere", true)).toEqual({
-      stripComponents: 1,
+      stripComponents: 0,
     });
     expect(quickExtractPathPolicy("extractToFolder", true)).toEqual({
       stripComponents: 0,
@@ -29,7 +29,15 @@ describe("extraction policy", () => {
     });
   });
 
-  it("shares direct-file path shaping between extraction and drag-out", () => {
+  it("preserves the archive root for Extract Here while shaping direct-file extraction", () => {
+    expect(extractHerePathOptions({ stripComponents: 0 }, {
+      mode: "archive",
+    })).toEqual({
+      pathMode: "full",
+      stripComponents: 0,
+      deduplicateRoot: false,
+    });
+
     expect(extractHerePathOptions({ stripComponents: 0 }, {
       mode: "selection",
       selectedFilePath: "docs/releases/readme.txt",

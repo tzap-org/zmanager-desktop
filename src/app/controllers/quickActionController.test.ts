@@ -445,7 +445,7 @@ describe("quick action controller", () => {
     expect(harness.calls.extractDestinations).toEqual(["C:/archives"]);
   });
 
-  it("strips an archive wrapper for direct quick extract here", async () => {
+  it("preserves the archive wrapper for direct quick extract here", async () => {
     const harness = createHarness();
     harness.setArchiveEntries([
       { path: "demo", kind: "directory" },
@@ -459,7 +459,7 @@ describe("quick action controller", () => {
       archivePath: "C:/archives/demo.zip",
       destinationPath: "C:/archives",
       overwrite: "rename",
-      stripComponents: 1,
+      stripComponents: 0,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: false,
       tzapAllowAbsoluteSymlinks: false,

@@ -48,6 +48,19 @@ describe("preferences helpers", () => {
     }
   });
 
+  it("keeps missing per-format clean-source defaults disabled", () => {
+    const emptyInstall = loadAppPreferences(memoryStorage());
+    const legacyOnlyInstall = loadAppPreferences(memoryStorage({
+      [PREFERENCE_KEYS.defaultCleanSourceEnabled]: "true",
+    }));
+
+    for (const preferences of [emptyInstall, legacyOnlyInstall]) {
+      for (const defaults of Object.values(preferences.createFormatDefaults)) {
+        expect(defaults.cleanSource).toBe(false);
+      }
+    }
+  });
+
   it("loads valid stored preferences", () => {
     const storage = memoryStorage({
       "zmanager.locale": "en",
