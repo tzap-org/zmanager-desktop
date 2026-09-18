@@ -101,7 +101,7 @@ import Testing
 
 @Test @MainActor func filePromiseDefersFakeRustStreamUntilDestination() throws {
     let destination = FileManager.default.temporaryDirectory.appending(path: "zmanager-promise-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: destination) }
     final class State: @unchecked Sendable { var started = false }
     let state = State()
@@ -115,7 +115,7 @@ import Testing
     writer.filePromiseProvider(provider, writePromiseTo: destination) { completionError = $0 }
     #expect(completionError == nil)
     #expect(state.started)
-    #expect(try String(contentsOf: destination.appending(path: "entry.txt"), encoding: .utf8) == "streamed")
+    #expect(try String(contentsOf: destination, encoding: .utf8) == "streamed")
 }
 
 @Test @MainActor func filePromiseReportsStreamFailuresAndSerializesOperations() throws {
@@ -126,7 +126,7 @@ import Testing
     let provider = NSFilePromiseProvider(fileType: "public.data", delegate: writer)
     let destination = FileManager.default.temporaryDirectory
         .appending(path: "zmanager-promise-error-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: destination) }
 
     #expect(writer.filePromiseProvider(provider, fileNameForType: "public.data") == "entry.txt")
@@ -134,6 +134,30 @@ import Testing
     writer.filePromiseProvider(provider, writePromiseTo: destination) { completionError = $0 }
     #expect((completionError as? TestError) == .streamFailed)
     #expect(writer.operationQueue(for: provider).maxConcurrentOperationCount == 1)
+}
+
+@Test @MainActor func filePromiseCompletionRunsAfterAppKitCompletionHandler() throws {
+    final class OrderingState: @unchecked Sendable {
+        var completionHandlerReturned = false
+        var completionRan = false
+    }
+    let state = OrderingState()
+    let writer = FilePromiseStreamWriter(
+        promisedName: "entry.txt",
+        stream: { _ in },
+        completion: { state.completionRan = state.completionHandlerReturned }
+    )
+    let provider = NSFilePromiseProvider(fileType: "public.data", delegate: writer)
+    let destination = FileManager.default.temporaryDirectory
+        .appending(path: "zmanager-promise-completion-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: destination) }
+
+    writer.filePromiseProvider(provider, writePromiseTo: destination) { _ in
+        state.completionHandlerReturned = true
+    }
+
+    #expect(state.completionRan)
 }
 
 @Test func appGroupRejectsBoundaryAndPathTraversalTokens() {

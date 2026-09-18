@@ -24,6 +24,70 @@ private func promiseWriteCallback(
 private func promiseOutcomeCallback(_: Int32, _: UnsafeMutableRawPointer?) {}
 private func promiseReleaseCallback(_: UnsafeMutableRawPointer?) {}
 
+@Test func promiseDropWaitsForAllFilePromisesAfterDragEnds() {
+    final class State: @unchecked Sendable { var outcomes: [Int32] = [] }
+    let state = State()
+    let coordinator = PromiseDragCompletionCoordinator(promiseCount: 2) { state.outcomes.append($0) }
+
+    coordinator.draggingEnded(operation: .copy)
+    #expect(state.outcomes.isEmpty)
+    coordinator.promiseFinished()
+    #expect(state.outcomes.isEmpty)
+    coordinator.promiseFinished()
+    #expect(state.outcomes == [0])
+    coordinator.promiseFinished()
+    #expect(state.outcomes == [0])
+}
+
+@Test func cancelledPromiseDragCompletesBeforeFilePromisesFinish() {
+    final class State: @unchecked Sendable { var outcomes: [Int32] = [] }
+    let state = State()
+    let coordinator = PromiseDragCompletionCoordinator(promiseCount: 2) { state.outcomes.append($0) }
+
+    coordinator.draggingEnded(operation: [])
+    #expect(state.outcomes == [1])
+    coordinator.promiseFinished()
+    coordinator.promiseFinished()
+    #expect(state.outcomes == [1])
+}
+
+@Test @MainActor func promiseProviderWriteCompletesBeforeDroppedOutcome() throws {
+    final class State: @unchecked Sendable {
+        var outcomes: [Int32] = []
+        var completionError: Error?
+    }
+    let state = State()
+    let coordinator = PromiseDragCompletionCoordinator(promiseCount: 1) { state.outcomes.append($0) }
+    let destination = FileManager.default.temporaryDirectory
+        .appending(path: "zmanager-native-promise-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: destination) }
+
+    final class OrderingState: @unchecked Sendable {
+        var completionHandlerReturned = false
+        var completionRan = false
+    }
+    let ordering = OrderingState()
+    let writer = FilePromiseStreamWriter(promisedName: "entry.txt") { url in
+        try Data("streamed".utf8).write(to: url)
+    } completion: {
+        ordering.completionRan = ordering.completionHandlerReturned
+    }
+    let provider = NSFilePromiseProvider(fileType: "public.data", delegate: writer)
+    coordinator.draggingEnded(operation: .copy)
+    writer.filePromiseProvider(provider, writePromiseTo: destination) { error in
+        state.completionError = error
+        ordering.completionHandlerReturned = true
+    }
+
+    #expect(state.outcomes.isEmpty)
+    #expect(ordering.completionRan)
+    coordinator.promiseFinished()
+    #expect(state.completionError == nil)
+    #expect(state.outcomes == [0])
+    #expect(try String(contentsOf: destination, encoding: .utf8) == "streamed")
+}
+
 @Test @MainActor func hostStartsReportsRuntimeReadinessAndShutsDown() throws {
     let state = CallbackState()
     let context = Unmanaged.passUnretained(state).toOpaque()

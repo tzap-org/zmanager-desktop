@@ -1230,7 +1230,14 @@ pub fn accept_native_file_drag(
         strip_components: request.strip_components,
     };
     let kind = native_drag_job_kind(&normalized_request.archive_path);
-    let (accepted_job, _token) = registry.try_accept_job(kind, crate::job_dto::AcceptedJobOriginDto::NativeDrag).map_err(subscription_error)?;
+    // Native drag-out is an asynchronous OS conversation. Do not publish it to
+    // the accepted-job feed yet: that feed opens a task window immediately,
+    // before Finder/Explorer has committed the drop and before the destination
+    // is known. The frontend receives this unpublished envelope and hands it
+    // off only after the native drag settles.
+    let (job, _token) = registry.try_create_unpublished_job(kind).map_err(subscription_error)?;
+    let accepted_job =
+        crate::job_dto::AcceptedJobEnvelopeDto { acceptance_revision: "0".to_string(), job, origin: crate::job_dto::AcceptedJobOriginDto::NativeDrag };
     registry
         .configure_recovery_facts(
             &accepted_job.job.job_id,

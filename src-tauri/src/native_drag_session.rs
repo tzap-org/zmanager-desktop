@@ -236,9 +236,12 @@ impl NativeDragSessionRegistry {
         result
     }
 
-    pub fn cancel(&self, session_id: &str) {
+    pub fn cancel(&self, session_id: &str) -> bool {
         if let Some(session) = self.0.lock().unwrap_or_else(|e| e.into_inner()).sessions.remove(session_id) {
             session.cancellation.cancel();
+            true
+        } else {
+            false
         }
     }
 
@@ -473,8 +476,8 @@ mod tests {
         let _ = fs::remove_file(&destination);
         assert!(registry.write_promise(&id, "bad.txt", &destination).is_err());
         assert!(!destination.exists());
-        registry.cancel(&id);
-        registry.cancel(&id);
+        assert!(registry.cancel(&id));
+        assert!(!registry.cancel(&id));
         registry.shutdown();
         registry.shutdown();
         assert_eq!(registry.count(), 0);
@@ -496,9 +499,11 @@ mod tests {
         let id = registry.create(&items, provider).unwrap();
         let root = std::env::temp_dir().join(format!("zmanager-promise-dir-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
-        assert!(registry.write_promise(&id, "docs", &root).is_ok());
-        assert_eq!(fs::read(root.join("a.txt")).unwrap(), b"docs/a.txt");
-        assert_eq!(fs::read(root.join("nested/b.txt")).unwrap(), b"docs/nested/b.txt");
+        fs::create_dir_all(&root).unwrap();
+        let destination = root.join("docs");
+        assert!(registry.write_promise(&id, "docs", &destination).is_ok());
+        assert_eq!(fs::read(destination.join("a.txt")).unwrap(), b"docs/a.txt");
+        assert_eq!(fs::read(destination.join("nested/b.txt")).unwrap(), b"docs/nested/b.txt");
         assert_eq!(calls.lock().unwrap().len(), 2);
         assert_eq!(registry.take_completed_summary(&id), Some((2, 27)));
         assert_eq!(registry.count(), 0);

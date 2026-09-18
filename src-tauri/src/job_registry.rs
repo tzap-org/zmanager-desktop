@@ -309,12 +309,16 @@ impl JobRegistry {
 
     #[cfg(test)]
     pub fn create_job(&self, kind: JobKindDto) -> (StartJobResponseDto, CancellationToken) {
-        self.try_create_job(kind).expect("job registry capacity exceeded")
+        self.try_create_unpublished_job(kind).expect("job registry capacity exceeded")
+    }
+
+    pub fn try_create_unpublished_job(&self, kind: JobKindDto) -> Result<(StartJobResponseDto, CancellationToken), &'static str> {
+        self.with_lock(|state| try_create_job_locked(state, kind))
     }
 
     #[cfg(test)]
-    pub fn try_create_job(&self, kind: JobKindDto) -> Result<(StartJobResponseDto, CancellationToken), &'static str> {
-        self.with_lock(|state| try_create_job_locked(state, kind))
+    fn accepted_job_count(&self) -> usize {
+        self.with_lock(|state| state.accepted_jobs.len())
     }
 
     pub fn try_accept_job(&self, kind: JobKindDto, origin: AcceptedJobOriginDto) -> Result<(AcceptedJobEnvelopeDto, CancellationToken), &'static str> {
@@ -1429,6 +1433,15 @@ mod tests {
     }
 
     #[test]
+    fn unpublished_job_is_available_without_entering_handoff_feed() {
+        let registry = JobRegistry::new();
+        let (response, _token) = registry.try_create_unpublished_job(JobKindDto::ZipExtract).expect("job should be admitted");
+
+        assert!(registry.snapshot(&response.job_id).is_some());
+        assert_eq!(registry.accepted_job_count(), 0);
+    }
+
+    #[test]
     fn fake_job_records_started() {
         let registry = JobRegistry::new();
         let (response, _) = registry.create_job(JobKindDto::ZipCreate);
@@ -1803,9 +1816,9 @@ mod tests {
 
         let active = JobRegistry::new();
         for _ in 0..MAX_ADMITTED_JOBS {
-            active.try_create_job(JobKindDto::ZipCreate).unwrap();
+            active.try_create_unpublished_job(JobKindDto::ZipCreate).unwrap();
         }
-        assert!(matches!(active.try_create_job(JobKindDto::ZipCreate), Err("job_capacity")));
+        assert!(matches!(active.try_create_unpublished_job(JobKindDto::ZipCreate), Err("job_capacity")));
     }
 
     #[test]

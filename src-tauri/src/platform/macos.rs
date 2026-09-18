@@ -614,6 +614,14 @@ fn record_shell_action_stage_with_disposition(
     let _ = diagnostics.record("shellActionIngress", name, fields);
 }
 
+fn record_native_drag_stage(name: &str, fields: impl IntoIterator<Item = (&'static str, serde_json::Value)>) {
+    let Some(diagnostics) = NATIVE_DIAGNOSTICS.get() else {
+        return;
+    };
+    let fields = fields.into_iter().map(|(key, value)| (key.to_string(), value)).collect::<std::collections::BTreeMap<_, _>>();
+    let _ = diagnostics.record("nativeDrag", name, fields);
+}
+
 fn shell_action_event_from_url(url: &tauri::Url, pid: u32, timestamp_ms: u64, index: usize) -> Option<crate::native_launch_inbox::NativeInboundEvent> {
     if url.scheme() != "zmanager" || url.host_str() != Some("shell-request") {
         return None;
@@ -670,6 +678,7 @@ struct PromiseDragItemDto {
 #[serde(rename_all = "camelCase")]
 struct PromiseDragOutcomeEvent {
     session_id: String,
+    job_id: String,
     outcome: &'static str,
 }
 
@@ -706,8 +715,17 @@ extern "C" fn promise_write_callback(
         return 2;
     };
     match context.registry.write_promise(&context.session_id, entry, Path::new(destination)) {
-        Ok(_) => 0,
-        Err(_) => 3,
+        Ok(bytes) => {
+            record_native_drag_stage("promiseWritten", [("bytes", serde_json::Value::from(bytes))]);
+            0
+        }
+        Err(error) => {
+            record_native_drag_stage(
+                "promiseWriteFailed",
+                [("kind", serde_json::Value::String(format!("{:?}", error.kind))), ("message", serde_json::Value::String(error.message))],
+            );
+            3
+        }
     }
 }
 
@@ -719,14 +737,20 @@ extern "C" fn promise_outcome_callback(outcome: i32, context: *mut c_void) {
     let outcome = if outcome == 0 { "dropped" } else { "cancelled" };
     if outcome == "cancelled" {
         context.registry.cancel(&context.session_id);
+        record_native_drag_stage("promiseOutcomeCancelled", []);
         context.job_registry.emit_direct_event(&context.job_id, JobEventDto::cancelled(Some(context.job_kind), "Native drag was cancelled."));
     } else if let Some((written_entries, written_bytes)) = context.registry.take_completed_summary(&context.session_id) {
+        record_native_drag_stage(
+            "promiseOutcomeDropped",
+            [("writtenEntries", serde_json::Value::from(written_entries)), ("writtenBytes", serde_json::Value::from(written_bytes))],
+        );
         let _ = context.job_registry.commit_completed(
             &context.job_id,
             context.job_kind,
             JobTerminalSummaryDto { written_entries, skipped_entries: None, written_bytes, warnings: Vec::new() },
         );
     } else {
+        record_native_drag_stage("promiseOutcomeMissingSummary", []);
         context.job_registry.emit_direct_event(
             &context.job_id,
             JobEventDto::failed_from_command_error(
@@ -736,7 +760,9 @@ extern "C" fn promise_outcome_callback(outcome: i32, context: *mut c_void) {
         );
         context.registry.cancel(&context.session_id);
     }
-    let _ = context.app_handle.emit("native-file-drag-outcome", PromiseDragOutcomeEvent { session_id: context.session_id.clone(), outcome });
+    let _ = context
+        .app_handle
+        .emit("native-file-drag-outcome", PromiseDragOutcomeEvent { session_id: context.session_id.clone(), job_id: context.job_id.clone(), outcome });
 }
 
 extern "C" fn promise_release_callback(context: *mut c_void) {
@@ -744,8 +770,11 @@ extern "C" fn promise_release_callback(context: *mut c_void) {
         return;
     }
     let context = unsafe { Box::from_raw(context.cast::<PromiseDragContext>()) };
-    context.registry.cancel(&context.session_id);
-    context.job_registry.emit_direct_event(&context.job_id, JobEventDto::cancelled(Some(context.job_kind), "Native drag was released before completion."));
+    let cancelled = context.registry.cancel(&context.session_id);
+    record_native_drag_stage("promiseReleased", [("cancelled", serde_json::Value::Bool(cancelled))]);
+    if cancelled {
+        context.job_registry.emit_direct_event(&context.job_id, JobEventDto::cancelled(Some(context.job_kind), "Native drag was released before completion."));
+    }
 }
 
 fn start_macos_file_promise_drag(

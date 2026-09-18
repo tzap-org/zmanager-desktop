@@ -57,6 +57,7 @@ import {
   createExtractStartController,
 } from "../app/controllers/extractStartController";
 import { createJobHandoffController } from "../app/controllers/jobHandoffController";
+import { createNativeDragHandoffController } from "../app/controllers/nativeDragHandoffController";
 import { createJobTerminationWatcher } from "../app/controllers/jobTerminationWatcher";
 import {
   createQuickActionController,
@@ -374,6 +375,7 @@ import { listenLocalSendEvents } from "../desktop/localSendEvents";
 import { listenShareQueueChanged } from "../desktop/shareQueueEvents";
 import {
   acceptNativeFileDrag,
+  listenNativeFileDragOutcomes,
   startNativeFileDrag,
 } from "../desktop/nativeDrag";
 import {
@@ -556,6 +558,28 @@ const jobHandoff = createJobHandoffController({
   },
   reportPresentationFailure: reportJobPresentationFailure,
 });
+// Native drag-out jobs are created before the OS asks for their promised
+// files, but their task window must not be presented until the drop has
+// actually settled. Keep the accepted envelope private until then.
+const nativeDragHandoffs = createNativeDragHandoffController((accepted) => jobHandoff.handoffAcceptedJob(accepted));
+let nativeDragOutcomeUnlisten: (() => void) | null = null;
+
+async function initializeNativeDragOutcomeHandoff(): Promise<void> {
+  if (nativeDragOutcomeUnlisten) return;
+  nativeDragOutcomeUnlisten = await listenNativeFileDragOutcomes((event) => {
+    diagnostics.record({
+      scope: "nativeDrag",
+      name: "outcomeReceived",
+      fields: { outcome: event.payload.outcome },
+    });
+    void nativeDragHandoffs.settle(event.payload).then((presented) => {
+      if (presented === false) {
+        setOperationalStatus("The native drag completed, but its task window could not be opened.");
+      }
+    });
+  });
+}
+
 let latestHealthcheck: HealthcheckResponse | null = null;
 let latestContract: ProjectContract | null = null;
 let latestDiagnosticLogInfo: DiagnosticLogInfoDto | null = null;
@@ -1875,10 +1899,19 @@ async function startNativeDragOut(entryPath: string) {
       : request.entryPaths.length,
   });
 
+  let pendingJobId: string | null = null;
   try {
     const accepted = await acceptNativeFileDrag(request);
-    await jobHandoff.handoffAcceptedJob(accepted.acceptedJob);
+    const jobId = accepted.acceptedJob.job.jobId;
+    pendingJobId = jobId;
+    nativeDragHandoffs.defer(accepted.acceptedJob);
     const response = await startNativeFileDrag({ operationId: accepted.operationId, request });
+    if (response.outcome !== "pending") {
+      nativeDragHandoffs.discard(jobId);
+      if (response.outcome === "dropped") {
+        await jobHandoff.handoffAcceptedJob(accepted.acceptedJob);
+      }
+    }
     archiveWorkspace.clearPasswordRetry();
     if (response.outcome === "pending") {
       setOperationalMessage("preview.dragPromiseStarted", { count: response.draggedEntries.length });
@@ -1890,6 +1923,7 @@ async function startNativeDragOut(entryPath: string) {
       setOperationalMessage("preview.draggedOut", { count: response.draggedEntries.length });
     }
   } catch (error) {
+    if (pendingJobId) nativeDragHandoffs.discard(pendingJobId);
     const commandError = asCommandError(error);
     setOperationalStatus(commandError?.message ?? message("preview.unableStartDrag"));
   }
@@ -4204,6 +4238,13 @@ async function initializeDeferredDesktopRuntime() {
   }
   await shareQueueController.initialize();
   await listenNativeMenuCommands((commandId) => runRoutedCommand(commandId));
+  await initializeNativeDragOutcomeHandoff().catch((error) => {
+    diagnostics.record({
+      scope: "nativeDrag",
+      name: "outcomeListenerFailed",
+      fields: { error: unknownErrorMessage(error, "Unable to listen for native drag outcomes.") },
+    });
+  });
   await subscribeToJobCatalog().catch((error) => {
     diagnostics.record({
       scope: "jobCatalog",

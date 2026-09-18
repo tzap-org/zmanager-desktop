@@ -27,6 +27,7 @@ export const NATIVE_FILE_DRAG_OUTCOME_EVENT = "native-file-drag-outcome";
 
 export type NativeFileDragOutcomeEvent = {
   sessionId: string;
+  jobId: string;
   outcome: "dropped" | "cancelled";
 };
 

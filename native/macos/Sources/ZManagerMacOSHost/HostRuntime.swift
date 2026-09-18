@@ -118,7 +118,7 @@ private func runInstalledLinkageSelfTest() -> InstalledLinkageSelfTestResult {
     let destination = root.appending(path: "promise")
     var filePromise = false
     do {
-        try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         let writer = FilePromiseStreamWriter(promisedName: "entry.txt") { url in
             state.started = true
             try Data("streamed".utf8).write(to: url)

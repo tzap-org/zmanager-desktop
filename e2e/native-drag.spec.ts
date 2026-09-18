@@ -1,5 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
+// These browser tests cover frontend drag intent and the native-drag IPC contract
+// with a stubbed Tauri bridge. They do not exercise Finder, Explorer, or a real
+// file-promise drag session.
+
 type ArchiveEntryKind = "file" | "directory" | "symlink" | "hardlink" | "special";
 
 type ArchiveEntryFixture = {

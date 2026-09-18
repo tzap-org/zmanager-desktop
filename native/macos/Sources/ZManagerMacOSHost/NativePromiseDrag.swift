@@ -16,14 +16,49 @@ private struct PromiseDragItem: Decodable {
     let fileType: String
 }
 
+final class PromiseDragCompletionCoordinator: @unchecked Sendable {
+    private let lock = NSLock()
+    private let onOutcome: (Int32) -> Void
+    private var remaining: Int
+    private var dragOutcome: Int32?
+    private var outcomeDelivered = false
+
+    init(promiseCount: Int, onOutcome: @escaping (Int32) -> Void) {
+        self.remaining = promiseCount
+        self.onOutcome = onOutcome
+    }
+
+    func promiseFinished() {
+        let outcome = lock.withLock {
+            remaining = max(remaining - 1, 0)
+            return takeOutcomeIfReady()
+        }
+        if let outcome { onOutcome(outcome) }
+    }
+
+    func draggingEnded(operation: NSDragOperation) {
+        let outcome = lock.withLock {
+            dragOutcome = operation.isEmpty ? 1 : 0
+            return takeOutcomeIfReady()
+        }
+        if let outcome { onOutcome(outcome) }
+    }
+
+    private func takeOutcomeIfReady() -> Int32? {
+        guard !outcomeDelivered, let dragOutcome else { return nil }
+        guard dragOutcome != 0 || remaining == 0 else { return nil }
+        outcomeDelivered = true
+        return dragOutcome
+    }
+}
+
 private final class PromiseCallbackLease: @unchecked Sendable {
     let sessionID: String
     let write: ZManagerPromiseWriteCallback
     let outcome: ZManagerPromiseOutcomeCallback
     let context: UnsafeMutableRawPointer?
     private let release: ZManagerPromiseReleaseCallback
-    private let lock = NSLock()
-    private var remaining: Int
+    private let completion: PromiseDragCompletionCoordinator
 
     init(
         sessionID: String,
@@ -34,21 +69,22 @@ private final class PromiseCallbackLease: @unchecked Sendable {
         context: UnsafeMutableRawPointer?
     ) {
         self.sessionID = sessionID
-        remaining = promiseCount
         self.write = write
         self.outcome = outcome
         self.release = release
         self.context = context
+        self.completion = PromiseDragCompletionCoordinator(promiseCount: promiseCount) { outcomeCode in
+            outcome(outcomeCode, context)
+            DispatchQueue.main.async { ActivePromiseDrags.shared.remove(sessionID) }
+        }
     }
 
     func promiseFinished() {
-        lock.lock()
-        remaining = max(remaining - 1, 0)
-        let finished = remaining == 0
-        lock.unlock()
-        if finished {
-            DispatchQueue.main.async { ActivePromiseDrags.shared.remove(self.sessionID) }
-        }
+        completion.promiseFinished()
+    }
+
+    func draggingEnded(operation: NSDragOperation) {
+        completion.draggingEnded(operation: operation)
     }
 
     deinit { release(context) }
@@ -76,8 +112,7 @@ private final class PromiseDragSource: NSObject, NSDraggingSource {
     ) -> NSDragOperation { .copy }
 
     func draggingSession(_: NSDraggingSession, endedAt _: NSPoint, operation: NSDragOperation) {
-        lease.outcome(operation.isEmpty ? 1 : 0, lease.context)
-        if operation.isEmpty { ActivePromiseDrags.shared.remove(sessionID) }
+        lease.draggingEnded(operation: operation)
     }
 }
 
@@ -130,8 +165,9 @@ private final class PromiseStartInput: @unchecked Sendable {
         var writers: [FilePromiseStreamWriter] = []
         var draggingItems: [NSDraggingItem] = []
         for (index, item) in items.enumerated() {
-            let writer = FilePromiseStreamWriter(promisedName: item.promisedName) { destination in
-                defer { lease.promiseFinished() }
+            let writer = FilePromiseStreamWriter(
+                promisedName: item.promisedName,
+                stream: { destination in
                 let entry = Data(item.entryPath.utf8)
                 let path = Data(destination.path.utf8)
                 let status = entry.withUnsafeBytes { entryBytes in
@@ -148,7 +184,9 @@ private final class PromiseStartInput: @unchecked Sendable {
                 if status != 0 {
                     throw NSError(domain: "ZManagerPromiseDrag", code: Int(status))
                 }
-            }
+                },
+                completion: { lease.promiseFinished() }
+            )
             let provider = NSFilePromiseProvider(fileType: item.fileType, delegate: writer)
             let draggingItem = NSDraggingItem(pasteboardWriter: provider)
             draggingItem.setDraggingFrame(
