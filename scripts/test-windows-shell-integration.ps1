@@ -59,6 +59,42 @@ if (-not $nsis.Contains('!insertmacro ZM_INSTALL_SHELL_EXTENSION_BINARY') -or
     throw "The installer must move a locked handler DLL aside before writing the new one."
 }
 
+# An upgrade over a running Explorer leaves the previous image mapped, so the
+# installer restarts the shell - but only in that case, never on a fresh install.
+if (-not $nsis.Contains('Var /GLOBAL ZM_ShellExtensionWasLocked') -or
+    -not $nsis.Contains('StrCpy $ZM_ShellExtensionWasLocked "1"') -or
+    -not $nsis.Contains('!insertmacro ZM_RESTART_EXPLORER_IF_STALE')) {
+    throw "The installer must restart Explorer when it replaces a handler DLL that was locked."
+}
+if (-not $nsis.Contains('IfSilent zm_explorer_restart_now') -or -not $nsis.Contains('MessageBox MB_YESNO')) {
+    throw "An interactive install must ask before closing the user's Explorer windows; a silent install must not prompt."
+}
+
+# The developer loop verifies the result of that install.
+$refreshScript = Join-Path $repoRoot "scripts\refresh-windows-shell-extension.ps1"
+if (-not (Test-Path $refreshScript)) {
+    throw "scripts\refresh-windows-shell-extension.ps1 is missing."
+}
+$refresh = Get-Content -Raw $refreshScript
+foreach ($guarantee in @(
+    @{ Pattern = 'QueryInterface'; Message = "must QueryInterface the registered class for the classic interfaces" },
+    @{ Pattern = '000214E8-0000-0000-C000-000000000046'; Message = "must check IShellExtInit" },
+    @{ Pattern = '000214E4-0000-0000-C000-000000000046'; Message = "must check IContextMenu" },
+    @{ Pattern = 'SessionId -eq $currentSession'; Message = "must only restart Explorer in the current session" }
+)) {
+    if (-not $refresh.Contains($guarantee.Pattern)) {
+        throw "refresh-windows-shell-extension.ps1 $($guarantee.Message)."
+    }
+}
+# Timestamps are not a valid staleness signal: NSIS and Copy-Item both preserve
+# the source mtime, so an installed DLL carries its build time.
+if ($refresh -match 'StartTime\s+-lt\s+\$installedWrite') {
+    throw "Explorer staleness must not be inferred from timestamps; use the locked '.old' image instead."
+}
+if (-not $static.Contains('refresh-windows-shell-extension.ps1')) {
+    throw "build-windows-static.ps1 must verify the installed shell extension after -Install."
+}
+
 if (-not $handler.Contains('#[implement(IExplorerCommand, IContextMenu, IShellExtInit)]')) {
     throw "The shell extension must expose the classic IShellExtInit + IContextMenu handler."
 }

@@ -25,8 +25,22 @@ Explorer keeps a handler DLL loaded for the lifetime of the process, so
 `ZM_INSTALL_SHELL_EXTENSION_BINARY` moves a locked DLL aside (renaming inside the
 same directory is permitted) and schedules the stale copy for deletion on reboot
 before writing the new one. Without that step a reinstall would silently keep the
-previous DLL and the refreshed registration would resolve to stale code. Already
-running Explorer processes keep the old DLL mapped until they restart.
+previous DLL and the refreshed registration would resolve to stale code.
+
+Replacing the file is not enough on its own: a running Explorer keeps serving the
+image it already mapped. The rename is therefore also the signal that this
+happened, and `ZM_RESTART_EXPLORER_IF_STALE` acts on it:
+
+- **Fresh install** — nothing was locked, Explorer has no handler mapped, and it
+  picks the new one up on the next context menu. No restart, no prompt.
+- **Upgrade over a running Explorer** — the DLL was locked. A silent install
+  (`/S`, which `scripts/build.bat` uses) restarts Explorer automatically; an
+  interactive install asks first, because the user's open Explorer windows close.
+  Declining leaves the menu on the old handler until the next sign-out.
+
+Windows normally relaunches the shell itself, so the hook only starts
+`explorer.exe` manually when `Shell_TrayWnd` has not reappeared. That avoids
+leaving a stray folder window open.
 
 Folder-background commands have one target and continue to use the quick-action
 CLI contract:
@@ -76,6 +90,21 @@ Release wiring:
    and disappear after uninstall. `scripts/test-windows-shell-integration.ps1`
    asserts the registration contract and the `build.bat` parity, and runs as part
    of `build-windows-static.ps1`.
+5. After `-Install`, `build-windows-static.ps1` runs
+   `scripts/refresh-windows-shell-extension.ps1`, which verifies the result on
+   the machine: the CLSIDs resolve to an existing DLL with
+   `ThreadingModel = Apartment`, the three handler keys point at the create root
+   CLSID, and `CoCreateInstance` plus `QueryInterface` for `IShellExtInit` and
+   `IContextMenu` both succeed. That last check is what distinguishes a current
+   handler from one left over before the classic rewrite. Pass
+   `-SkipShellRefresh` to skip it, or run the script standalone at any time.
+
+Do not use file timestamps to decide whether Explorer is stale. NSIS `File` and
+`Copy-Item` both preserve the *source* file's modification time, so a freshly
+installed DLL carries its build time and can look older than a shell that started
+after it was installed. The reliable signal is whether the renamed-aside
+`<dll>.old` can be deleted: if it is still locked, some process has the previous
+image mapped, and deleting it after the restart proves the image was released.
 
 Next packaging steps remain code signing, WinGet metadata after public artifacts are
 stable, and a signed package-with-external-location registration if first-tier

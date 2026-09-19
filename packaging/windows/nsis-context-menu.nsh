@@ -380,15 +380,22 @@
   System::Call 'user32::SendMessageTimeoutW(i 0xFFFF, i 0x001A, i 0, w "Shell", i 0x0002, i 5000, *i 0)'
 !macroend
 
+; Set when the handler DLL could not be deleted because a running Explorer still
+; had it mapped. That is precisely the upgrade-over-a-live-Explorer case, and
+; the only case where restarting Explorer is required.
+Var /GLOBAL ZM_ShellExtensionWasLocked
+
 ; Explorer keeps a context menu handler DLL loaded for the lifetime of the
 ; process, so overwriting it in place fails and a silent install would leave the
 ; previous build on disk while the new registration points at it. Renaming a
 ; loaded DLL within its own directory is allowed, so move the old copy aside and
 ; let Windows remove it on the next reboot.
 !macro ZM_INSTALL_SHELL_EXTENSION_BINARY
+  StrCpy $ZM_ShellExtensionWasLocked "0"
   ClearErrors
   Delete "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}"
   IfErrors 0 zm_shell_extension_binary_write
+  StrCpy $ZM_ShellExtensionWasLocked "1"
   Delete "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}.old"
   ClearErrors
   Rename "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}" "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}.old"
@@ -400,6 +407,31 @@ zm_shell_extension_binary_write:
   IfFileExists "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}" zm_shell_extension_binary_done
   Abort "Failed to install ${ZM_SHELL_EXTENSION_NAME}; the ZManager context menu would not work."
 zm_shell_extension_binary_done:
+!macroend
+
+; A fresh install needs nothing: Explorer has no handler mapped yet and picks the
+; new one up on the next context menu. An upgrade over a running Explorer does,
+; because the process keeps serving the previous image until it restarts.
+!macro ZM_RESTART_EXPLORER_IF_STALE
+  StrCmp $ZM_ShellExtensionWasLocked "1" 0 zm_explorer_restart_done
+  IfSilent zm_explorer_restart_now
+  MessageBox MB_YESNO|MB_ICONQUESTION \
+    "ZManager updated its Explorer context menu.$\r$\n$\r$\nWindows Explorer is still running the previous version and must restart before the menu works.$\r$\n$\r$\nRestart Explorer now? Your open Explorer windows will close." \
+    IDYES zm_explorer_restart_now IDNO zm_explorer_restart_later
+zm_explorer_restart_now:
+  DetailPrint "Restarting Windows Explorer to load the updated context menu handler..."
+  nsExec::Exec 'taskkill /F /IM explorer.exe'
+  Pop $0
+  Sleep 3000
+  ; Windows normally relaunches the shell on its own (AutoRestartShell). Only
+  ; start it manually when it did not come back, so we never open a stray window.
+  FindWindow $0 "Shell_TrayWnd"
+  IntCmp $0 0 0 zm_explorer_restart_done zm_explorer_restart_done
+  Exec '$WINDIR\explorer.exe'
+  Goto zm_explorer_restart_done
+zm_explorer_restart_later:
+  DetailPrint "The ZManager context menu will finish updating after you sign out or restart."
+zm_explorer_restart_done:
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
@@ -428,6 +460,8 @@ zm_shell_extension_binary_done:
   !insertmacro ZM_WRITE_BACKGROUND_CREATE_CASCADE_MENU "Software\Classes\Directory\Background\shell"
   !insertmacro ZM_REGISTER_ARCHIVE_EXTENSIONS
   !insertmacro ZM_REFRESH_SHELL_ASSOCIATIONS
+  ; Last, so the registration is complete before Explorer reloads.
+  !insertmacro ZM_RESTART_EXPLORER_IF_STALE
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL

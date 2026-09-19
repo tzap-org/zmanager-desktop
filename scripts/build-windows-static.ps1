@@ -9,7 +9,8 @@ param(
     [string]$NodePath = "",
     [switch]$InstallClang,
     [switch]$Install,
-    [string]$InstallDir = ""
+    [string]$InstallDir = "",
+    [switch]$SkipShellRefresh
 )
 
 $ErrorActionPreference = "Stop"
@@ -305,6 +306,16 @@ if ($Install) {
         -ProductName $tauriConfig.productName `
         -ProductVersion $tauriConfig.version
     Install-NsisBuild -InstallerPath $installerPath -RequestedInstallDir $InstallDir
+
+    # The installer restarts Explorer itself when it finds the handler DLL
+    # locked. This verifies the result and is a backstop if it did not.
+    if (-not $SkipShellRefresh) {
+        $shellRefresh = Join-Path $PSScriptRoot "refresh-windows-shell-extension.ps1"
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $shellRefresh
+        if ($LASTEXITCODE -ne 0) {
+            throw "The installed Windows shell extension failed verification with exit code $LASTEXITCODE."
+        }
+    }
 }
 
 exit 0
