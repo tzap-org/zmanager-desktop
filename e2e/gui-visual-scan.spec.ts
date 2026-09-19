@@ -643,8 +643,9 @@ test("secondary GUI surfaces have visible, bounded controls", async ({ page }) =
   await page.keyboard.press("Escape");
   await expect(page.locator("#context-menu")).toBeHidden();
 
-  await page.locator("th[data-column-id='modified']").focus();
-  await page.keyboard.press("Shift+F10");
+  // Use a real context-menu gesture here. Shift+F10 is a Windows-specific
+  // keyboard chord and is not emitted consistently by macOS Chromium.
+  await page.locator("th[data-column-id='modified']").click({ button: "right" });
   await expect(page.locator("#context-menu")).toBeVisible();
   await page.locator("#context-menu [data-context-action='toggle-column'][data-column-id='mode']").focus();
   await page.keyboard.press("Enter");
