@@ -219,6 +219,21 @@ $shellExtensionBuild = Join-Path $PSScriptRoot "build-windows-shell-extension.ps
 if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
+$shellExtensionArtifact = Join-Path $repoRoot "target\windows-shell-extension\zmanager-shell-extension.dll"
+if (-not (Test-Path -LiteralPath $shellExtensionArtifact)) {
+    throw "Windows shell extension artifact was not produced: $shellExtensionArtifact"
+}
+$shellExtensionArtifactTime = (Get-Item -LiteralPath $shellExtensionArtifact).LastWriteTimeUtc
+$shellExtensionSources = @(
+    (Join-Path $repoRoot "native\windows-shell-extension\src\lib.rs"),
+    (Join-Path $repoRoot "native\windows-shell-extension\src\generated.rs"),
+    (Join-Path $repoRoot "native\windows-shell-extension\Cargo.toml"),
+    (Join-Path $repoRoot "crates\zmanager-shell-contract\src\lib.rs")
+)
+$latestShellExtensionSourceTime = ($shellExtensionSources | ForEach-Object { (Get-Item -LiteralPath $_).LastWriteTimeUtc } | Measure-Object -Maximum).Maximum
+if ($shellExtensionArtifactTime -lt $latestShellExtensionSourceTime) {
+    throw "Windows shell extension artifact is stale; refusing to package an installer with an older context-menu DLL."
+}
 $shellIntegrationTest = Join-Path $PSScriptRoot "test-windows-shell-integration.ps1"
 & powershell -ExecutionPolicy Bypass -File $shellIntegrationTest
 if ($LASTEXITCODE -ne 0) {

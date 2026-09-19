@@ -3,11 +3,30 @@
 The Windows bundle uses the Tauri NSIS target plus `nsis-context-menu.nsh`, wired by
 `src-tauri/tauri.conf.json` at `bundle.windows.nsis.installerHooks`.
 
-The hook installs an architecture-matched `IExplorerCommand` COM DLL and registers
-current-user Explorer verbs under `HKCU\Software\Classes`. Selected-item commands
-receive one `IShellItemArray`, write one versioned request, and launch:
+The hook installs an architecture-matched COM DLL and registers the selected-item
+handler using the classic 7-Zip-compatible `shellex\ContextMenuHandlers` contract
+under `HKCU\Software\Classes`. Explorer initializes the handler with the complete
+selection, then the handler builds a `ZManager` submenu and launches:
 
 - `zmanager-desktop.exe --shell-action-request "<request.json>"`
+
+The registration mirrors what 7-Zip's `DllRegisterServer` writes:
+
+- `CLSID\<clsid>` carries the friendly name, and `CLSID\<clsid>\InprocServer32`
+  points at the installed DLL with `ThreadingModel = Apartment`.
+- `<clsid>` is added to the HKLM `Shell Extensions\Approved` list. The list only
+  matters when the shell-extension security policy is on, and it is outside a
+  per-user hive, so the hook writes it best-effort and continues unelevated.
+- `*`, `Directory` and `Folder` each get
+  `shellex\ContextMenuHandlers\ZManager` pointing at that CLSID. `Drive` is
+  deliberately left out, exactly as 7-Zip leaves it out.
+
+Explorer keeps a handler DLL loaded for the lifetime of the process, so
+`ZM_INSTALL_SHELL_EXTENSION_BINARY` moves a locked DLL aside (renaming inside the
+same directory is permitted) and schedules the stale copy for deletion on reboot
+before writing the new one. Without that step a reinstall would silently keep the
+previous DLL and the refreshed registration would resolve to stale code. Already
+running Explorer processes keep the old DLL mapped until they restart.
 
 Folder-background commands have one target and continue to use the quick-action
 CLI contract:
@@ -24,18 +43,19 @@ Explorer shows a single `ZManager` cascaded menu. Supported archive extensions s
 `Extract Here`, `Extract to Archive Folder`, and `Open archive` first, followed by `Add to archive...`,
 `Add to .tzap`, `Add to .zip`, `Add to .7z`, `Add to .tzst`, and `Add to .tgz`, so archive files
 can also be archived again. Selected folders and folder backgrounds show the same
-add actions. The installed COM-backed `*\shell` cascade gives generic file
-selections the same create actions in the classic context menu and receives the
-complete selection. Windows 11's compact context menu has separate
-package-identity requirements. Selected-item cascades use the registered root
-`IExplorerCommand` providers, which enumerate the available children for the
-current selection. The folder background cascade remains an explicit ordered
-per-user `ExtendedSubCommandsKey` because it invokes the one-target `%V`
-quick-action commands directly.
+add actions. The installed COM-backed classic handler gives generic file and
+folder selections the same create actions and receives the complete selection.
+Windows 11's compact context menu has separate package-identity requirements.
+The folder background cascade remains an explicit ordered per-user
+`ExtendedSubCommandsKey` because it invokes the one-target `%V` quick-action
+commands directly.
 The generic `Add to archive...` action opens the regular Create
 Archive dialog with the selected item preloaded. Fixed-format actions use the same
-create workflow and start with rename-on-collision enabled. Extraction is registered
-for supported archive extensions through `SystemFileAssociations`.
+create workflow and start with rename-on-collision enabled. Extraction needs no
+per-extension registration: like 7-Zip, the single handler on `*` inspects the
+selection and offers the extract actions when every selected file is a supported
+archive. `ZM_REGISTER_ARCHIVE_EXTENSION` only clears the `SystemFileAssociations`
+entries written by earlier releases.
 
 The selected-item COM handler receives Explorer's full selection data object and
 does not use a timing heuristic. Static `%1` registry verbs are retained only as
@@ -44,12 +64,18 @@ an accepted compatibility input, not as the installed selected-item workflow.
 Release wiring:
 
 1. Keep the NSIS target enabled in `src-tauri/tauri.conf.json`.
-2. Build the installer with `scripts/build-windows-static.ps1`; it builds the
-   architecture-matched shell extension before invoking Tauri.
+2. Build the installer with `scripts/build.bat` or
+   `scripts/build-windows-static.ps1`. `build.bat` delegates to
+   `build-windows-static.ps1 -Install`, so both paths build the
+   architecture-matched shell extension, refuse to package a DLL older than its
+   sources, and register the context menu by running the built NSIS installer.
+   There is no second registration path to keep in sync.
 3. The installer includes `packaging/windows/nsis-context-menu.nsh` automatically via
    `installerHooks`.
 4. Validate install/uninstall by checking the DLL and CLSIDs appear after install
-   and disappear after uninstall.
+   and disappear after uninstall. `scripts/test-windows-shell-integration.ps1`
+   asserts the registration contract and the `build.bat` parity, and runs as part
+   of `build-windows-static.ps1`.
 
 Next packaging steps remain code signing, WinGet metadata after public artifacts are
 stable, and a signed package-with-external-location registration if first-tier

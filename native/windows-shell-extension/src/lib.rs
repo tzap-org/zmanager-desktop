@@ -17,21 +17,42 @@ use windows::{
     Win32::{
         Foundation::{CLASS_E_CLASSNOTAVAILABLE, CLASS_E_NOAGGREGATION, E_FAIL, E_INVALIDARG, E_NOTIMPL, HMODULE, S_FALSE, S_OK},
         System::{
-            Com::{CoTaskMemFree, IBindCtx, IClassFactory, IClassFactory_Impl},
+            Com::{CoTaskMemFree, IBindCtx, IClassFactory, IClassFactory_Impl, IDataObject},
             LibraryLoader::{GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, GetModuleFileNameW, GetModuleHandleExW},
+            Registry::HKEY,
         },
         UI::Shell::{
-            ECF_DEFAULT, ECF_HASSUBCOMMANDS, ECS_ENABLED, ECS_HIDDEN, IEnumExplorerCommand, IEnumExplorerCommand_Impl, IExplorerCommand, IExplorerCommand_Impl,
-            IShellItemArray, SHStrDupW, SIGDN_FILESYSPATH,
+            CMF_EXPLORE, CMF_NORMAL, CMF_VERBSONLY, CMINVOKECOMMANDINFO, CMINVOKECOMMANDINFOEX, ECF_DEFAULT, ECF_HASSUBCOMMANDS, ECS_ENABLED, ECS_HIDDEN,
+            GCS_HELPTEXTW, GCS_UNICODE, GCS_VALIDATEW, GCS_VERBW, IContextMenu, IContextMenu_Impl, IEnumExplorerCommand, IEnumExplorerCommand_Impl,
+            IExplorerCommand, IExplorerCommand_Impl, IShellExtInit, IShellExtInit_Impl, IShellItemArray, SHCreateShellItemArrayFromDataObject, SHStrDupW,
+            SIGDN_FILESYSPATH,
         },
+        UI::WindowsAndMessaging::{AppendMenuW, CreatePopupMenu, DestroyMenu, HMENU, InsertMenuW, MF_BYPOSITION, MF_POPUP, MF_STRING},
     },
-    core::{BOOL, Error, GUID, HRESULT, Interface, PCWSTR, PWSTR, Ref, Result as WindowsResult, w},
+    core::{BOOL, Error, GUID, HRESULT, Interface, PCWSTR, PSTR, PWSTR, Ref, Result as WindowsResult, w},
 };
 use windows_core::implement;
-use zmanager_shell_contract::{ShellActionKind, ShellActionRequest, base_name_without_archive_extension};
+use zmanager_shell_contract::{SUPPORTED_ARCHIVE_SUFFIXES, ShellActionKind, ShellActionRequest, base_name_without_archive_extension};
 
 mod generated;
 use generated::*;
+
+/// Selected-item verbs Explorer may invoke by name instead of by command
+/// offset. 7-Zip publishes the same kind of stable `SevenZip*` verb strings.
+const CLASSIC_VERB_PREFIX: &str = "ZManager.";
+
+/// `CMINVOKECOMMANDINFOEX::lpVerbW` is only meaningful when the caller sets
+/// this mask; `windows` does not re-export the shell's `CMIC_MASK_UNICODE`.
+const CMIC_MASK_UNICODE: u32 = 0x0000_4000;
+
+/// The low four bits of `QueryContextMenu`'s flags carry the menu type.
+const CMF_TYPE_MASK: u32 = 0x0000_000F;
+
+/// `IS_INTRESOURCE`: Explorer packs a zero-based command offset into the verb
+/// pointer instead of passing a string.
+fn is_int_resource(value: usize) -> bool {
+    value >> 16 == 0
+}
 
 static LIVE_OBJECTS: AtomicU32 = AtomicU32::new(0);
 static SERVER_LOCKS: AtomicU32 = AtomicU32::new(0);
@@ -202,16 +223,24 @@ impl IEnumExplorerCommand_Impl for ZManagerExplorerCommandEnumerator_Impl {
     }
 }
 
-#[implement(IExplorerCommand)]
+#[implement(IExplorerCommand, IContextMenu, IShellExtInit)]
 struct ZManagerRootExplorerCommand {
     root: ExplorerRoot,
     subcommands: RefCell<Option<Vec<IExplorerCommand>>>,
+    classic_paths: RefCell<Vec<String>>,
+    classic_actions: RefCell<Vec<ExplorerAction>>,
     _live: LiveObject,
 }
 
 impl ZManagerRootExplorerCommand {
     fn new(root: ExplorerRoot) -> Self {
-        Self { root, subcommands: RefCell::new(None), _live: LiveObject::new() }
+        Self {
+            root,
+            subcommands: RefCell::new(None),
+            classic_paths: RefCell::new(Vec::new()),
+            classic_actions: RefCell::new(Vec::new()),
+            _live: LiveObject::new(),
+        }
     }
 
     fn load_subcommands(&self, selection: Option<&IShellItemArray>) {
@@ -231,6 +260,42 @@ impl ZManagerRootExplorerCommand {
         let commands =
             subcommands.get_or_insert_with(|| self.root.actions().iter().copied().map(|action| ZManagerExplorerCommand::new(action).into()).collect());
         commands.clone()
+    }
+
+    fn classic_actions_for_paths(&self, paths: &[String]) -> Vec<ExplorerAction> {
+        if paths.is_empty() {
+            return Vec::new();
+        }
+        let actions = if self.root == ExplorerRoot::Create && paths.iter().all(|path| is_supported_archive_file(path)) {
+            ARCHIVE_EXPLORER_ACTIONS
+        } else {
+            self.root.actions()
+        };
+        actions.iter().copied().filter(|action| action.supports_paths(paths)).collect()
+    }
+
+    /// Resolve the command Explorer is asking about, accepting every form the
+    /// classic contract allows: the unicode verb, the ANSI verb, or the
+    /// zero-based command offset packed as an integer resource.
+    fn classic_command_index(&self, command: &CMINVOKECOMMANDINFO) -> Option<usize> {
+        if command.cbSize as usize >= size_of::<CMINVOKECOMMANDINFOEX>() && command.fMask & CMIC_MASK_UNICODE != 0 {
+            let extended = unsafe { &*(command as *const CMINVOKECOMMANDINFO).cast::<CMINVOKECOMMANDINFOEX>() };
+            if !is_int_resource(extended.lpVerbW.0 as usize) {
+                return self.classic_index_for_verb(&unsafe { extended.lpVerbW.to_string() }.ok()?);
+            }
+        }
+
+        let verb = command.lpVerb.0 as usize;
+        if is_int_resource(verb) {
+            // MSDN: the offset is already relative to idCmdFirst, so it indexes
+            // the command list directly. Subtracting idCmdFirst would be wrong.
+            return Some(verb & 0xFFFF);
+        }
+        self.classic_index_for_verb(&unsafe { command.lpVerb.to_string() }.ok()?)
+    }
+
+    fn classic_index_for_verb(&self, verb: &str) -> Option<usize> {
+        self.classic_actions.borrow().iter().position(|action| classic_verb(*action).eq_ignore_ascii_case(verb))
     }
 }
 
@@ -266,6 +331,150 @@ impl IExplorerCommand_Impl for ZManagerRootExplorerCommand_Impl {
 
     fn EnumSubCommands(&self) -> WindowsResult<IEnumExplorerCommand> {
         Ok(ZManagerExplorerCommandEnumerator::new(self.subcommands()).into())
+    }
+}
+
+impl IShellExtInit_Impl for ZManagerRootExplorerCommand_Impl {
+    fn Initialize(
+        &self,
+        _pidlfolder: *const windows::Win32::UI::Shell::Common::ITEMIDLIST,
+        pdtobj: Ref<'_, IDataObject>,
+        _hkeyprogid: HKEY,
+    ) -> WindowsResult<()> {
+        self.classic_paths.borrow_mut().clear();
+        self.classic_actions.borrow_mut().clear();
+
+        let data_object = pdtobj.ok()?;
+        let shell_items: IShellItemArray = unsafe { SHCreateShellItemArrayFromDataObject(data_object)? };
+        let paths = selected_file_system_paths(&shell_items)?;
+        let actions = self.classic_actions_for_paths(&paths);
+        *self.classic_paths.borrow_mut() = paths;
+        *self.classic_actions.borrow_mut() = actions;
+        Ok(())
+    }
+}
+
+impl IContextMenu_Impl for ZManagerRootExplorerCommand_Impl {
+    fn QueryContextMenu(&self, hmenu: HMENU, indexmenu: u32, idcmdfirst: u32, idcmdlast: u32, uflags: u32) -> HRESULT {
+        // 7-Zip's gate: build the menu for the ordinary browse cases only. The
+        // remaining menu types ask for the default verb, so we add nothing.
+        if uflags & CMF_TYPE_MASK != CMF_NORMAL && uflags & CMF_VERBSONLY == 0 && uflags & CMF_EXPLORE == 0 {
+            return HRESULT(0);
+        }
+        if idcmdfirst > idcmdlast {
+            return E_INVALIDARG;
+        }
+
+        let paths = self.classic_paths.borrow().clone();
+        let capacity = (idcmdlast - idcmdfirst + 1) as usize;
+        let actions: Vec<ExplorerAction> = self.classic_actions_for_paths(&paths).into_iter().take(capacity).collect();
+        *self.classic_actions.borrow_mut() = actions.clone();
+        if actions.is_empty() {
+            return HRESULT(0);
+        }
+
+        // Explorer passes a null menu when it only wants the command count.
+        if !hmenu.is_invalid() && !self.insert_classic_menu(hmenu, indexmenu, idcmdfirst, &actions, &paths) {
+            return HRESULT(0);
+        }
+
+        // MSDN: report the number of command identifiers claimed so sibling
+        // handlers are given a disjoint identifier range.
+        HRESULT(actions.len() as i32)
+    }
+
+    fn InvokeCommand(&self, pici: *const CMINVOKECOMMANDINFO) -> WindowsResult<()> {
+        if pici.is_null() {
+            return Err(Error::from_hresult(E_INVALIDARG));
+        }
+
+        let command = unsafe { &*pici };
+        let index = self.classic_command_index(command).ok_or_else(|| Error::from_hresult(E_INVALIDARG))?;
+        let action = self.classic_actions.borrow().get(index).copied().ok_or_else(|| Error::from_hresult(E_INVALIDARG))?;
+        let paths = self.classic_paths.borrow().clone();
+        if !action.supports_paths(&paths) {
+            return Err(Error::from_hresult(E_INVALIDARG));
+        }
+
+        handoff_to_zmanager(action.shell_action(), paths).map_err(|error| Error::new(E_FAIL, error.to_string()))
+    }
+
+    fn GetCommandString(&self, idcmd: usize, utype: u32, _preserved: *const u32, pszname: PSTR, cchmax: u32) -> WindowsResult<()> {
+        let action = self.classic_actions.borrow().get(idcmd).copied();
+
+        // The ANSI and wide request types differ only by GCS_UNICODE.
+        if utype | GCS_UNICODE == GCS_VALIDATEW {
+            return if action.is_some() { Ok(()) } else { Err(Error::from_hresult(S_FALSE)) };
+        }
+
+        let action = action.ok_or_else(|| Error::from_hresult(E_INVALIDARG))?;
+        if cchmax == 0 || !matches!(utype | GCS_UNICODE, GCS_VERBW | GCS_HELPTEXTW) {
+            return Err(Error::from_hresult(E_INVALIDARG));
+        }
+
+        write_command_string(pszname, cchmax, &classic_verb(action), utype & GCS_UNICODE != 0);
+        Ok(())
+    }
+}
+
+impl ZManagerRootExplorerCommand_Impl {
+    /// Build the `ZManager` popup and hang it off Explorer's menu. Returns
+    /// false when the shell refuses an insertion, matching 7-Zip's bail-out.
+    fn insert_classic_menu(&self, hmenu: HMENU, indexmenu: u32, idcmdfirst: u32, actions: &[ExplorerAction], paths: &[String]) -> bool {
+        let Ok(popup) = (unsafe { CreatePopupMenu() }) else {
+            return false;
+        };
+
+        for (index, action) in actions.iter().enumerate() {
+            let title = classic_menu_title(*action, paths);
+            let command_id = idcmdfirst as usize + index;
+            if unsafe { AppendMenuW(popup, MF_STRING, command_id, PCWSTR(title.as_ptr())) }.is_err() {
+                let _ = unsafe { DestroyMenu(popup) };
+                return false;
+            }
+        }
+
+        // The popup itself carries no command identifier, so it does not count
+        // toward the number QueryContextMenu reports.
+        if unsafe { InsertMenuW(hmenu, indexmenu, MF_BYPOSITION | MF_POPUP, popup.0 as usize, w!("ZManager")) }.is_err() {
+            let _ = unsafe { DestroyMenu(popup) };
+            return false;
+        }
+
+        true
+    }
+}
+
+fn classic_verb(action: ExplorerAction) -> String {
+    format!("{CLASSIC_VERB_PREFIX}{}", action.native_verb())
+}
+
+/// The classic menu is drawn once, so the extract-to-folder entry has to name
+/// its destination up front the way `IExplorerCommand::GetTitle` does.
+fn classic_menu_title(action: ExplorerAction, paths: &[String]) -> Vec<u16> {
+    if action == ExplorerAction::ExtractToFolder && paths.len() == 1 {
+        let folder_name = base_name_without_archive_extension(&paths[0]);
+        return format!("Extract to \"{folder_name}\"\0").encode_utf16().collect();
+    }
+
+    let title = unsafe { action.title().to_string() }.unwrap_or_default();
+    format!("{title}\0").encode_utf16().collect()
+}
+
+fn write_command_string(buffer: PSTR, capacity: u32, text: &str, unicode: bool) {
+    if buffer.is_null() {
+        return;
+    }
+
+    let capacity = capacity as usize;
+    if unicode {
+        let mut wide: Vec<u16> = text.encode_utf16().take(capacity - 1).collect();
+        wide.push(0);
+        unsafe { std::ptr::copy_nonoverlapping(wide.as_ptr(), buffer.0.cast::<u16>(), wide.len()) };
+    } else {
+        let mut narrow: Vec<u8> = text.bytes().take(capacity - 1).collect();
+        narrow.push(0);
+        unsafe { std::ptr::copy_nonoverlapping(narrow.as_ptr(), buffer.0, narrow.len()) };
     }
 }
 
@@ -326,10 +535,17 @@ fn selected_file_system_paths(selection: &IShellItemArray) -> WindowsResult<Vec<
 
     for index in 0..count {
         let item = unsafe { selection.GetItemAt(index)? };
-        let display_name = unsafe { item.GetDisplayName(SIGDN_FILESYSPATH)? };
+        // Virtual items (search results, library roots) have no filesystem
+        // path. 7-Zip's CF_HDROP selection simply omits them, so we do too
+        // instead of failing the whole selection.
+        let Ok(display_name) = (unsafe { item.GetDisplayName(SIGDN_FILESYSPATH) }) else {
+            continue;
+        };
         let path = unsafe { display_name.to_string() };
         unsafe { CoTaskMemFree(Some(display_name.0.cast())) };
-        let path = path?;
+        let Ok(path) = path else {
+            continue;
+        };
         let comparison_key = path.to_lowercase();
         if seen.insert(comparison_key) {
             paths.push(path);
@@ -337,6 +553,11 @@ fn selected_file_system_paths(selection: &IShellItemArray) -> WindowsResult<Vec<
     }
 
     Ok(paths)
+}
+
+fn is_supported_archive_file(path: &str) -> bool {
+    let candidate = Path::new(path);
+    candidate.is_file() && SUPPORTED_ARCHIVE_SUFFIXES.iter().any(|suffix| path.to_ascii_lowercase().ends_with(suffix))
 }
 
 fn handoff_to_zmanager(action: ShellActionKind, paths: Vec<String>) -> io::Result<()> {
@@ -420,8 +641,9 @@ mod tests {
     use std::path::Path;
     use windows::Win32::{
         System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize},
-        UI::Shell::{Common::ITEMIDLIST, SHCreateShellItemArrayFromIDLists, SHParseDisplayName},
+        UI::Shell::{BHID_DataObject, CMF_DEFAULTONLY, Common::ITEMIDLIST, SHCreateShellItemArrayFromIDLists, SHParseDisplayName},
     };
+    use windows::core::PCSTR;
 
     fn shell_item_array(paths: &[&Path]) -> IShellItemArray {
         let mut owned_pidls = Vec::<*mut ITEMIDLIST>::with_capacity(paths.len());
@@ -628,5 +850,134 @@ mod tests {
         drop(archive_selection);
         let _ = fs::remove_dir_all(directory);
         unsafe { CoUninitialize() };
+    }
+
+    #[test]
+    fn classic_invoke_reads_the_command_offset_explorer_passes() {
+        let handler = ZManagerRootExplorerCommand::new(ExplorerRoot::Create);
+        *handler.classic_actions.borrow_mut() = CREATE_EXPLORER_ACTIONS.to_vec();
+        let mut command = CMINVOKECOMMANDINFO { cbSize: size_of::<CMINVOKECOMMANDINFO>() as u32, ..Default::default() };
+
+        // Explorer packs the offset as an integer resource, and that offset is
+        // already relative to the idCmdFirst it passed to QueryContextMenu.
+        command.lpVerb = PCSTR(3 as *const u8);
+        assert_eq!(handler.classic_command_index(&command), Some(3));
+
+        // The canonical verb string selects the same command.
+        let verb = format!("{}\0", classic_verb(CREATE_EXPLORER_ACTIONS[3]));
+        command.lpVerb = PCSTR(verb.as_ptr());
+        assert_eq!(handler.classic_command_index(&command), Some(3));
+
+        let unknown = c"ZManager.NoSuchAction";
+        command.lpVerb = PCSTR(unknown.as_ptr().cast());
+        assert_eq!(handler.classic_command_index(&command), None);
+    }
+
+    #[test]
+    fn classic_handler_claims_one_command_id_per_supported_action() {
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok() }.expect("COM apartment should initialize");
+        let directory = std::env::temp_dir().join(format!("zmanager-shell-classic-menu-test-{}", REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)));
+        let folder1 = directory.join("folder1");
+        let folder2 = directory.join("folder2");
+        fs::create_dir_all(&folder1).expect("first folder should be created");
+        fs::create_dir_all(&folder2).expect("second folder should be created");
+
+        let selection = shell_item_array(&[&folder1, &folder2]);
+        let data_object: IDataObject = unsafe { selection.BindToHandler(None, &BHID_DataObject) }.expect("selection should expose a data object");
+
+        let handler: IContextMenu = ZManagerRootExplorerCommand::new(ExplorerRoot::Create).into();
+        let initializer: IShellExtInit = handler.cast().expect("handler should expose IShellExtInit");
+        unsafe { initializer.Initialize(None, &data_object, None) }.expect("handler should accept Explorer's selection");
+
+        // Two folders: every create action applies except the single-target
+        // Share on LAN entry.
+        let expected: Vec<ExplorerAction> = CREATE_EXPLORER_ACTIONS.iter().copied().filter(|action| *action != ExplorerAction::ShareOnLan).collect();
+
+        const FIRST_COMMAND_ID: u32 = 0x1000;
+        let claimed = unsafe { handler.QueryContextMenu(HMENU::default(), 0, FIRST_COMMAND_ID, FIRST_COMMAND_ID + 0xFF, CMF_NORMAL) };
+        assert_eq!(claimed.0, expected.len() as i32);
+
+        // Command strings are addressed by the same zero-based offset, whatever
+        // identifier range Explorer handed out.
+        for (offset, action) in expected.iter().enumerate() {
+            let mut buffer = [0u16; 128];
+            unsafe { handler.GetCommandString(offset, GCS_VERBW, None, PSTR(buffer.as_mut_ptr().cast()), buffer.len() as u32) }
+                .expect("every claimed offset should resolve to a verb");
+            let verb = String::from_utf16_lossy(&buffer);
+            assert_eq!(verb.trim_end_matches('\0'), classic_verb(*action));
+        }
+        // GCS_VALIDATE answers with S_FALSE rather than an error, so read the
+        // raw result instead of the Result wrapper that treats it as success.
+        let validate = |offset: usize| unsafe {
+            (Interface::vtable(&handler).GetCommandString)(Interface::as_raw(&handler), offset, GCS_VALIDATEW, std::ptr::null(), PSTR::null(), 0)
+        };
+        assert_eq!(validate(expected.len() - 1), S_OK);
+        assert_eq!(validate(expected.len()), S_FALSE);
+
+        // Menus that only want the default verb get nothing.
+        assert_eq!(unsafe { handler.QueryContextMenu(HMENU::default(), 0, FIRST_COMMAND_ID, FIRST_COMMAND_ID + 0xFF, CMF_DEFAULTONLY) }.0, 0);
+
+        drop(data_object);
+        drop(selection);
+        let _ = fs::remove_dir_all(directory);
+        unsafe { CoUninitialize() };
+    }
+
+    #[test]
+    fn classic_handler_offers_extraction_when_every_selected_file_is_an_archive() {
+        unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok() }.expect("COM apartment should initialize");
+        let directory = std::env::temp_dir().join(format!("zmanager-shell-classic-archive-test-{}", REQUEST_SEQUENCE.fetch_add(1, Ordering::Relaxed)));
+        fs::create_dir_all(&directory).expect("test directory should be created");
+        let archive = directory.join("bundle.zip");
+        fs::write(&archive, b"not really a zip").expect("archive fixture should be written");
+        let plain = directory.join("notes.txt");
+        fs::write(&plain, b"plain").expect("text fixture should be written");
+
+        let handler = ZManagerRootExplorerCommand::new(ExplorerRoot::Create);
+        let archive_path = archive.to_string_lossy().into_owned();
+        let plain_path = plain.to_string_lossy().into_owned();
+
+        let archive_actions = handler.classic_actions_for_paths(std::slice::from_ref(&archive_path));
+        assert_eq!(archive_actions.first(), Some(&ExplorerAction::ExtractHere));
+        assert!(archive_actions.contains(&ExplorerAction::ExtractToFolder));
+        assert!(archive_actions.contains(&ExplorerAction::Open));
+        assert!(archive_actions.contains(&ExplorerAction::Compress));
+
+        // One non-archive in the selection drops the extraction actions.
+        let mixed_actions = handler.classic_actions_for_paths(&[archive_path, plain_path]);
+        assert!(!mixed_actions.contains(&ExplorerAction::ExtractHere));
+        assert!(!mixed_actions.contains(&ExplorerAction::Open));
+        assert!(mixed_actions.contains(&ExplorerAction::Compress));
+
+        assert!(handler.classic_actions_for_paths(&[]).is_empty());
+
+        let _ = fs::remove_dir_all(directory);
+        unsafe { CoUninitialize() };
+    }
+
+    #[test]
+    fn classic_menu_titles_match_the_explorer_command_titles() {
+        let archive = std::env::temp_dir().join("quarterly-report.tar.gz").to_string_lossy().into_owned();
+        let title = String::from_utf16_lossy(&classic_menu_title(ExplorerAction::ExtractToFolder, std::slice::from_ref(&archive)));
+        assert_eq!(title.trim_end_matches('\0'), "Extract to \"quarterly-report\"");
+
+        // With more than one archive selected there is no single destination to
+        // name, so the entry keeps its generic label.
+        let generic = String::from_utf16_lossy(&classic_menu_title(ExplorerAction::ExtractToFolder, &[archive.clone(), archive]));
+        assert_eq!(generic.trim_end_matches('\0'), "Extract to Archive Folder");
+
+        let compress = String::from_utf16_lossy(&classic_menu_title(ExplorerAction::CompressZip, &[]));
+        assert_eq!(compress.trim_end_matches('\0'), "Add to .zip");
+    }
+
+    #[test]
+    fn command_strings_are_written_as_the_caller_asked() {
+        let mut wide = [0u16; 8];
+        write_command_string(PSTR(wide.as_mut_ptr().cast()), wide.len() as u32, "ZManager.Open", true);
+        assert_eq!(String::from_utf16_lossy(&wide).trim_end_matches('\0'), "ZManage");
+
+        let mut narrow = [0u8; 8];
+        write_command_string(PSTR(narrow.as_mut_ptr()), narrow.len() as u32, "ZManager.Open", false);
+        assert_eq!(String::from_utf8_lossy(&narrow).trim_end_matches('\0'), "ZManage");
     }
 }

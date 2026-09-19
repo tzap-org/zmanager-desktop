@@ -37,20 +37,65 @@ function registeredArchiveExtensions(macroName: string): string[] {
 }
 
 describe("Windows context menu installer hook", () => {
-  it("registers one root IExplorerCommand provider for each selected-item cascade", () => {
-    const cascadeMacroStart = script.indexOf("!macro ZM_WRITE_CASCADE_MENU");
-    const cascadeMacroEnd = script.indexOf("!macroend", cascadeMacroStart);
-    expect(cascadeMacroStart).toBeGreaterThan(-1);
-    expect(cascadeMacroEnd).toBeGreaterThan(cascadeMacroStart);
-    const cascadeMacro = script.slice(cascadeMacroStart, cascadeMacroEnd);
-    expect(cascadeMacro).toContain('DeleteRegValue HKCU "${SHELL_KEY}\\${ZM_MENU_KEY}" "SubCommands"');
-    expect(cascadeMacro).toContain('DeleteRegValue HKCU "${SHELL_KEY}\\${ZM_MENU_KEY}" "ExtendedSubCommandsKey"');
-    expect(cascadeMacro).toContain('WriteRegStr HKCU "${SHELL_KEY}\\${ZM_MENU_KEY}" "ExplorerCommandHandler" "${ROOT_CLSID}"');
-    expect(cascadeMacro).not.toContain('WriteRegStr HKCU "${SHELL_KEY}\\${ZM_MENU_KEY}" "ExtendedSubCommandsKey"');
-    expect(script).toContain('!insertmacro ZM_WRITE_CASCADE_MENU "${SHELL_KEY}" "${ZM_ARCHIVE_ROOT_CLSID}"');
-    expect(script).toContain('!insertmacro ZM_WRITE_CASCADE_MENU "${SHELL_KEY}" "${ZM_CREATE_ROOT_CLSID}"');
-    expect(script).not.toContain('!insertmacro ZM_REGISTER_GENERATED_ARCHIVE_SUBCOMMANDS');
-    expect(script).not.toContain('!insertmacro ZM_REGISTER_GENERATED_CREATE_FILE_SUBCOMMANDS');
+  it("registers the selected-item handler using the classic 7-Zip shell-extension contract", () => {
+    const handlerMacroStart = script.indexOf("!macro ZM_REGISTER_CLASSIC_CONTEXT_MENU_HANDLER");
+    const handlerMacroEnd = script.indexOf("!macroend", handlerMacroStart);
+    expect(handlerMacroStart).toBeGreaterThan(-1);
+    expect(handlerMacroEnd).toBeGreaterThan(handlerMacroStart);
+    const handlerMacro = script.slice(handlerMacroStart, handlerMacroEnd);
+    expect(handlerMacro).toContain("\\shellex\\ContextMenuHandlers\\${ZM_CLASSIC_CONTEXT_MENU_KEY}");
+    expect(handlerMacro).toContain('"${ZM_CREATE_ROOT_CLSID}"');
+    expect(script).toContain('!insertmacro ZM_REGISTER_CLASSIC_CONTEXT_MENU_HANDLER "*"');
+    expect(script).toContain('!insertmacro ZM_REGISTER_CLASSIC_CONTEXT_MENU_HANDLER "Directory"');
+    expect(script).toContain('!insertmacro ZM_REGISTER_CLASSIC_CONTEXT_MENU_HANDLER "Folder"');
+    // The retired ExplorerCommandHandler cascade is gone for selected items;
+    // only the folder background keeps a static ExtendedSubCommandsKey menu.
+    expect(script).not.toContain("ExplorerCommandHandler\" \"${ROOT_CLSID}\"");
+    expect(script).not.toContain("!macro ZM_WRITE_CASCADE_MENU");
+    expect(script).not.toContain("ZM_WRITE_CREATE_CASCADE_MENU");
+    expect(script).not.toContain("ZM_WRITE_ARCHIVE_CASCADE_MENU");
+  });
+
+  it("registers the COM class the way 7-Zip's DllRegisterServer does", () => {
+    const registerStart = script.indexOf("!macro ZM_REGISTER_COM_CLASS");
+    const registerEnd = script.indexOf("!macroend", registerStart);
+    expect(registerStart).toBeGreaterThan(-1);
+    const registerMacro = script.slice(registerStart, registerEnd);
+    expect(registerMacro).toContain(
+      'WriteRegStr HKCU "Software\\Classes\\CLSID\\${CLSID}" "" "${ZM_SHELL_EXTENSION_DESCRIPTION}"',
+    );
+    expect(registerMacro).toContain(
+      'WriteRegStr HKCU "Software\\Classes\\CLSID\\${CLSID}\\InprocServer32" "" "$INSTDIR\\${ZM_SHELL_EXTENSION_NAME}"',
+    );
+    expect(registerMacro).toContain('"ThreadingModel" "Apartment"');
+    expect(registerMacro).toContain(
+      'WriteRegStr HKLM "${ZM_APPROVED_SHELL_EXTENSIONS_KEY}" "${CLSID}" "${ZM_SHELL_EXTENSION_DESCRIPTION}"',
+    );
+
+    const unregisterStart = script.indexOf("!macro ZM_UNREGISTER_COM_CLASS");
+    const unregisterEnd = script.indexOf("!macroend", unregisterStart);
+    expect(unregisterStart).toBeGreaterThan(-1);
+    const unregisterMacro = script.slice(unregisterStart, unregisterEnd);
+    expect(unregisterMacro).toContain('DeleteRegKey HKCU "Software\\Classes\\CLSID\\${CLSID}"');
+    expect(unregisterMacro).toContain('DeleteRegValue HKLM "${ZM_APPROVED_SHELL_EXTENSIONS_KEY}" "${CLSID}"');
+  });
+
+  it("replaces a handler DLL that Explorer still holds open", () => {
+    const macroStart = script.indexOf("!macro ZM_INSTALL_SHELL_EXTENSION_BINARY");
+    const macroEnd = script.indexOf("!macroend", macroStart);
+    expect(macroStart).toBeGreaterThan(-1);
+    const macro = script.slice(macroStart, macroEnd);
+    expect(macro).toContain('Rename "$INSTDIR\\${ZM_SHELL_EXTENSION_NAME}" "$INSTDIR\\${ZM_SHELL_EXTENSION_NAME}.old"');
+    expect(macro).toContain('Delete /REBOOTOK "$INSTDIR\\${ZM_SHELL_EXTENSION_NAME}.old"');
+    expect(macro).toContain('File /oname=${ZM_SHELL_EXTENSION_NAME} "${ZM_SHELL_EXTENSION_SOURCE}"');
+    // A silent install must fail loudly instead of registering a handler that
+    // points at a DLL that never got written.
+    expect(macro).toContain("Abort ");
+
+    const postInstallStart = script.indexOf("!macro NSIS_HOOK_POSTINSTALL");
+    const postInstall = script.slice(postInstallStart, script.indexOf("!macroend", postInstallStart));
+    expect(postInstall).toContain("!insertmacro ZM_INSTALL_SHELL_EXTENSION_BINARY");
+    expect(postInstall).not.toContain('File /oname=${ZM_SHELL_EXTENSION_NAME}');
   });
 
   it("keeps the archive submenu actions in the requested order", () => {

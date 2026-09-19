@@ -1,22 +1,15 @@
 !define ZM_EXE_NAME "zmanager-desktop.exe"
 !define ZM_SHELL_EXTENSION_NAME "zmanager-shell-extension.dll"
 !define ZM_SHELL_EXTENSION_SOURCE "${__FILEDIR__}\..\..\target\windows-shell-extension\zmanager-shell-extension.dll"
+!define ZM_SHELL_EXTENSION_DESCRIPTION "ZManager Shell Extension"
+!define ZM_APPROVED_SHELL_EXTENSIONS_KEY "Software\Microsoft\Windows\CurrentVersion\Shell Extensions\Approved"
 !define ZM_VERB_PREFIX "ZManager"
 !define ZM_MENU_KEY "ZManager"
+!define ZM_CLASSIC_CONTEXT_MENU_KEY "ZManager"
 !define ZM_ARCHIVE_SUBCOMMANDS_KEY "ZManager.Desktop.ContextMenu.Archive"
 !define ZM_CREATE_FILE_SUBCOMMANDS_KEY "ZManager.Desktop.ContextMenu.CreateFile"
 !define ZM_CREATE_BACKGROUND_SUBCOMMANDS_KEY "ZManager.Desktop.ContextMenu.CreateBackground"
 !define ZM_NON_ARCHIVE_FILE_APPLIES_TO "NOT System.FileExtension:=.7z AND NOT System.FileExtension:=.7z.001 AND NOT System.FileExtension:=.a AND NOT System.FileExtension:=.aar AND NOT System.FileExtension:=.ad1 AND NOT System.FileExtension:=.aea AND NOT System.FileExtension:=.aff4 AND NOT System.FileExtension:=.apk AND NOT System.FileExtension:=.appimage AND NOT System.FileExtension:=.appx AND NOT System.FileExtension:=.ar AND NOT System.FileExtension:=.b64 AND NOT System.FileExtension:=.br AND NOT System.FileExtension:=.bz2 AND NOT System.FileExtension:=.cab AND NOT System.FileExtension:=.cb7 AND NOT System.FileExtension:=.cbr AND NOT System.FileExtension:=.cbt AND NOT System.FileExtension:=.cbz AND NOT System.FileExtension:=.ccd AND NOT System.FileExtension:=.cdi AND NOT System.FileExtension:=.cpgz AND NOT System.FileExtension:=.cpio AND NOT System.FileExtension:=.cpio.bz2 AND NOT System.FileExtension:=.cpio.gz AND NOT System.FileExtension:=.cpio.lzma AND NOT System.FileExtension:=.cpio.xz AND NOT System.FileExtension:=.cpio.zst AND NOT System.FileExtension:=.cue AND NOT System.FileExtension:=.dar AND NOT System.FileExtension:=.dd AND NOT System.FileExtension:=.deb AND NOT System.FileExtension:=.dmg AND NOT System.FileExtension:=.dsk AND NOT System.FileExtension:=.e01 AND NOT System.FileExtension:=.epub AND NOT System.FileExtension:=.ex01 AND NOT System.FileExtension:=.gz AND NOT System.FileExtension:=.img AND NOT System.FileExtension:=.ipa AND NOT System.FileExtension:=.iso AND NOT System.FileExtension:=.isz AND NOT System.FileExtension:=.jar AND NOT System.FileExtension:=.lha AND NOT System.FileExtension:=.lib AND NOT System.FileExtension:=.lz AND NOT System.FileExtension:=.lz4 AND NOT System.FileExtension:=.lzh AND NOT System.FileExtension:=.lzma AND NOT System.FileExtension:=.lzo AND NOT System.FileExtension:=.mdf AND NOT System.FileExtension:=.mds AND NOT System.FileExtension:=.msi AND NOT System.FileExtension:=.mtree AND NOT System.FileExtension:=.nrg AND NOT System.FileExtension:=.pax AND NOT System.FileExtension:=.pkg AND NOT System.FileExtension:=.qcow AND NOT System.FileExtension:=.qcow2 AND NOT System.FileExtension:=.rar AND NOT System.FileExtension:=.raw AND NOT System.FileExtension:=.rpm AND NOT System.FileExtension:=.sevenz AND NOT System.FileExtension:=.sqfs AND NOT System.FileExtension:=.squashfs AND NOT System.FileExtension:=.swm AND NOT System.FileExtension:=.tar AND NOT System.FileExtension:=.tar.b64 AND NOT System.FileExtension:=.tar.br AND NOT System.FileExtension:=.tar.bz2 AND NOT System.FileExtension:=.tar.gz AND NOT System.FileExtension:=.tar.lrz AND NOT System.FileExtension:=.tar.lz AND NOT System.FileExtension:=.tar.lz4 AND NOT System.FileExtension:=.tar.lzma AND NOT System.FileExtension:=.tar.lzo AND NOT System.FileExtension:=.tar.uu AND NOT System.FileExtension:=.tar.xz AND NOT System.FileExtension:=.tar.z AND NOT System.FileExtension:=.tar.zst AND NOT System.FileExtension:=.taz AND NOT System.FileExtension:=.tbz AND NOT System.FileExtension:=.tbz2 AND NOT System.FileExtension:=.tgz AND NOT System.FileExtension:=.tlzma AND NOT System.FileExtension:=.txz AND NOT System.FileExtension:=.tzap AND NOT System.FileExtension:=.tzst AND NOT System.FileExtension:=.udf AND NOT System.FileExtension:=.ustar AND NOT System.FileExtension:=.uu AND NOT System.FileExtension:=.vdi AND NOT System.FileExtension:=.vhd AND NOT System.FileExtension:=.vhdx AND NOT System.FileExtension:=.vmdk AND NOT System.FileExtension:=.vol000.tzap AND NOT System.FileExtension:=.war AND NOT System.FileExtension:=.warc AND NOT System.FileExtension:=.wim AND NOT System.FileExtension:=.xar AND NOT System.FileExtension:=.xpi AND NOT System.FileExtension:=.xz AND NOT System.FileExtension:=.z AND NOT System.FileExtension:=.zip AND NOT System.FileExtension:=.zipx AND NOT System.FileExtension:=.zst"
-
-!macro ZM_WRITE_CASCADE_MENU SHELL_KEY ROOT_CLSID
-  DeleteRegValue HKCU "${SHELL_KEY}\${ZM_MENU_KEY}" "SubCommands"
-  DeleteRegValue HKCU "${SHELL_KEY}\${ZM_MENU_KEY}" "ExtendedSubCommandsKey"
-  DeleteRegKey HKCU "${SHELL_KEY}\${ZM_MENU_KEY}\ExtendedSubCommandsKey"
-  WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}" "MUIVerb" "ZManager"
-  WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}" "Icon" "$INSTDIR\${ZM_EXE_NAME}"
-  WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}" "ExplorerCommandHandler" "${ROOT_CLSID}"
-  WriteRegStr HKCU "${SHELL_KEY}\${ZM_MENU_KEY}" "MultiSelectModel" "Player"
-!macroend
 
 !macro ZM_WRITE_STATIC_CASCADE_MENU SHELL_KEY SUBCOMMANDS_KEY
   DeleteRegValue HKCU "${SHELL_KEY}\${ZM_MENU_KEY}" "SubCommands"
@@ -35,13 +28,36 @@
   WriteRegStr HKCU "Software\Classes\${SUBCOMMANDS_KEY}\shell\${VERB_NAME}\command" "" "$\"$INSTDIR\${ZM_EXE_NAME}$\" --quick-action ${QUICK_ACTION} --path $\"${TARGET_TOKEN}$\""
 !macroend
 
+; Match the 7-Zip registration model: Explorer creates the COM object through
+; the classic ContextMenuHandlers contract, then calls IShellExtInit and
+; IContextMenu on the registered class.
+!macro ZM_REGISTER_CLASSIC_CONTEXT_MENU_HANDLER SHELL_KEY
+  WriteRegStr HKCU "Software\Classes\${SHELL_KEY}\shellex\ContextMenuHandlers\${ZM_CLASSIC_CONTEXT_MENU_KEY}" "" "${ZM_CREATE_ROOT_CLSID}"
+!macroend
+
+!macro ZM_UNREGISTER_CLASSIC_CONTEXT_MENU_HANDLER SHELL_KEY
+  DeleteRegKey HKCU "Software\Classes\${SHELL_KEY}\shellex\ContextMenuHandlers\${ZM_CLASSIC_CONTEXT_MENU_KEY}"
+!macroend
+
+; Same CLSID layout 7-Zip writes from DllRegisterServer: a friendly name on the
+; class key, the in-process server, and the Apartment threading model. The
+; Approved list is only consulted when the shell-extension security policy is
+; enabled, and it lives under HKLM, so a per-user install writes it
+; best-effort and keeps going when it is not elevated.
 !macro ZM_REGISTER_COM_CLASS CLSID
+  WriteRegStr HKCU "Software\Classes\CLSID\${CLSID}" "" "${ZM_SHELL_EXTENSION_DESCRIPTION}"
   WriteRegStr HKCU "Software\Classes\CLSID\${CLSID}\InprocServer32" "" "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}"
   WriteRegStr HKCU "Software\Classes\CLSID\${CLSID}\InprocServer32" "ThreadingModel" "Apartment"
+  ClearErrors
+  WriteRegStr HKLM "${ZM_APPROVED_SHELL_EXTENSIONS_KEY}" "${CLSID}" "${ZM_SHELL_EXTENSION_DESCRIPTION}"
+  ClearErrors
 !macroend
 
 !macro ZM_UNREGISTER_COM_CLASS CLSID
   DeleteRegKey HKCU "Software\Classes\CLSID\${CLSID}"
+  ClearErrors
+  DeleteRegValue HKLM "${ZM_APPROVED_SHELL_EXTENSIONS_KEY}" "${CLSID}"
+  ClearErrors
 !macroend
 
 !include "${__FILEDIR__}\nsis-shell-actions.generated.nsh"
@@ -85,14 +101,6 @@
   !insertmacro ZM_DELETE_SUBCOMMANDS "${ZM_CREATE_BACKGROUND_SUBCOMMANDS_KEY}"
 !macroend
 
-!macro ZM_WRITE_ARCHIVE_CASCADE_MENU SHELL_KEY
-  !insertmacro ZM_WRITE_CASCADE_MENU "${SHELL_KEY}" "${ZM_ARCHIVE_ROOT_CLSID}"
-!macroend
-
-!macro ZM_WRITE_CREATE_CASCADE_MENU SHELL_KEY
-  !insertmacro ZM_WRITE_CASCADE_MENU "${SHELL_KEY}" "${ZM_CREATE_ROOT_CLSID}"
-!macroend
-
 !macro ZM_WRITE_BACKGROUND_CREATE_CASCADE_MENU SHELL_KEY
   !insertmacro ZM_WRITE_STATIC_CASCADE_MENU "${SHELL_KEY}" "${ZM_CREATE_BACKGROUND_SUBCOMMANDS_KEY}"
   !insertmacro ZM_REGISTER_GENERATED_BACKGROUND_SUBCOMMANDS "${ZM_CREATE_BACKGROUND_SUBCOMMANDS_KEY}"
@@ -106,14 +114,19 @@
   DeleteRegKey HKCU "${SHELL_KEY}\${ZM_MENU_KEY}"
 !macroend
 
+; Archive extensions need no registration of their own. Like 7-Zip, the single
+; handler on "*" sees the whole selection and decides for itself whether the
+; extract actions apply, so this macro only clears registrations left behind by
+; earlier per-extension releases.
 !macro ZM_REGISTER_ARCHIVE_EXTENSION EXTENSION
   !insertmacro ZM_DELETE_CONTEXT_VERB "Software\Classes\SystemFileAssociations\${EXTENSION}\shell" "Extract"
   !insertmacro ZM_DELETE_CASCADE_MENU "Software\Classes\SystemFileAssociations\${EXTENSION}\shell"
-  !insertmacro ZM_WRITE_ARCHIVE_CASCADE_MENU "Software\Classes\SystemFileAssociations\${EXTENSION}\shell"
+  !insertmacro ZM_UNREGISTER_CLASSIC_CONTEXT_MENU_HANDLER "SystemFileAssociations\${EXTENSION}"
 !macroend
 
 !macro ZM_UNREGISTER_ARCHIVE_EXTENSION EXTENSION
   !insertmacro ZM_DELETE_CASCADE_MENU "Software\Classes\SystemFileAssociations\${EXTENSION}\shell"
+  !insertmacro ZM_UNREGISTER_CLASSIC_CONTEXT_MENU_HANDLER "SystemFileAssociations\${EXTENSION}"
   !insertmacro ZM_DELETE_CONTEXT_VERB "Software\Classes\SystemFileAssociations\${EXTENSION}\shell" "Extract"
   !insertmacro ZM_DELETE_CONTEXT_VERB "Software\Classes\SystemFileAssociations\${EXTENSION}\shell" "ExtractHere"
   !insertmacro ZM_DELETE_CONTEXT_VERB "Software\Classes\SystemFileAssociations\${EXTENSION}\shell" "ExtractToFolder"
@@ -367,9 +380,31 @@
   System::Call 'user32::SendMessageTimeoutW(i 0xFFFF, i 0x001A, i 0, w "Shell", i 0x0002, i 5000, *i 0)'
 !macroend
 
+; Explorer keeps a context menu handler DLL loaded for the lifetime of the
+; process, so overwriting it in place fails and a silent install would leave the
+; previous build on disk while the new registration points at it. Renaming a
+; loaded DLL within its own directory is allowed, so move the old copy aside and
+; let Windows remove it on the next reboot.
+!macro ZM_INSTALL_SHELL_EXTENSION_BINARY
+  ClearErrors
+  Delete "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}"
+  IfErrors 0 zm_shell_extension_binary_write
+  Delete "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}.old"
+  ClearErrors
+  Rename "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}" "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}.old"
+  Delete /REBOOTOK "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}.old"
+  ClearErrors
+zm_shell_extension_binary_write:
+  SetOverwrite on
+  File /oname=${ZM_SHELL_EXTENSION_NAME} "${ZM_SHELL_EXTENSION_SOURCE}"
+  IfFileExists "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}" zm_shell_extension_binary_done
+  Abort "Failed to install ${ZM_SHELL_EXTENSION_NAME}; the ZManager context menu would not work."
+zm_shell_extension_binary_done:
+!macroend
+
 !macro NSIS_HOOK_POSTINSTALL
   SetOutPath "$INSTDIR"
-  File /oname=${ZM_SHELL_EXTENSION_NAME} "${ZM_SHELL_EXTENSION_SOURCE}"
+  !insertmacro ZM_INSTALL_SHELL_EXTENSION_BINARY
   !insertmacro ZM_UNREGISTER_RETIRED_SHELL_EXTENSION_CLASSES
   !insertmacro ZM_REGISTER_SHELL_EXTENSION_CLASSES
   !insertmacro ZM_DELETE_CONTEXT_VERB "Software\Classes\*\shell" "CompressZip"
@@ -387,14 +422,18 @@
   !insertmacro ZM_DELETE_CASCADE_MENU "Software\Classes\*\shell"
   !insertmacro ZM_DELETE_CASCADE_MENU "Software\Classes\Directory\shell"
   !insertmacro ZM_DELETE_CASCADE_MENU "Software\Classes\Directory\Background\shell"
-  !insertmacro ZM_WRITE_CREATE_CASCADE_MENU "Software\Classes\*\shell"
-  !insertmacro ZM_WRITE_CREATE_CASCADE_MENU "Software\Classes\Directory\shell"
+  !insertmacro ZM_REGISTER_CLASSIC_CONTEXT_MENU_HANDLER "*"
+  !insertmacro ZM_REGISTER_CLASSIC_CONTEXT_MENU_HANDLER "Directory"
+  !insertmacro ZM_REGISTER_CLASSIC_CONTEXT_MENU_HANDLER "Folder"
   !insertmacro ZM_WRITE_BACKGROUND_CREATE_CASCADE_MENU "Software\Classes\Directory\Background\shell"
   !insertmacro ZM_REGISTER_ARCHIVE_EXTENSIONS
   !insertmacro ZM_REFRESH_SHELL_ASSOCIATIONS
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
+  !insertmacro ZM_UNREGISTER_CLASSIC_CONTEXT_MENU_HANDLER "*"
+  !insertmacro ZM_UNREGISTER_CLASSIC_CONTEXT_MENU_HANDLER "Directory"
+  !insertmacro ZM_UNREGISTER_CLASSIC_CONTEXT_MENU_HANDLER "Folder"
   !insertmacro ZM_DELETE_CASCADE_MENU "Software\Classes\*\shell"
   !insertmacro ZM_DELETE_CONTEXT_VERB "Software\Classes\*\shell" "Compress"
   !insertmacro ZM_DELETE_CONTEXT_VERB "Software\Classes\*\shell" "CompressZip"
@@ -414,4 +453,5 @@
   !insertmacro ZM_UNREGISTER_SHELL_EXTENSION_CLASSES
   !insertmacro ZM_REFRESH_SHELL_ASSOCIATIONS
   Delete /REBOOTOK "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}"
+  Delete /REBOOTOK "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}.old"
 !macroend
