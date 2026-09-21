@@ -1230,11 +1230,10 @@ pub fn accept_native_file_drag(
         strip_components: request.strip_components,
     };
     let kind = native_drag_job_kind(&normalized_request.archive_path);
-    // Native drag-out is an asynchronous OS conversation. Do not publish it to
-    // the accepted-job feed yet: that feed opens a task window immediately,
-    // before Finder/Explorer has committed the drop and before the destination
-    // is known. The frontend receives this unpublished envelope and hands it
-    // off only after the native drag settles.
+    // Keep native drag-out out of the shared accepted-job feed because the
+    // initiating frontend owns its handoff. It presents the disposable task
+    // window immediately before entering the platform drag loop, avoiding both
+    // duplicate presentation and a windowless modal drag operation on Windows.
     let (job, _token) = registry.try_create_unpublished_job(kind).map_err(subscription_error)?;
     let accepted_job =
         crate::job_dto::AcceptedJobEnvelopeDto { acceptance_revision: "0".to_string(), job, origin: crate::job_dto::AcceptedJobOriginDto::NativeDrag };
@@ -1265,7 +1264,7 @@ pub fn accept_native_file_drag(
 }
 
 #[tauri::command]
-pub fn start_native_file_drag(
+pub async fn start_native_file_drag(
     window: tauri::WebviewWindow,
     request: StartNativeFileDragRequest,
     registry: State<'_, JobRegistry>,

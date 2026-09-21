@@ -10,6 +10,8 @@ param(
     [switch]$InstallClang,
     [switch]$Install,
     [string]$InstallDir = "",
+    [ValidateRange(30, 3600)]
+    [int]$InstallerTimeoutSeconds = 300,
     [switch]$SkipShellRefresh
 )
 
@@ -151,28 +153,68 @@ function Resolve-NpmCommand {
     return Resolve-OptionalCommand -Names @("npm.cmd", "npm")
 }
 
-function Assert-ReleaseExecutableIsNotRunning {
-    $releaseExe = Join-Path $cargoTargetDir "$targetTriple\release\zmanager-desktop.exe"
-    if (-not (Test-Path $releaseExe)) {
-        $releaseExe = Join-Path $cargoTargetDir "release\zmanager-desktop.exe"
-        if (-not (Test-Path $releaseExe)) {
-            return
-        }
+function Get-ZManagerProcessesForExecutable {
+    param([string]$ExecutablePath)
+
+    if ([string]::IsNullOrWhiteSpace($ExecutablePath) -or -not (Test-Path -LiteralPath $ExecutablePath -PathType Leaf)) {
+        return @()
     }
 
-    $resolvedReleaseExe = (Resolve-Path $releaseExe).Path
-    $running = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+    $resolvedExecutable = (Resolve-Path -LiteralPath $ExecutablePath).Path
+    return @(Get-Process -Name "zmanager-desktop" -ErrorAction SilentlyContinue | Where-Object {
         try {
-            $_.Path -and ((Resolve-Path $_.Path -ErrorAction SilentlyContinue).Path -ieq $resolvedReleaseExe)
+            $_.Path -and ((Resolve-Path -LiteralPath $_.Path -ErrorAction SilentlyContinue).Path -ieq $resolvedExecutable)
         } catch {
             $false
         }
-    }
+    })
+}
+
+function Assert-ZManagerExecutableIsNotRunning {
+    param(
+        [string]$ExecutablePath,
+        [string]$Operation
+    )
+
+    $running = Get-ZManagerProcessesForExecutable -ExecutablePath $ExecutablePath
 
     if ($running) {
         $ids = ($running | ForEach-Object { "$($_.ProcessName)#$($_.Id)" }) -join ", "
-        throw "Close running ZManager process(es) before building; the release executable is locked by: $ids"
+        throw "Close running ZManager process(es) before $Operation; the executable is in use by: $ids"
     }
+}
+
+function Assert-ReleaseExecutableIsNotRunning {
+    $releaseExe = Join-Path $cargoTargetDir "$targetTriple\release\zmanager-desktop.exe"
+    if (-not (Test-Path -LiteralPath $releaseExe -PathType Leaf)) {
+        $releaseExe = Join-Path $cargoTargetDir "release\zmanager-desktop.exe"
+    }
+
+    Assert-ZManagerExecutableIsNotRunning -ExecutablePath $releaseExe -Operation "building"
+}
+
+function Wait-ZManagerInstaller {
+    param(
+        [System.Diagnostics.Process]$Installer,
+        [int]$TimeoutSeconds
+    )
+
+    $waitStarted = [System.Diagnostics.Stopwatch]::StartNew()
+    while (-not $Installer.HasExited) {
+        if ($Installer.WaitForExit(10000)) {
+            break
+        }
+
+        $elapsedSeconds = [Math]::Floor($waitStarted.Elapsed.TotalSeconds)
+        Write-Host "Installer still running... ${elapsedSeconds}s elapsed."
+        if ($waitStarted.Elapsed.TotalSeconds -ge $TimeoutSeconds) {
+            Stop-Process -Id $Installer.Id -Force -ErrorAction SilentlyContinue
+            throw "Installer did not finish within $TimeoutSeconds seconds and was stopped. The installation may be incomplete; close ZManager and retry."
+        }
+    }
+
+    $Installer.WaitForExit()
+    return $Installer.ExitCode
 }
 
 function Install-NsisBuild {
@@ -183,6 +225,10 @@ function Install-NsisBuild {
 
     $resolvedInstallDir = Resolve-ZManagerInstallDirectory -RequestedInstallDir $RequestedInstallDir
     $arguments = New-ZManagerNsisInstallArguments -InstallDirectory $resolvedInstallDir
+    if ($resolvedInstallDir) {
+        $installedExecutable = Join-Path $resolvedInstallDir "zmanager-desktop.exe"
+        Assert-ZManagerExecutableIsNotRunning -ExecutablePath $installedExecutable -Operation "installing"
+    }
 
     Write-Host "Installing built NSIS package: $InstallerPath"
     if ($resolvedInstallDir) {
@@ -192,11 +238,11 @@ function Install-NsisBuild {
     $installer = Start-Process `
         -FilePath $InstallerPath `
         -ArgumentList $arguments `
-        -Wait `
         -PassThru `
         -WindowStyle Hidden
-    if ($installer.ExitCode -ne 0) {
-        throw "Installer failed with exit code $($installer.ExitCode)"
+    $installerExitCode = Wait-ZManagerInstaller -Installer $installer -TimeoutSeconds $InstallerTimeoutSeconds
+    if ($installerExitCode -ne 0) {
+        throw "Installer failed with exit code $installerExitCode"
     }
     Write-Host "Install completed."
 }

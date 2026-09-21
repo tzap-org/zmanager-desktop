@@ -69,6 +69,11 @@ if (-not $nsis.Contains('Var /GLOBAL ZM_ShellExtensionWasLocked') -or
 if (-not $nsis.Contains('IfSilent zm_explorer_restart_now') -or -not $nsis.Contains('MessageBox MB_YESNO')) {
     throw "An interactive install must ask before closing the user's Explorer windows; a silent install must not prompt."
 }
+if (-not $nsis.Contains('SHCNF_FLUSHNOWAIT (0x2000)') -or
+    -not $nsis.Contains("SHChangeNotify(i 0x08000000, i 0x2000") -or
+    $nsis.Contains("SHChangeNotify(i 0x08000000, i 0x1000")) {
+    throw "The silent installer must not block indefinitely while notifying Explorer about association changes."
+}
 
 # The developer loop verifies the result of that install.
 $refreshScript = Join-Path $repoRoot "scripts\refresh-windows-shell-extension.ps1"
@@ -118,6 +123,12 @@ if (-not $static.Contains('build-windows-shell-extension.ps1')) {
 }
 if (-not $static.Contains('Install-NsisBuild')) {
     throw "build-windows-static.ps1 must install through the built NSIS package, not by copying files."
+}
+if (-not $static.Contains('Assert-ZManagerExecutableIsNotRunning') -or
+    -not $static.Contains('Wait-ZManagerInstaller') -or
+    -not $static.Contains('Installer still running...') -or
+    -not $static.Contains('InstallerTimeoutSeconds')) {
+    throw "The Windows build installer must reject a running target and provide bounded, visible install progress."
 }
 
 if (-not (Test-Path $extensionArtifact)) {

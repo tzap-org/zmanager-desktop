@@ -12,33 +12,35 @@ function accepted(jobId = "job-1"): AcceptedJobEnvelopeDto {
 }
 
 describe("native drag handoff controller", () => {
-  it("does not present a task until the drop settles", async () => {
-    const present = vi.fn(async () => true);
+  it("presents the task before entering the native drag loop", async () => {
+    const calls: string[] = [];
+    const present = vi.fn(async () => {
+      calls.push("present");
+      return true;
+    });
+    const beginNativeDrag = vi.fn(async () => {
+      calls.push("drag");
+      return { outcome: "dropped" as const };
+    });
     const controller = createNativeDragHandoffController(present);
 
-    controller.defer(accepted());
-    expect(present).not.toHaveBeenCalled();
-
-    await controller.settle({ jobId: "job-1", outcome: "dropped" });
+    await expect(controller.start(accepted(), beginNativeDrag)).resolves.toEqual({
+      presented: true,
+      response: { outcome: "dropped" },
+    });
+    expect(calls).toEqual(["present", "drag"]);
     expect(present).toHaveBeenCalledWith(accepted());
   });
 
-  it("does not present a task for a cancelled drag", async () => {
-    const present = vi.fn(async () => true);
+  it("still starts the native drag when task-window presentation degrades", async () => {
+    const present = vi.fn(async () => false);
+    const beginNativeDrag = vi.fn(async () => ({ outcome: "cancelled" as const }));
     const controller = createNativeDragHandoffController(present);
 
-    controller.defer(accepted());
-    await expect(controller.settle({ jobId: "job-1", outcome: "cancelled" })).resolves.toBe(true);
-    expect(present).not.toHaveBeenCalled();
-  });
-
-  it("settles each native drag at most once", async () => {
-    const present = vi.fn(async () => true);
-    const controller = createNativeDragHandoffController(present);
-
-    controller.defer(accepted());
-    await controller.settle({ jobId: "job-1", outcome: "dropped" });
-    await expect(controller.settle({ jobId: "job-1", outcome: "dropped" })).resolves.toBeNull();
-    expect(present).toHaveBeenCalledTimes(1);
+    await expect(controller.start(accepted(), beginNativeDrag)).resolves.toEqual({
+      presented: false,
+      response: { outcome: "cancelled" },
+    });
+    expect(beginNativeDrag).toHaveBeenCalledOnce();
   });
 });
