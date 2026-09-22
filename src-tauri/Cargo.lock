@@ -2438,6 +2438,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs2"
+version = "0.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
+dependencies = [
+ "libc",
+ "winapi",
+]
+
+[[package]]
 name = "funty"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3756,6 +3766,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "chrono",
+ "fs2",
  "futures-util",
  "if-addrs",
  "mime_guess",
@@ -8785,14 +8796,14 @@ checksum = "b142a20ec14a91d5bc708c1dc21b080c550113d8aa77afa29635673a65dd02c5"
 
 [[package]]
 name = "zmanager-apple-archive"
-version = "2.1.3"
+version = "2.1.4"
 dependencies = [
  "libc",
 ]
 
 [[package]]
 name = "zmanager-core"
-version = "2.1.3"
+version = "2.1.4"
 dependencies = [
  "adler2",
  "argon2",
@@ -8880,7 +8891,7 @@ dependencies = [
 
 [[package]]
 name = "zmanager-localsend"
-version = "2.1.3"
+version = "2.1.4"
 dependencies = [
  "localsend-rs",
  "serde",
@@ -8898,7 +8909,7 @@ dependencies = [
 
 [[package]]
 name = "zmanager-tzap-hosted"
-version = "2.1.3"
+version = "2.1.4"
 dependencies = [
  "base64 0.22.1",
  "num-bigint",
@@ -8914,7 +8925,7 @@ dependencies = [
 
 [[package]]
 name = "zmanager-unrar"
-version = "2.1.3"
+version = "2.1.4"
 dependencies = [
  "cc",
  "zeroize",
@@ -8922,7 +8933,7 @@ dependencies = [
 
 [[package]]
 name = "zmanager-wim"
-version = "2.1.3"
+version = "2.1.4"
 dependencies = [
  "hex",
  "sha1 0.10.7",
