@@ -1,7 +1,7 @@
-use std::{ffi::OsStr, mem::size_of, os::windows::ffi::OsStrExt, ptr::null_mut, slice};
+use std::{ffi::OsStr, mem::size_of, os::windows::ffi::OsStrExt, ptr::null_mut, slice, sync::Arc};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use tauri::Wry;
+use tauri::{Emitter, Wry};
 use windows_sys::Win32::{
     Graphics::Gdi::{
         BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, HBRUSH, HGDIOBJ, ReleaseDC,
@@ -80,25 +80,37 @@ impl NativeFileDragAdapter for WindowsPlatform {
     }
 
     fn start_native_file_drag(
-        _window: &tauri::WebviewWindow<Wry>,
+        window: &tauri::WebviewWindow<Wry>,
         items: &[NativeFileDragItem],
         stream_provider: NativeFileDragStreamProvider,
-        _context: NativeFileDragJobContext<'_>,
+        context: NativeFileDragJobContext<'_>,
     ) -> Result<NativeFileDragStart, NativeFileDragError> {
         if items.is_empty() {
             return Err(NativeFileDragError::new("No archive files are available to drag.", None::<String>));
         }
 
-        // Hand Explorer real paths, like 7-Zip does. Archive extraction must
-        // finish before GetData/DoDragDrop so Explorer never blocks on an
-        // archive stream callback.
-        let staged_drag = crate::platform::staged_file_drag::StagedFileDrag::create("Windows", items, stream_provider)?;
-        let outcome = windows_file_drag::start_drag(staged_drag.drag_paths())?;
-        if matches!(outcome, NativeFileDragOutcome::Dropped) {
-            staged_drag.keep_for_file_manager_copy();
-        }
+        // Prepare only the temporary root before DoDragDrop. Like 7-Zip, the
+        // actual archive extraction starts when the destination requests the
+        // final data, not while the pointer is still being dragged.
+        let staged_drag = crate::platform::staged_file_drag::StagedFileDrag::prepare("Windows", items)?;
+        let job_id = context.job_id.to_owned();
+        let window = window.clone();
+        let outcome = windows_file_drag::start_drag(
+            staged_drag,
+            items.to_vec(),
+            stream_provider,
+            Arc::new(move || {
+                let _ = window.emit("native-file-drag-destination", NativeFileDragDestinationEvent { job_id: job_id.clone() });
+            }),
+        )?;
         Ok(NativeFileDragStart::Settled { outcome })
     }
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeFileDragDestinationEvent {
+    job_id: String,
 }
 
 fn system_file_icon_data_url(entry: &SystemFileIconRequestEntry) -> Option<String> {
@@ -300,13 +312,17 @@ mod windows_file_drag {
         os::windows::ffi::OsStrExt,
         path::PathBuf,
         ptr::null_mut,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
         thread,
     };
 
     use ::windows::{
         Win32::{
             Foundation::{
-                DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC, DV_E_TYMED, E_NOTIMPL, OLE_E_ADVISENOTSUPPORTED, S_OK,
+                DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC, DV_E_TYMED, E_FAIL, E_NOTIMPL, OLE_E_ADVISENOTSUPPORTED, S_OK,
             },
             System::{
                 Com::{
@@ -321,22 +337,52 @@ mod windows_file_drag {
         core::{BOOL, Error as WindowsError, HRESULT, Ref, Result as WindowsResult, implement},
     };
 
-    use super::{NativeFileDragError, NativeFileDragOutcome};
+    use super::{NativeFileDragError, NativeFileDragItem, NativeFileDragOutcome, NativeFileDragStreamProvider};
+    use crate::platform::staged_file_drag::StagedFileDrag;
 
-    pub fn start_drag(paths: &[PathBuf]) -> Result<NativeFileDragOutcome, NativeFileDragError> {
-        let paths = paths.to_vec();
-        thread::Builder::new()
+    type DestinationNotifier = Arc<dyn Fn() + Send + Sync>;
+
+    pub fn start_drag(
+        staged_drag: StagedFileDrag,
+        items: Vec<NativeFileDragItem>,
+        stream_provider: NativeFileDragStreamProvider,
+        notify_destination: DestinationNotifier,
+    ) -> Result<NativeFileDragOutcome, NativeFileDragError> {
+        let staged_state = Arc::new(Mutex::new(Some(staged_drag)));
+        let drag_state = Arc::new(DragState::default());
+        let worker_staged_state = Arc::clone(&staged_state);
+        let worker_drag_state = Arc::clone(&drag_state);
+        let worker = thread::Builder::new()
             .name("zmanager-windows-ole-drag".to_string())
-            .spawn(move || start_drag_on_ole_thread(&paths))
-            .map_err(|error| NativeFileDragError::new(format!("Unable to start Windows drag worker: {error}"), Some("Try dragging again.")))?
-            .join()
-            .map_err(|_| NativeFileDragError::new("Windows drag worker panicked.", Some("Try dragging again.")))?
+            .spawn(move || start_drag_on_ole_thread(worker_staged_state, worker_drag_state, items, stream_provider, notify_destination))
+            .map_err(|error| NativeFileDragError::new(format!("Unable to start Windows drag worker: {error}"), Some("Try dragging again.")))?;
+        let result = worker.join().map_err(|_| NativeFileDragError::new("Windows drag worker panicked.", Some("Try dragging again.")))?;
+
+        if let Some(error) = drag_state.stage_error.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take() {
+            return Err(error);
+        }
+
+        let outcome = result?;
+        if matches!(outcome, NativeFileDragOutcome::Dropped) {
+            let staged_drag = staged_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
+            if let Some(staged_drag) = staged_drag {
+                staged_drag.keep_for_file_manager_copy();
+            }
+        }
+        Ok(outcome)
     }
 
-    fn start_drag_on_ole_thread(paths: &[PathBuf]) -> Result<NativeFileDragOutcome, NativeFileDragError> {
+    fn start_drag_on_ole_thread(
+        staged_state: Arc<Mutex<Option<StagedFileDrag>>>,
+        drag_state: Arc<DragState>,
+        items: Vec<NativeFileDragItem>,
+        stream_provider: NativeFileDragStreamProvider,
+        notify_destination: DestinationNotifier,
+    ) -> Result<NativeFileDragOutcome, NativeFileDragError> {
         let _ole = OleApartment::initialize()?;
-        let data_object: IDataObject = PathFileDragDataObject { paths: paths.to_vec() }.into();
-        let drop_source: IDropSource = FileDropSource.into();
+        let data_object: IDataObject =
+            LazyPathFileDragDataObject { items, stream_provider, staged_state, drag_state: Arc::clone(&drag_state), notify_destination }.into();
+        let drop_source: IDropSource = FileDropSource { drag_state }.into();
         let mut effect = DROPEFFECT(0);
         let result = unsafe { DoDragDrop(&data_object, &drop_source, DROPEFFECT_COPY, &mut effect as *mut DROPEFFECT) };
 
@@ -372,18 +418,35 @@ mod windows_file_drag {
         }
     }
 
-    #[implement(IDataObject)]
-    struct PathFileDragDataObject {
-        paths: Vec<PathBuf>,
+    #[derive(Default)]
+    struct DragState {
+        released: AtomicBool,
+        destination_notified: AtomicBool,
+        staged: AtomicBool,
+        stage_error: Mutex<Option<NativeFileDragError>>,
     }
 
-    impl IDataObject_Impl for PathFileDragDataObject_Impl {
+    #[implement(IDataObject)]
+    struct LazyPathFileDragDataObject {
+        items: Vec<NativeFileDragItem>,
+        stream_provider: NativeFileDragStreamProvider,
+        staged_state: Arc<Mutex<Option<StagedFileDrag>>>,
+        drag_state: Arc<DragState>,
+        notify_destination: DestinationNotifier,
+    }
+
+    impl IDataObject_Impl for LazyPathFileDragDataObject_Impl {
         fn GetData(&self, pformatetcin: *const FORMATETC) -> WindowsResult<STGMEDIUM> {
             let format = unsafe { pformatetcin.as_ref() }.ok_or_else(|| WindowsError::from_hresult(DV_E_FORMATETC))?;
             if !is_file_drop_format(format) {
                 return Err(WindowsError::from_hresult(DV_E_FORMATETC));
             }
-            file_drop_medium(&self.paths)
+
+            let paths = self.paths_for_request().map_err(|error| {
+                *self.drag_state.stage_error.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(error);
+                WindowsError::from_hresult(E_FAIL)
+            })?;
+            file_drop_medium(&paths)
         }
 
         fn GetDataHere(&self, _pformatetc: *const FORMATETC, _pmedium: *mut STGMEDIUM) -> WindowsResult<()> {
@@ -434,8 +497,29 @@ mod windows_file_drag {
         }
     }
 
+    impl LazyPathFileDragDataObject {
+        fn paths_for_request(&self) -> Result<Vec<PathBuf>, NativeFileDragError> {
+            let mut staged_state = self.staged_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let staged_drag = staged_state.as_mut().ok_or_else(|| NativeFileDragError::new("Windows drag staging state is unavailable.", None::<String>))?;
+            if !self.drag_state.released.load(Ordering::Acquire) {
+                return Ok(vec![staged_drag.root_path().to_path_buf()]);
+            }
+
+            if !self.drag_state.destination_notified.swap(true, Ordering::AcqRel) {
+                (self.notify_destination)();
+            }
+            if !self.drag_state.staged.load(Ordering::Acquire) {
+                staged_drag.stage_items(&self.items, Arc::clone(&self.stream_provider))?;
+                self.drag_state.staged.store(true, Ordering::Release);
+            }
+            Ok(staged_drag.drag_paths().to_vec())
+        }
+    }
+
     #[implement(IDropSource)]
-    struct FileDropSource;
+    struct FileDropSource {
+        drag_state: Arc<DragState>,
+    }
 
     impl IDropSource_Impl for FileDropSource_Impl {
         fn QueryContinueDrag(&self, fescapepressed: BOOL, grfkeystate: ::windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS) -> HRESULT {
@@ -443,6 +527,7 @@ mod windows_file_drag {
                 return DRAGDROP_S_CANCEL;
             }
             if (grfkeystate & ::windows::Win32::System::SystemServices::MK_LBUTTON).0 == 0 {
+                self.drag_state.released.store(true, Ordering::Release);
                 return DRAGDROP_S_DROP;
             }
             S_OK
@@ -492,8 +577,15 @@ mod windows_file_drag {
 
     #[cfg(test)]
     mod tests {
-        use super::file_drop_names;
-        use std::path::PathBuf;
+        use super::{DragState, LazyPathFileDragDataObject, file_drop_names};
+        use crate::platform::{NativeFileDragError, NativeFileDragItem, NativeFileDragStreamProvider, staged_file_drag::StagedFileDrag};
+        use std::{
+            path::PathBuf,
+            sync::{
+                Arc, Mutex,
+                atomic::{AtomicUsize, Ordering},
+            },
+        };
 
         #[test]
         fn file_drop_names_are_utf16_and_double_terminated() {
@@ -502,6 +594,41 @@ mod windows_file_drag {
             assert_eq!(names.last(), Some(&0));
             assert_eq!(names.iter().filter(|value| **value == 0).count(), 2);
             assert_eq!(String::from_utf16(&names[..names.len() - 2]).unwrap(), r"C:\temp\資料📦.txt");
+        }
+
+        #[test]
+        fn drag_data_does_not_stage_until_the_destination_requests_it() {
+            let stream_calls = Arc::new(AtomicUsize::new(0));
+            let stream_calls_for_provider = Arc::clone(&stream_calls);
+            let provider: NativeFileDragStreamProvider = Arc::new(move |_, output| {
+                stream_calls_for_provider.fetch_add(1, Ordering::Relaxed);
+                output.write_all(b"payload").map_err(|error| NativeFileDragError::new(error.to_string(), None::<String>))?;
+                Ok(7)
+            });
+            let items = vec![NativeFileDragItem {
+                entry_path: "entry.txt".to_owned(),
+                display_path: "entry.txt".to_owned(),
+                size: Some(7),
+                modified_unix_seconds: None,
+            }];
+            let staged = StagedFileDrag::prepare("Windows", &items).expect("prepare drag root");
+            let root = staged.root_path().to_path_buf();
+            let object = LazyPathFileDragDataObject {
+                items,
+                stream_provider: provider,
+                staged_state: Arc::new(Mutex::new(Some(staged))),
+                drag_state: Arc::new(DragState::default()),
+                notify_destination: Arc::new(|| {}),
+            };
+
+            assert_eq!(object.paths_for_request().unwrap(), vec![root.clone()]);
+            assert_eq!(stream_calls.load(Ordering::Relaxed), 0);
+            object.drag_state.released.store(true, Ordering::Release);
+            let final_paths = object.paths_for_request().unwrap();
+
+            assert_eq!(final_paths, vec![root.join("entry.txt")]);
+            assert_eq!(stream_calls.load(Ordering::Relaxed), 1);
+            assert_eq!(std::fs::read(root.join("entry.txt")).unwrap(), b"payload");
         }
     }
 }

@@ -375,6 +375,7 @@ import { listenLocalSendEvents } from "../desktop/localSendEvents";
 import { listenShareQueueChanged } from "../desktop/shareQueueEvents";
 import {
   acceptNativeFileDrag,
+  listenNativeFileDragDestinations,
   startNativeFileDrag,
 } from "../desktop/nativeDrag";
 import {
@@ -557,9 +558,12 @@ const jobHandoff = createJobHandoffController({
   },
   reportPresentationFailure: reportJobPresentationFailure,
 });
-const nativeDragHandoffs = createNativeDragHandoffController((accepted) => (
-  jobHandoff.handoffAcceptedJob(accepted)
-));
+const nativeDragHandoffs = createNativeDragHandoffController(
+  (accepted) => jobHandoff.handoffAcceptedJob(accepted),
+  (jobId, listener) => listenNativeFileDragDestinations((event) => {
+    if (event.payload.jobId === jobId) listener();
+  }),
+);
 let latestHealthcheck: HealthcheckResponse | null = null;
 let latestContract: ProjectContract | null = null;
 let latestDiagnosticLogInfo: DiagnosticLogInfoDto | null = null;

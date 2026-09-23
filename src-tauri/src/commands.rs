@@ -1231,9 +1231,8 @@ pub fn accept_native_file_drag(
     };
     let kind = native_drag_job_kind(&normalized_request.archive_path);
     // Keep native drag-out out of the shared accepted-job feed because the
-    // initiating frontend owns its handoff. It presents the disposable task
-    // window immediately before entering the platform drag loop, avoiding both
-    // duplicate presentation and a windowless modal drag operation on Windows.
+    // initiating frontend owns its handoff. Windows presents the disposable
+    // task window only after the destination requests the drag payload.
     let (job, _token) = registry.try_create_unpublished_job(kind).map_err(subscription_error)?;
     let accepted_job =
         crate::job_dto::AcceptedJobEnvelopeDto { acceptance_revision: "0".to_string(), job, origin: crate::job_dto::AcceptedJobOriginDto::NativeDrag };

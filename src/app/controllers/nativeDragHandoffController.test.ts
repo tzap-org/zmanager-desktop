@@ -12,35 +12,46 @@ function accepted(jobId = "job-1"): AcceptedJobEnvelopeDto {
 }
 
 describe("native drag handoff controller", () => {
-  it("presents the task before entering the native drag loop", async () => {
+  it("presents the task when the native destination requests the payload", async () => {
     const calls: string[] = [];
     const present = vi.fn(async () => {
       calls.push("present");
       return true;
     });
+    let destinationAccepted: (() => void) | null = null;
+    const listenForDestination = vi.fn(async (_jobId: string, listener: () => void) => {
+      destinationAccepted = listener;
+      return async () => {
+        calls.push("unlisten");
+      };
+    });
     const beginNativeDrag = vi.fn(async () => {
       calls.push("drag");
+      destinationAccepted?.();
       return { outcome: "dropped" as const };
     });
-    const controller = createNativeDragHandoffController(present);
+    const controller = createNativeDragHandoffController(present, listenForDestination);
 
     await expect(controller.start(accepted(), beginNativeDrag)).resolves.toEqual({
       presented: true,
       response: { outcome: "dropped" },
     });
-    expect(calls).toEqual(["present", "drag"]);
+    expect(calls).toEqual(["drag", "present", "unlisten"]);
+    expect(listenForDestination).toHaveBeenCalledWith("job-1", expect.any(Function));
     expect(present).toHaveBeenCalledWith(accepted());
   });
 
-  it("still starts the native drag when task-window presentation degrades", async () => {
+  it("does not present a task window when no destination is accepted", async () => {
     const present = vi.fn(async () => false);
+    const listenForDestination = vi.fn(async () => async () => {});
     const beginNativeDrag = vi.fn(async () => ({ outcome: "cancelled" as const }));
-    const controller = createNativeDragHandoffController(present);
+    const controller = createNativeDragHandoffController(present, listenForDestination);
 
     await expect(controller.start(accepted(), beginNativeDrag)).resolves.toEqual({
       presented: false,
       response: { outcome: "cancelled" },
     });
     expect(beginNativeDrag).toHaveBeenCalledOnce();
+    expect(present).not.toHaveBeenCalled();
   });
 });

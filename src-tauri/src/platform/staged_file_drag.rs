@@ -75,7 +75,13 @@ impl StagedFileDrag {
         items: &[NativeFileDragItem],
         stream_provider: NativeFileDragStreamProvider,
     ) -> Result<Self, NativeFileDragError> {
-        Self::create_at_root(unique_drag_root(), platform_label, items, stream_provider)
+        let mut staged = Self::prepare(platform_label, items)?;
+        staged.stage_items(items, stream_provider)?;
+        Ok(staged)
+    }
+
+    pub(super) fn prepare(platform_label: &str, items: &[NativeFileDragItem]) -> Result<Self, NativeFileDragError> {
+        Self::prepare_at_root(unique_drag_root(), platform_label, items)
     }
 
     fn create_at_root(
@@ -84,6 +90,12 @@ impl StagedFileDrag {
         items: &[NativeFileDragItem],
         stream_provider: NativeFileDragStreamProvider,
     ) -> Result<Self, NativeFileDragError> {
+        let mut staged = Self::prepare_at_root(root, platform_label, items)?;
+        staged.stage_items(items, stream_provider)?;
+        Ok(staged)
+    }
+
+    fn prepare_at_root(root: PathBuf, platform_label: &str, items: &[NativeFileDragItem]) -> Result<Self, NativeFileDragError> {
         fs::create_dir_all(&root).map_err(|error| {
             NativeFileDragError::new(
                 format!("Unable to prepare {platform_label} drag-out folder: {error}"),
@@ -98,6 +110,16 @@ impl StagedFileDrag {
             let root = staged.root.as_ref().expect("staged drag root missing");
             let output_path = root.join(relative_path);
             record_drag_path(root, &output_path, &mut drag_path_keys, &mut staged.drag_paths)?;
+        }
+
+        Ok(staged)
+    }
+
+    pub(super) fn stage_items(&mut self, items: &[NativeFileDragItem], stream_provider: NativeFileDragStreamProvider) -> Result<(), NativeFileDragError> {
+        let root = self.root.as_ref().expect("staged drag root missing");
+        for item in items {
+            let relative_path = staged_relative_path(&item.display_path)?;
+            let output_path = root.join(relative_path);
             if let Some(parent) = output_path.parent() {
                 fs::create_dir_all(parent).map_err(|error| {
                     NativeFileDragError::new(
@@ -115,8 +137,7 @@ impl StagedFileDrag {
             })?;
             stream_provider(&item.entry_path, &mut output)?;
         }
-
-        Ok(staged)
+        Ok(())
     }
 
     #[cfg(test)]
@@ -126,6 +147,10 @@ impl StagedFileDrag {
 
     pub(super) fn drag_paths(&self) -> &[PathBuf] {
         &self.drag_paths
+    }
+
+    pub(super) fn root_path(&self) -> &Path {
+        self.root.as_deref().expect("staged drag root missing")
     }
 
     pub(super) fn keep_for_file_manager_copy(mut self) {

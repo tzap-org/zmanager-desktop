@@ -36,3 +36,15 @@ export function listenNativeFileDragOutcomes(
 ): Promise<() => void> {
   return listen<NativeFileDragOutcomeEvent>(NATIVE_FILE_DRAG_OUTCOME_EVENT, listener);
 }
+
+export const NATIVE_FILE_DRAG_DESTINATION_EVENT = "native-file-drag-destination";
+
+export type NativeFileDragDestinationEvent = {
+  jobId: string;
+};
+
+export function listenNativeFileDragDestinations(
+  listener: (event: Event<NativeFileDragDestinationEvent>) => void,
+): Promise<() => void> {
+  return listen<NativeFileDragDestinationEvent>(NATIVE_FILE_DRAG_DESTINATION_EVENT, listener);
+}
