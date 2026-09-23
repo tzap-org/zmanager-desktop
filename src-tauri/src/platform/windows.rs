@@ -1,10 +1,4 @@
-use std::{
-    ffi::OsStr,
-    mem::{ManuallyDrop, size_of},
-    os::windows::ffi::OsStrExt,
-    ptr::null_mut,
-    slice,
-};
+use std::{ffi::OsStr, mem::size_of, os::windows::ffi::OsStrExt, ptr::null_mut, slice};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use tauri::Wry;
@@ -95,7 +89,15 @@ impl NativeFileDragAdapter for WindowsPlatform {
             return Err(NativeFileDragError::new("No archive files are available to drag.", None::<String>));
         }
 
-        Ok(NativeFileDragStart::Settled { outcome: windows_file_drag::start_drag(items, stream_provider)? })
+        // Hand Explorer real paths, like 7-Zip does. Archive extraction must
+        // finish before GetData/DoDragDrop so Explorer never blocks on an
+        // archive stream callback.
+        let staged_drag = crate::platform::staged_file_drag::StagedFileDrag::create("Windows", items, stream_provider)?;
+        let outcome = windows_file_drag::start_drag(staged_drag.drag_paths())?;
+        if matches!(outcome, NativeFileDragOutcome::Dropped) {
+            staged_drag.keep_for_file_manager_copy();
+        }
+        Ok(NativeFileDragStart::Settled { outcome })
     }
 }
 
@@ -232,7 +234,7 @@ unsafe fn draw_hicon_bgra(icon: HICON, icon_size: i32, background_bgr: [u8; 3]) 
         pixel.copy_from_slice(&[background_bgr[0], background_bgr[1], background_bgr[2], u8::MAX]);
     }
 
-    let drawn = unsafe { DrawIconEx(memory_dc, 0, 0, icon, icon_size, icon_size, 0, null_mut::<HBRUSH__>() as HBRUSH, DI_NORMAL) } != 0;
+    let drawn = unsafe { DrawIconEx(memory_dc, 0, 0, icon, icon_size, icon_size, 0, null_mut::<HBRUSH>() as HBRUSH, DI_NORMAL) } != 0;
 
     let rendered = drawn.then(|| bgra.to_vec());
 
@@ -292,44 +294,48 @@ fn wide_null(value: &str) -> Vec<u16> {
     OsStr::new(value).encode_wide().chain(Some(0)).collect()
 }
 
-type HBRUSH__ = core::ffi::c_void;
-
 mod windows_file_drag {
-    use std::io::{self, Write};
-
-    use super::*;
+    use std::{
+        mem::{ManuallyDrop, size_of},
+        os::windows::ffi::OsStrExt,
+        path::PathBuf,
+        ptr::null_mut,
+        thread,
+    };
 
     use ::windows::{
         Win32::{
             Foundation::{
-                DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC, DV_E_LINDEX, DV_E_TYMED, E_FAIL, E_NOTIMPL, FILETIME,
-                OLE_E_ADVISENOTSUPPORTED, S_OK,
+                DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC, DV_E_TYMED, E_NOTIMPL, OLE_E_ADVISENOTSUPPORTED, S_OK,
             },
             System::{
-                Com::StructuredStorage::CreateStreamOnHGlobal,
                 Com::{
-                    DATADIR_GET, DVASPECT_CONTENT, FORMATETC, IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA, IStream, STGMEDIUM,
-                    STGMEDIUM_0, STREAM_SEEK_SET, TYMED_HGLOBAL, TYMED_ISTREAM,
+                    DATADIR_GET, DVASPECT_CONTENT, FORMATETC, IAdviseSink, IDataObject, IDataObject_Impl, IEnumFORMATETC, IEnumSTATDATA, STGMEDIUM,
+                    STGMEDIUM_0, TYMED_HGLOBAL,
                 },
                 Memory::{GMEM_MOVEABLE, GMEM_ZEROINIT, GlobalAlloc, GlobalLock, GlobalUnlock},
-                Ole::{DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE, DoDragDrop, IDropSource, IDropSource_Impl, OleInitialize, OleUninitialize},
-                SystemServices::{MK_LBUTTON, MODIFIERKEYS_FLAGS},
+                Ole::{CF_HDROP, DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE, DoDragDrop, IDropSource, IDropSource_Impl, OleInitialize, OleUninitialize},
             },
-            UI::Shell::{FD_ATTRIBUTES, FD_FILESIZE, FD_WRITESTIME, FILEDESCRIPTORW, SHCreateStdEnumFmtEtc},
+            UI::Shell::{DROPFILES, SHCreateStdEnumFmtEtc},
         },
         core::{BOOL, Error as WindowsError, HRESULT, Ref, Result as WindowsResult, implement},
     };
-    use windows_sys::Win32::{
-        System::DataExchange::RegisterClipboardFormatW,
-        UI::Shell::{CFSTR_FILECONTENTS, CFSTR_FILEDESCRIPTORW},
-    };
 
-    const WINDOWS_TICK: u64 = 10_000_000;
-    const UNIX_EPOCH_AS_WINDOWS_FILETIME_SECONDS: u64 = 11_644_473_600;
+    use super::{NativeFileDragError, NativeFileDragOutcome};
 
-    pub fn start_drag(items: &[NativeFileDragItem], stream_provider: NativeFileDragStreamProvider) -> Result<NativeFileDragOutcome, NativeFileDragError> {
+    pub fn start_drag(paths: &[PathBuf]) -> Result<NativeFileDragOutcome, NativeFileDragError> {
+        let paths = paths.to_vec();
+        thread::Builder::new()
+            .name("zmanager-windows-ole-drag".to_string())
+            .spawn(move || start_drag_on_ole_thread(&paths))
+            .map_err(|error| NativeFileDragError::new(format!("Unable to start Windows drag worker: {error}"), Some("Try dragging again.")))?
+            .join()
+            .map_err(|_| NativeFileDragError::new("Windows drag worker panicked.", Some("Try dragging again.")))?
+    }
+
+    fn start_drag_on_ole_thread(paths: &[PathBuf]) -> Result<NativeFileDragOutcome, NativeFileDragError> {
         let _ole = OleApartment::initialize()?;
-        let data_object: IDataObject = VirtualFileDragDataObject { items: items.to_vec(), stream_provider }.into();
+        let data_object: IDataObject = PathFileDragDataObject { paths: paths.to_vec() }.into();
         let drop_source: IDropSource = FileDropSource.into();
         let mut effect = DROPEFFECT(0);
         let result = unsafe { DoDragDrop(&data_object, &drop_source, DROPEFFECT_COPY, &mut effect as *mut DROPEFFECT) };
@@ -367,24 +373,17 @@ mod windows_file_drag {
     }
 
     #[implement(IDataObject)]
-    struct VirtualFileDragDataObject {
-        items: Vec<NativeFileDragItem>,
-        stream_provider: NativeFileDragStreamProvider,
+    struct PathFileDragDataObject {
+        paths: Vec<PathBuf>,
     }
 
-    impl IDataObject_Impl for VirtualFileDragDataObject_Impl {
+    impl IDataObject_Impl for PathFileDragDataObject_Impl {
         fn GetData(&self, pformatetcin: *const FORMATETC) -> WindowsResult<STGMEDIUM> {
             let format = unsafe { pformatetcin.as_ref() }.ok_or_else(|| WindowsError::from_hresult(DV_E_FORMATETC))?;
-
-            if is_file_descriptor_format(format) {
-                return file_group_descriptor_medium(&self.items);
+            if !is_file_drop_format(format) {
+                return Err(WindowsError::from_hresult(DV_E_FORMATETC));
             }
-            if is_file_contents_format(format) {
-                let index = item_index(format, self.items.len())?;
-                return file_contents_medium(&self.items[index], &self.stream_provider);
-            }
-
-            Err(WindowsError::from_hresult(DV_E_FORMATETC))
+            file_drop_medium(&self.paths)
         }
 
         fn GetDataHere(&self, _pformatetc: *const FORMATETC, _pmedium: *mut STGMEDIUM) -> WindowsResult<()> {
@@ -395,24 +394,13 @@ mod windows_file_drag {
             let Some(format) = (unsafe { pformatetc.as_ref() }) else {
                 return DV_E_FORMATETC;
             };
-
-            if is_file_descriptor_format(format) {
-                return S_OK;
+            if is_file_drop_format(format) {
+                S_OK
+            } else if format.cfFormat == CF_HDROP.0 {
+                DV_E_TYMED
+            } else {
+                DV_E_FORMATETC
             }
-            if format.cfFormat == file_contents_format() {
-                if (format.tymed & TYMED_ISTREAM.0 as u32) == 0 {
-                    return DV_E_TYMED;
-                }
-                if format.lindex == -1 {
-                    return S_OK;
-                }
-                if format.lindex < 0 || format.lindex as usize >= self.items.len() {
-                    return DV_E_LINDEX;
-                }
-                return S_OK;
-            }
-
-            DV_E_FORMATETC
         }
 
         fn GetCanonicalFormatEtc(&self, _pformatectin: *const FORMATETC, pformatetcout: *mut FORMATETC) -> HRESULT {
@@ -430,8 +418,7 @@ mod windows_file_drag {
             if dwdirection != DATADIR_GET.0 as u32 {
                 return Err(WindowsError::from_hresult(E_NOTIMPL));
             }
-
-            unsafe { SHCreateStdEnumFmtEtc(&[file_descriptor_format(), file_contents_formatetc()]) }
+            unsafe { SHCreateStdEnumFmtEtc(&[file_drop_format()]) }
         }
 
         fn DAdvise(&self, _pformatetc: *const FORMATETC, _advf: u32, _padvsink: Ref<'_, IAdviseSink>) -> WindowsResult<u32> {
@@ -451,15 +438,13 @@ mod windows_file_drag {
     struct FileDropSource;
 
     impl IDropSource_Impl for FileDropSource_Impl {
-        fn QueryContinueDrag(&self, fescapepressed: BOOL, grfkeystate: MODIFIERKEYS_FLAGS) -> HRESULT {
+        fn QueryContinueDrag(&self, fescapepressed: BOOL, grfkeystate: ::windows::Win32::System::SystemServices::MODIFIERKEYS_FLAGS) -> HRESULT {
             if fescapepressed.as_bool() {
                 return DRAGDROP_S_CANCEL;
             }
-
-            if (grfkeystate & MK_LBUTTON).0 == 0 {
+            if (grfkeystate & ::windows::Win32::System::SystemServices::MK_LBUTTON).0 == 0 {
                 return DRAGDROP_S_DROP;
             }
-
             S_OK
         }
 
@@ -468,46 +453,18 @@ mod windows_file_drag {
         }
     }
 
-    fn file_descriptor_format() -> FORMATETC {
-        FORMATETC { cfFormat: file_descriptor_clipboard_format(), ptd: null_mut(), dwAspect: DVASPECT_CONTENT.0, lindex: -1, tymed: TYMED_HGLOBAL.0 as u32 }
+    fn file_drop_format() -> FORMATETC {
+        FORMATETC { cfFormat: CF_HDROP.0, ptd: null_mut(), dwAspect: DVASPECT_CONTENT.0, lindex: -1, tymed: TYMED_HGLOBAL.0 as u32 }
     }
 
-    fn file_contents_formatetc() -> FORMATETC {
-        FORMATETC { cfFormat: file_contents_format(), ptd: null_mut(), dwAspect: DVASPECT_CONTENT.0, lindex: -1, tymed: TYMED_ISTREAM.0 as u32 }
+    fn is_file_drop_format(format: &FORMATETC) -> bool {
+        format.cfFormat == CF_HDROP.0 && format.dwAspect == DVASPECT_CONTENT.0 && (format.tymed & TYMED_HGLOBAL.0 as u32) != 0
     }
 
-    fn is_file_descriptor_format(format: &FORMATETC) -> bool {
-        format.cfFormat == file_descriptor_clipboard_format() && format.dwAspect == DVASPECT_CONTENT.0 && (format.tymed & TYMED_HGLOBAL.0 as u32) != 0
-    }
+    fn file_drop_medium(paths: &[PathBuf]) -> WindowsResult<STGMEDIUM> {
+        let names = file_drop_names(paths);
 
-    fn is_file_contents_format(format: &FORMATETC) -> bool {
-        format.cfFormat == file_contents_format() && format.dwAspect == DVASPECT_CONTENT.0 && (format.tymed & TYMED_ISTREAM.0 as u32) != 0
-    }
-
-    fn item_index(format: &FORMATETC, item_count: usize) -> WindowsResult<usize> {
-        if format.lindex < 0 {
-            return Err(WindowsError::from_hresult(DV_E_LINDEX));
-        }
-        let index = format.lindex as usize;
-        if index >= item_count {
-            return Err(WindowsError::from_hresult(DV_E_LINDEX));
-        }
-        Ok(index)
-    }
-
-    fn file_descriptor_clipboard_format() -> u16 {
-        unsafe { RegisterClipboardFormatW(CFSTR_FILEDESCRIPTORW) as u16 }
-    }
-
-    fn file_contents_format() -> u16 {
-        unsafe { RegisterClipboardFormatW(CFSTR_FILECONTENTS) as u16 }
-    }
-
-    fn file_group_descriptor_medium(items: &[NativeFileDragItem]) -> WindowsResult<STGMEDIUM> {
-        let descriptor_size = size_of::<FILEDESCRIPTORW>();
-        let header_size = size_of::<u32>();
-        let allocation_size = header_size + descriptor_size * items.len();
-
+        let allocation_size = size_of::<DROPFILES>() + names.len() * size_of::<u16>();
         let hglobal = unsafe { GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, allocation_size)? };
         let locked = unsafe { GlobalLock(hglobal) };
         if locked.is_null() {
@@ -515,287 +472,36 @@ mod windows_file_drag {
         }
 
         unsafe {
-            (locked as *mut u32).write(items.len() as u32);
-            let descriptors = (locked as *mut u8).add(header_size) as *mut FILEDESCRIPTORW;
-            for (index, item) in items.iter().enumerate() {
-                descriptors.add(index).write(file_descriptor(item));
-            }
+            (locked as *mut DROPFILES).write(DROPFILES { pFiles: size_of::<DROPFILES>() as u32, fWide: BOOL(1), ..DROPFILES::default() });
+            std::ptr::copy_nonoverlapping(names.as_ptr().cast::<u8>(), (locked as *mut u8).add(size_of::<DROPFILES>()), names.len() * size_of::<u16>());
             let _ = GlobalUnlock(hglobal);
         }
 
         Ok(STGMEDIUM { tymed: TYMED_HGLOBAL.0 as u32, u: STGMEDIUM_0 { hGlobal: hglobal }, pUnkForRelease: ManuallyDrop::new(None) })
     }
 
-    fn file_descriptor(item: &NativeFileDragItem) -> FILEDESCRIPTORW {
-        let name = wide_drag_file_name(&item.display_path);
-        let mut file_name = [0u16; 260];
-        let copy_len = name.len().min(file_name.len().saturating_sub(1));
-        file_name[..copy_len].copy_from_slice(&name[..copy_len]);
-
-        let mut descriptor =
-            FILEDESCRIPTORW { dwFlags: FD_ATTRIBUTES.0 as u32, dwFileAttributes: FILE_ATTRIBUTE_NORMAL, cFileName: file_name, ..FILEDESCRIPTORW::default() };
-
-        if let Some(size) = item.size {
-            descriptor.dwFlags |= FD_FILESIZE.0 as u32;
-            descriptor.nFileSizeHigh = (size >> 32) as u32;
-            descriptor.nFileSizeLow = (size & 0xFFFF_FFFF) as u32;
+    fn file_drop_names(paths: &[PathBuf]) -> Vec<u16> {
+        let mut names = Vec::new();
+        for path in paths {
+            names.extend(path.as_os_str().encode_wide());
+            names.push(0);
         }
-        if let Some(modified) = item.modified_unix_seconds {
-            descriptor.dwFlags |= FD_WRITESTIME.0 as u32;
-            descriptor.ftLastWriteTime = filetime_from_unix_seconds(modified);
-        }
-
-        descriptor
-    }
-
-    fn filetime_from_unix_seconds(seconds: u64) -> FILETIME {
-        let ticks = seconds.saturating_add(UNIX_EPOCH_AS_WINDOWS_FILETIME_SECONDS).saturating_mul(WINDOWS_TICK);
-        FILETIME { dwLowDateTime: ticks as u32, dwHighDateTime: (ticks >> 32) as u32 }
-    }
-
-    fn wide_drag_file_name(path: &str) -> Vec<u16> {
-        path.encode_utf16().filter(|value| *value != 0).collect()
-    }
-
-    fn file_contents_medium(item: &NativeFileDragItem, stream_provider: &NativeFileDragStreamProvider) -> WindowsResult<STGMEDIUM> {
-        let stream = unsafe { CreateStreamOnHGlobal(Default::default(), true)? };
-        {
-            let mut writer = ComStreamWriter { stream: stream.clone() };
-            (stream_provider)(&item.entry_path, &mut writer).map_err(|_| WindowsError::from_hresult(E_FAIL))?;
-            writer.flush().map_err(|_| WindowsError::from_hresult(E_FAIL))?;
-        }
-        unsafe {
-            stream.Seek(0, STREAM_SEEK_SET, None).map_err(|_| WindowsError::from_hresult(E_FAIL))?;
-        }
-
-        Ok(STGMEDIUM { tymed: TYMED_ISTREAM.0 as u32, u: STGMEDIUM_0 { pstm: ManuallyDrop::new(Some(stream)) }, pUnkForRelease: ManuallyDrop::new(None) })
-    }
-
-    struct ComStreamWriter {
-        stream: IStream,
-    }
-
-    impl Write for ComStreamWriter {
-        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-            let chunk_len = buffer.len().min(u32::MAX as usize);
-            if chunk_len == 0 {
-                return Ok(0);
-            }
-
-            let mut written = 0u32;
-            let result = unsafe { self.stream.Write(buffer.as_ptr().cast(), chunk_len as u32, Some(&mut written as *mut u32)) };
-            if result.is_err() {
-                return Err(io::Error::other(format!("COM stream write failed: 0x{:08X}", result.0 as u32)));
-            }
-            Ok(written as usize)
-        }
-
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
+        names.push(0);
+        names
     }
 
     #[cfg(test)]
     mod tests {
-        use std::{
-            collections::HashMap,
-            fs,
-            path::{Path, PathBuf},
-            sync::Arc,
-            thread,
-            time::{Duration, SystemTime, UNIX_EPOCH},
-        };
-
-        use super::*;
-        use ::windows::{
-            Win32::{
-                Foundation::POINTL,
-                System::{
-                    Com::IBindCtx,
-                    Ole::{DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE, IDropTarget},
-                    SystemServices::MODIFIERKEYS_FLAGS,
-                },
-                UI::Shell::{BHID_SFUIObject, IShellItem, SHCreateItemFromParsingName},
-            },
-            core::PCWSTR,
-        };
-
-        const KEEP_VIRTUAL_DROP_PROOF_DIR_ENV: &str = "ZMANAGER_KEEP_VIRTUAL_DROP_PROOF_DIR";
-
-        fn drag_item(display_path: &str, size: Option<u64>, modified_unix_seconds: Option<u64>) -> NativeFileDragItem {
-            NativeFileDragItem { entry_path: display_path.replace('\\', "/"), display_path: display_path.to_string(), size, modified_unix_seconds }
-        }
+        use super::file_drop_names;
+        use std::path::PathBuf;
 
         #[test]
-        fn file_descriptor_preserves_utf16_name_large_size_and_timestamp() {
-            let size = 0x1234_5678_9ABC_DEF0;
-            let modified = 1_700_000_000;
-            let descriptor = file_descriptor(&drag_item("folder\\資料📦.txt", Some(size), Some(modified)));
-            let c_file_name = descriptor.cFileName;
-            let name_end = c_file_name.iter().position(|value| *value == 0).expect("descriptor file name terminator");
+        fn file_drop_names_are_utf16_and_double_terminated() {
+            let names = file_drop_names(&[PathBuf::from(r"C:\temp\資料📦.txt")]);
 
-            assert_eq!(String::from_utf16(&c_file_name[..name_end]).expect("UTF-16 file name"), "folder\\資料📦.txt");
-            let dw_file_attributes = descriptor.dwFileAttributes;
-            assert_eq!(dw_file_attributes, FILE_ATTRIBUTE_NORMAL);
-            let dw_flags = descriptor.dwFlags;
-            assert_ne!(dw_flags & FD_ATTRIBUTES.0 as u32, 0);
-            assert_ne!(dw_flags & FD_FILESIZE.0 as u32, 0);
-            assert_ne!(dw_flags & FD_WRITESTIME.0 as u32, 0);
-            let n_file_size_high = descriptor.nFileSizeHigh;
-            let n_file_size_low = descriptor.nFileSizeLow;
-            assert_eq!(n_file_size_high, 0x1234_5678);
-            assert_eq!(n_file_size_low, 0x9ABC_DEF0);
-
-            let expected_ticks = (modified + UNIX_EPOCH_AS_WINDOWS_FILETIME_SECONDS) * WINDOWS_TICK;
-            let last_write_time = descriptor.ftLastWriteTime;
-            let actual_ticks = u64::from(last_write_time.dwHighDateTime) << 32 | u64::from(last_write_time.dwLowDateTime);
-            assert_eq!(actual_ticks, expected_ticks);
-        }
-
-        #[test]
-        fn file_descriptor_omits_unknown_optional_metadata() {
-            let descriptor = file_descriptor(&drag_item("report.txt", None, None));
-            let dw_flags = descriptor.dwFlags;
-            let n_file_size_high = descriptor.nFileSizeHigh;
-            let n_file_size_low = descriptor.nFileSizeLow;
-            let last_write_time = descriptor.ftLastWriteTime;
-
-            assert_ne!(dw_flags & FD_ATTRIBUTES.0 as u32, 0);
-            assert_eq!(dw_flags & FD_FILESIZE.0 as u32, 0);
-            assert_eq!(dw_flags & FD_WRITESTIME.0 as u32, 0);
-            assert_eq!(n_file_size_high, 0);
-            assert_eq!(n_file_size_low, 0);
-            assert_eq!(last_write_time.dwHighDateTime, 0);
-            assert_eq!(last_write_time.dwLowDateTime, 0);
-        }
-
-        #[test]
-        fn windows_filetime_conversion_saturates_instead_of_wrapping() {
-            let filetime = filetime_from_unix_seconds(u64::MAX);
-
-            assert_eq!(filetime.dwHighDateTime, u32::MAX);
-            assert_eq!(filetime.dwLowDateTime, u32::MAX);
-        }
-
-        #[test]
-        fn drag_file_name_filters_embedded_nuls_without_losing_unicode() {
-            let wide = wide_drag_file_name("a\0b📦.txt");
-
-            assert!(!wide.contains(&0));
-            assert_eq!(String::from_utf16(&wide).expect("UTF-16 file name"), "ab📦.txt");
-        }
-
-        #[test]
-        fn file_content_indices_must_select_an_existing_item() {
-            let mut format = file_contents_formatetc();
-            format.lindex = 0;
-            assert_eq!(item_index(&format, 2).expect("first item"), 0);
-            format.lindex = 1;
-            assert_eq!(item_index(&format, 2).expect("second item"), 1);
-
-            for invalid_index in [-1, 2, i32::MAX] {
-                format.lindex = invalid_index;
-                assert_eq!(item_index(&format, 2).expect_err("invalid drag item index").code(), DV_E_LINDEX);
-            }
-        }
-
-        #[test]
-        fn shell_folder_accepts_virtual_file_drag_data_object() {
-            let kept_drop_target = std::env::var_os(KEEP_VIRTUAL_DROP_PROOF_DIR_ENV).map(PathBuf::from);
-            let drop_target = kept_drop_target.clone().unwrap_or_else(|| unique_temp_dir("zmanager-virtual-drop-target"));
-            fs::create_dir_all(&drop_target).expect("create shell drop target");
-
-            let result = run_shell_virtual_file_drop(&drop_target);
-
-            if kept_drop_target.is_none() {
-                let _ = fs::remove_dir_all(&drop_target);
-            }
-            result.expect("shell folder should accept virtual file drag data object");
-        }
-
-        fn run_shell_virtual_file_drop(drop_target: &Path) -> Result<(), Box<dyn std::error::Error>> {
-            let payloads = Arc::new(HashMap::from([
-                ("folder/alpha.txt".to_string(), b"alpha from virtual drag".to_vec()),
-                ("folder/beta.txt".to_string(), b"beta from virtual drag".to_vec()),
-                ("folder/nested/deep/gamma.txt".to_string(), b"gamma from virtual drag".to_vec()),
-            ]));
-            let provider_payloads = Arc::clone(&payloads);
-            let stream_provider: NativeFileDragStreamProvider = Arc::new(move |entry_path, writer| {
-                let bytes = provider_payloads
-                    .get(entry_path)
-                    .ok_or_else(|| NativeFileDragError::new(format!("missing test payload for {entry_path}"), None::<String>))?;
-                writer.write_all(bytes).map_err(|error| NativeFileDragError::new(format!("failed to write test payload: {error}"), None::<String>))?;
-                Ok(bytes.len() as u64)
-            });
-
-            let items = vec![
-                NativeFileDragItem {
-                    entry_path: "folder/alpha.txt".to_string(),
-                    display_path: "folder\\alpha.txt".to_string(),
-                    size: Some(payloads["folder/alpha.txt"].len() as u64),
-                    modified_unix_seconds: None,
-                },
-                NativeFileDragItem {
-                    entry_path: "folder/beta.txt".to_string(),
-                    display_path: "folder\\beta.txt".to_string(),
-                    size: Some(payloads["folder/beta.txt"].len() as u64),
-                    modified_unix_seconds: None,
-                },
-                NativeFileDragItem {
-                    entry_path: "folder/nested/deep/gamma.txt".to_string(),
-                    display_path: "folder\\nested\\deep\\gamma.txt".to_string(),
-                    size: Some(payloads["folder/nested/deep/gamma.txt"].len() as u64),
-                    modified_unix_seconds: None,
-                },
-            ];
-
-            let _ole = OleApartment::initialize().map_err(|error| error.message)?;
-            let data_object: IDataObject = VirtualFileDragDataObject { items, stream_provider }.into();
-            let shell_drop_target = shell_folder_drop_target(drop_target)?;
-            let point = POINTL { x: 0, y: 0 };
-            let mut effect = DROPEFFECT_COPY;
-
-            unsafe {
-                shell_drop_target.DragEnter(&data_object, MODIFIERKEYS_FLAGS(0), point, &mut effect as *mut DROPEFFECT)?;
-            }
-            assert_ne!(effect, DROPEFFECT_NONE, "shell folder rejected the virtual-file data object on DragEnter");
-
-            effect = DROPEFFECT_COPY;
-            unsafe {
-                shell_drop_target.Drop(&data_object, MODIFIERKEYS_FLAGS(0), point, &mut effect as *mut DROPEFFECT)?;
-            }
-            assert_ne!(effect, DROPEFFECT_NONE, "shell folder rejected the virtual-file data object on Drop");
-
-            wait_for_file_contents(&drop_target.join("folder").join("alpha.txt"), payloads["folder/alpha.txt"].as_slice())?;
-            wait_for_file_contents(&drop_target.join("folder").join("beta.txt"), payloads["folder/beta.txt"].as_slice())?;
-            wait_for_file_contents(
-                &drop_target.join("folder").join("nested").join("deep").join("gamma.txt"),
-                payloads["folder/nested/deep/gamma.txt"].as_slice(),
-            )?;
-
-            Ok(())
-        }
-
-        fn shell_folder_drop_target(path: &Path) -> ::windows::core::Result<IDropTarget> {
-            let wide_path = wide_null(&path.to_string_lossy());
-            let folder: IShellItem = unsafe { SHCreateItemFromParsingName(PCWSTR(wide_path.as_ptr()), None::<&IBindCtx>)? };
-            unsafe { folder.BindToHandler(None::<&IBindCtx>, &BHID_SFUIObject) }
-        }
-
-        fn wait_for_file_contents(path: &Path, expected: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
-            for _ in 0..20 {
-                if path.exists() && fs::read(path)? == expected {
-                    return Ok(());
-                }
-                thread::sleep(Duration::from_millis(100));
-            }
-
-            Err(format!("expected dropped file contents were not written to {}", path.display()).into())
-        }
-
-        fn unique_temp_dir(prefix: &str) -> PathBuf {
-            let nanos = SystemTime::now().duration_since(UNIX_EPOCH).expect("system time before unix epoch").as_nanos();
-            std::env::temp_dir().join(format!("{prefix}-{nanos}"))
+            assert_eq!(names.last(), Some(&0));
+            assert_eq!(names.iter().filter(|value| **value == 0).count(), 2);
+            assert_eq!(String::from_utf16(&names[..names.len() - 2]).unwrap(), r"C:\temp\資料📦.txt");
         }
     }
 }

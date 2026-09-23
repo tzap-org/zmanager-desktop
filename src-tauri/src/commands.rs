@@ -1456,13 +1456,50 @@ pub async fn start_native_file_drag(
         result.map_err(native_file_drag_error_from_command)
     });
 
-    let start = match crate::platform::start_native_file_drag(
+    #[cfg(target_os = "windows")]
+    let start_result = {
+        // Windows staging and DoDragDrop are synchronous. Keep both off the
+        // Tauri runtime thread so the disposable task window can render while
+        // the archive is being materialized and while Explorer owns the drag loop.
+        let window = window.clone();
+        let drag_items = drag_items.clone();
+        let drag_registry = drag_registry.inner().clone();
+        let job_registry = registry.inner().clone();
+        let cancellation = cancellation.clone();
+        let job_id = job_id.clone();
+
+        tauri::async_runtime::spawn_blocking(move || {
+            crate::platform::start_native_file_drag(
+                &window,
+                &drag_items,
+                stream_provider,
+                crate::platform::NativeFileDragJobContext {
+                    registry: &drag_registry,
+                    cancellation,
+                    job_id: &job_id,
+                    job_kind: kind,
+                    job_registry: &job_registry,
+                },
+            )
+        })
+        .await
+        .map_err(|error| {
+            map_native_file_drag_error(crate::platform::NativeFileDragError::new(
+                format!("Windows drag worker stopped unexpectedly: {error}"),
+                Some("Try dragging again."),
+            ))
+        })?
+    };
+
+    #[cfg(not(target_os = "windows"))]
+    let start_result = crate::platform::start_native_file_drag(
         &window,
         &drag_items,
         stream_provider,
         crate::platform::NativeFileDragJobContext { registry: &drag_registry, cancellation, job_id: &job_id, job_kind: kind, job_registry: registry.inner() },
-    )
-    .map_err(|error| {
+    );
+
+    let start = match start_result.map_err(|error| {
         let mapped = map_native_file_drag_error(error);
         let _ = diagnostics.record(
             "nativeDrag",

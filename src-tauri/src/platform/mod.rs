@@ -14,7 +14,6 @@ mod source_metadata;
 pub(crate) use archive_error::map_archive_browser_error;
 pub(crate) use source_metadata::{IdentityCache, source_platform_metadata, source_table_column_ids};
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
 mod staged_file_drag;
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -367,7 +366,7 @@ pub fn open_shell_integration_settings() -> Result<(), String> {
 pub fn shutdown() {
     #[cfg(target_os = "macos")]
     macos::shutdown();
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "windows", target_os = "linux"))]
     staged_file_drag::cleanup_retained_drag_roots();
 }
 

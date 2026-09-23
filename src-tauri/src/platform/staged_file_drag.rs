@@ -1,4 +1,4 @@
-#![cfg_attr(target_os = "macos", allow(dead_code))]
+#![allow(dead_code)]
 
 use std::{
     collections::HashSet,
