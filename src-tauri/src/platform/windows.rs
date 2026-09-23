@@ -314,7 +314,7 @@ mod windows_file_drag {
         ptr::null_mut,
         sync::{
             Arc, Mutex,
-            atomic::{AtomicBool, Ordering},
+            atomic::{AtomicBool, AtomicU32, Ordering},
         },
         thread,
     };
@@ -341,6 +341,7 @@ mod windows_file_drag {
     use crate::platform::staged_file_drag::StagedFileDrag;
 
     type DestinationNotifier = Arc<dyn Fn() + Send + Sync>;
+    type FinalizeDrag = Arc<dyn Fn() -> Result<(), NativeFileDragError> + Send + Sync>;
 
     pub fn start_drag(
         staged_drag: StagedFileDrag,
@@ -380,9 +381,12 @@ mod windows_file_drag {
         notify_destination: DestinationNotifier,
     ) -> Result<NativeFileDragOutcome, NativeFileDragError> {
         let _ole = OleApartment::initialize()?;
+        let finalize_drag = create_finalize_drag(Arc::clone(&staged_state), Arc::clone(&drag_state), items.clone(), Arc::clone(&stream_provider));
+        let drop_notify_destination = Arc::clone(&notify_destination);
         let data_object: IDataObject =
-            LazyPathFileDragDataObject { items, stream_provider, staged_state, drag_state: Arc::clone(&drag_state), notify_destination }.into();
-        let drop_source: IDropSource = FileDropSource { drag_state }.into();
+            LazyPathFileDragDataObject { staged_state, drag_state: Arc::clone(&drag_state), notify_destination, finalize_drag: Arc::clone(&finalize_drag) }
+                .into();
+        let drop_source: IDropSource = FileDropSource { drag_state, notify_destination: drop_notify_destination, finalize_drag }.into();
         let mut effect = DROPEFFECT(0);
         let result = unsafe { DoDragDrop(&data_object, &drop_source, DROPEFFECT_COPY, &mut effect as *mut DROPEFFECT) };
 
@@ -423,16 +427,33 @@ mod windows_file_drag {
         released: AtomicBool,
         destination_notified: AtomicBool,
         staged: AtomicBool,
+        effect: AtomicU32,
         stage_error: Mutex<Option<NativeFileDragError>>,
+    }
+
+    fn create_finalize_drag(
+        staged_state: Arc<Mutex<Option<StagedFileDrag>>>,
+        drag_state: Arc<DragState>,
+        items: Vec<NativeFileDragItem>,
+        stream_provider: NativeFileDragStreamProvider,
+    ) -> FinalizeDrag {
+        Arc::new(move || {
+            let mut staged_state = staged_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let staged_drag = staged_state.as_mut().ok_or_else(|| NativeFileDragError::new("Windows drag staging state is unavailable.", None::<String>))?;
+            if !drag_state.staged.load(Ordering::Acquire) {
+                staged_drag.stage_items(&items, Arc::clone(&stream_provider))?;
+                drag_state.staged.store(true, Ordering::Release);
+            }
+            Ok(())
+        })
     }
 
     #[implement(IDataObject)]
     struct LazyPathFileDragDataObject {
-        items: Vec<NativeFileDragItem>,
-        stream_provider: NativeFileDragStreamProvider,
         staged_state: Arc<Mutex<Option<StagedFileDrag>>>,
         drag_state: Arc<DragState>,
         notify_destination: DestinationNotifier,
+        finalize_drag: FinalizeDrag,
     }
 
     impl IDataObject_Impl for LazyPathFileDragDataObject_Impl {
@@ -499,19 +520,19 @@ mod windows_file_drag {
 
     impl LazyPathFileDragDataObject {
         fn paths_for_request(&self) -> Result<Vec<PathBuf>, NativeFileDragError> {
-            let mut staged_state = self.staged_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            let staged_drag = staged_state.as_mut().ok_or_else(|| NativeFileDragError::new("Windows drag staging state is unavailable.", None::<String>))?;
             if !self.drag_state.released.load(Ordering::Acquire) {
+                let staged_state = self.staged_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let staged_drag =
+                    staged_state.as_ref().ok_or_else(|| NativeFileDragError::new("Windows drag staging state is unavailable.", None::<String>))?;
                 return Ok(vec![staged_drag.root_path().to_path_buf()]);
             }
 
             if !self.drag_state.destination_notified.swap(true, Ordering::AcqRel) {
                 (self.notify_destination)();
             }
-            if !self.drag_state.staged.load(Ordering::Acquire) {
-                staged_drag.stage_items(&self.items, Arc::clone(&self.stream_provider))?;
-                self.drag_state.staged.store(true, Ordering::Release);
-            }
+            (self.finalize_drag)()?;
+            let staged_state = self.staged_state.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            let staged_drag = staged_state.as_ref().ok_or_else(|| NativeFileDragError::new("Windows drag staging state is unavailable.", None::<String>))?;
             Ok(staged_drag.drag_paths().to_vec())
         }
     }
@@ -519,6 +540,8 @@ mod windows_file_drag {
     #[implement(IDropSource)]
     struct FileDropSource {
         drag_state: Arc<DragState>,
+        notify_destination: DestinationNotifier,
+        finalize_drag: FinalizeDrag,
     }
 
     impl IDropSource_Impl for FileDropSource_Impl {
@@ -527,14 +550,31 @@ mod windows_file_drag {
                 return DRAGDROP_S_CANCEL;
             }
             if (grfkeystate & ::windows::Win32::System::SystemServices::MK_LBUTTON).0 == 0 {
-                self.drag_state.released.store(true, Ordering::Release);
-                return DRAGDROP_S_DROP;
+                return self.complete_drop();
             }
             S_OK
         }
 
-        fn GiveFeedback(&self, _dweffect: DROPEFFECT) -> HRESULT {
+        fn GiveFeedback(&self, dweffect: DROPEFFECT) -> HRESULT {
+            self.drag_state.effect.store(dweffect.0, Ordering::Release);
             DRAGDROP_S_USEDEFAULTCURSORS
+        }
+    }
+
+    impl FileDropSource {
+        fn complete_drop(&self) -> HRESULT {
+            if self.drag_state.effect.load(Ordering::Acquire) == DROPEFFECT_NONE.0 {
+                return DRAGDROP_S_CANCEL;
+            }
+            self.drag_state.released.store(true, Ordering::Release);
+            if !self.drag_state.destination_notified.swap(true, Ordering::AcqRel) {
+                (self.notify_destination)();
+            }
+            if let Err(error) = (self.finalize_drag)() {
+                *self.drag_state.stage_error.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(error);
+                return DRAGDROP_S_CANCEL;
+            }
+            DRAGDROP_S_DROP
         }
     }
 
@@ -577,7 +617,9 @@ mod windows_file_drag {
 
     #[cfg(test)]
     mod tests {
-        use super::{DragState, LazyPathFileDragDataObject, file_drop_names};
+        use super::{
+            DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DROPEFFECT_COPY, DragState, FileDropSource, LazyPathFileDragDataObject, create_finalize_drag, file_drop_names,
+        };
         use crate::platform::{NativeFileDragError, NativeFileDragItem, NativeFileDragStreamProvider, staged_file_drag::StagedFileDrag};
         use std::{
             path::PathBuf,
@@ -613,13 +655,10 @@ mod windows_file_drag {
             }];
             let staged = StagedFileDrag::prepare("Windows", &items).expect("prepare drag root");
             let root = staged.root_path().to_path_buf();
-            let object = LazyPathFileDragDataObject {
-                items,
-                stream_provider: provider,
-                staged_state: Arc::new(Mutex::new(Some(staged))),
-                drag_state: Arc::new(DragState::default()),
-                notify_destination: Arc::new(|| {}),
-            };
+            let staged_state = Arc::new(Mutex::new(Some(staged)));
+            let drag_state = Arc::new(DragState::default());
+            let finalize_drag = create_finalize_drag(Arc::clone(&staged_state), Arc::clone(&drag_state), items.clone(), Arc::clone(&provider));
+            let object = LazyPathFileDragDataObject { staged_state, drag_state, notify_destination: Arc::new(|| {}), finalize_drag };
 
             assert_eq!(object.paths_for_request().unwrap(), vec![root.clone()]);
             assert_eq!(stream_calls.load(Ordering::Relaxed), 0);
@@ -628,6 +667,46 @@ mod windows_file_drag {
 
             assert_eq!(final_paths, vec![root.join("entry.txt")]);
             assert_eq!(stream_calls.load(Ordering::Relaxed), 1);
+            assert_eq!(std::fs::read(root.join("entry.txt")).unwrap(), b"payload");
+        }
+
+        #[test]
+        fn accepted_drop_stages_before_drag_returns() {
+            let stream_calls = Arc::new(AtomicUsize::new(0));
+            let stream_calls_for_provider = Arc::clone(&stream_calls);
+            let provider: NativeFileDragStreamProvider = Arc::new(move |_, output| {
+                stream_calls_for_provider.fetch_add(1, Ordering::Relaxed);
+                output.write_all(b"payload").map_err(|error| NativeFileDragError::new(error.to_string(), None::<String>))?;
+                Ok(7)
+            });
+            let items = vec![NativeFileDragItem {
+                entry_path: "entry.txt".to_owned(),
+                display_path: "entry.txt".to_owned(),
+                size: Some(7),
+                modified_unix_seconds: None,
+            }];
+            let staged = StagedFileDrag::prepare("Windows", &items).expect("prepare drag root");
+            let root = staged.root_path().to_path_buf();
+            let staged_state = Arc::new(Mutex::new(Some(staged)));
+            let drag_state = Arc::new(DragState::default());
+            let finalize_drag = create_finalize_drag(Arc::clone(&staged_state), Arc::clone(&drag_state), items, Arc::clone(&provider));
+            let notifications = Arc::new(AtomicUsize::new(0));
+            let notifications_for_callback = Arc::clone(&notifications);
+            let source = FileDropSource {
+                drag_state: Arc::clone(&drag_state),
+                notify_destination: Arc::new(move || {
+                    notifications_for_callback.fetch_add(1, Ordering::Relaxed);
+                }),
+                finalize_drag,
+            };
+
+            assert_eq!(source.complete_drop(), DRAGDROP_S_CANCEL);
+            drag_state.effect.store(DROPEFFECT_COPY.0, Ordering::Release);
+            assert_eq!(source.complete_drop(), DRAGDROP_S_DROP);
+            assert_eq!(notifications.load(Ordering::Relaxed), 1);
+            assert_eq!(stream_calls.load(Ordering::Relaxed), 1);
+            assert!(drag_state.released.load(Ordering::Acquire));
+            assert!(drag_state.staged.load(Ordering::Acquire));
             assert_eq!(std::fs::read(root.join("entry.txt")).unwrap(), b"payload");
         }
     }
