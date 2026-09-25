@@ -210,6 +210,17 @@ losing, duplicating, or exposing secret-bearing events.
 A Rust-owned archive-handle and password-lifetime session paired with a Swift
 file-promise drag. Bytes are streamed only after Finder chooses a destination.
 
+### Windows Drag-Out
+
+The Windows OLE archive drag follows 7-Zip's lifecycle. While the pointer moves,
+`CF_HDROP` names only an empty temporary root. Button release accepts the drop
+without extracting, because the drag loop still owns mouse capture. When the
+target's drop requests the final names, the Job's Disposable Task Window is
+presented and the selected entries are extracted into the root. The target then
+copies or moves them into the destination folder. `DoDragDrop` runs on a
+dedicated STA thread so the Tauri main thread keeps dispatching while the target
+waits.
+
 ### Extension Bindings
 
 Quick Look and Spotlight consume the UniFFI zmanager-ffi crate from the
