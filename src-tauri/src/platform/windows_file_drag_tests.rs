@@ -276,7 +276,7 @@ fn com_objects_follow_the_ole_drag_contract() {
     let payload = new_payload(provider, notify);
     let root = staged_root(&payload);
     let data_object: IDataObject = FileDragDataObject { payload: Arc::clone(&payload) }.into();
-    let drop_source: IDropSource = FileDropSource { payload: Arc::clone(&payload), input: Mutex::new(None) }.into();
+    let drop_source: IDropSource = FileDropSource { payload: Arc::clone(&payload), input: Mutex::new(None), source_hwnd: None }.into();
 
     assert_eq!(unsafe { data_object.QueryGetData(&file_drop_format_request()) }, S_OK);
     assert_eq!(hdrop_paths(&data_object).unwrap(), vec![root.clone()]);
@@ -308,7 +308,7 @@ fn explorer_folder_drop_target_receives_the_selected_entries() {
     let (notify, notifications) = counting_notifier();
     let payload = new_payload(provider, notify);
     let data_object: IDataObject = FileDragDataObject { payload: Arc::clone(&payload) }.into();
-    let drop_source: IDropSource = FileDropSource { payload: Arc::clone(&payload), input: Mutex::new(None) }.into();
+    let drop_source: IDropSource = FileDropSource { payload: Arc::clone(&payload), input: Mutex::new(None), source_hwnd: None }.into();
     let target = folder_drop_target(&destination);
     let point = POINTL { x: 0, y: 0 };
 
@@ -512,7 +512,7 @@ fn run_interactive_drag(ui: &UiThread, source_rect: ScreenRect, drop_point: (i32
     thread::sleep(Duration::from_millis(200));
     send_mouse(MOUSEEVENTF_LEFTDOWN, start);
     thread::sleep(Duration::from_millis(100));
-    let drag = thread::spawn(move || start_drag(Some(ui_thread_id), staged, items, provider, notify));
+    let drag = thread::spawn(move || start_drag(Some(ui_thread_id), Some(ui_source as isize), staged, items, provider, notify));
     thread::sleep(Duration::from_millis(300));
     glide(start, drop_point);
     thread::sleep(Duration::from_millis(700));
@@ -559,6 +559,53 @@ fn interactive_drag_to_a_folder_drop_window_extracts_the_selection() {
     assert!(entered.load(Ordering::SeqCst), "the drag never reached the drop window");
     drop(ui);
     let _ = fs::remove_dir_all(destination);
+}
+
+/// Wry's own drop target answers `DragEnter`/`DragOver` for the source
+/// window too (it has to, to accept ordinary file drops from Explorer), so a
+/// release back inside the window the drag started from must not read as an
+/// accepted destination: nothing there consumes a drag-out payload, so
+/// staging, extraction, and the disposable task window must all stay dark.
+#[test]
+#[ignore = "moves the real mouse; run on an interactive Windows desktop with --ignored"]
+fn interactive_drag_released_back_onto_the_source_window_is_not_a_drop() {
+    let source_rect = (80, 120, 320, 320);
+    let ui = UiThread::spawn(source_rect, None);
+    thread::sleep(Duration::from_millis(500));
+
+    let (provider, stream_calls) = fixture_provider(Duration::ZERO, None);
+    let (notify, notifications) = counting_notifier();
+    let items = fixture_items();
+    let staged = StagedFileDrag::prepare("Windows", &items).expect("prepare drag root");
+    let root = staged.root_path().to_path_buf();
+
+    let ui_thread_id = ui.thread_id;
+    let ui_source = ui.source;
+    let start = (source_rect.0 + source_rect.2 / 4, source_rect.1 + source_rect.3 / 4);
+    let release_point = (source_rect.0 + source_rect.2 * 3 / 4, source_rect.1 + source_rect.3 * 3 / 4);
+
+    send_mouse(0, start);
+    thread::sleep(Duration::from_millis(200));
+    send_mouse(MOUSEEVENTF_LEFTDOWN, start);
+    thread::sleep(Duration::from_millis(100));
+    let drag = thread::spawn(move || start_drag(Some(ui_thread_id), Some(ui_source as isize), staged, items, provider, notify));
+    thread::sleep(Duration::from_millis(300));
+    glide(start, release_point);
+    thread::sleep(Duration::from_millis(200));
+    send_mouse(MOUSEEVENTF_LEFTUP, release_point);
+
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !drag.is_finished() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(drag.is_finished(), "DoDragDrop did not finish after the button was released");
+    let outcome = drag.join().expect("drag thread").expect("drag outcome");
+
+    assert_eq!(outcome, NativeFileDragOutcome::Cancelled, "a release back over the source window must not be treated as a drop");
+    assert_eq!(notifications.load(Ordering::SeqCst), 0, "the task window must not appear for a release with nowhere to go");
+    assert_eq!(stream_calls.load(Ordering::SeqCst), 0, "nothing should be extracted for a release with nowhere to go");
+    assert!(!root.exists());
+    drop(ui);
 }
 
 fn find_explorer_window(folder_name: &str) -> Option<usize> {

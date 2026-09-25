@@ -93,11 +93,13 @@ impl NativeFileDragAdapter for WindowsPlatform {
         // the selected entries are extracted when the destination's drop asks
         // for the final names, after the pointer gesture has ended.
         let staged_drag = crate::platform::staged_file_drag::StagedFileDrag::prepare("Windows", items)?;
+        let source_hwnd = window.hwnd().ok().map(|hwnd| hwnd.0 as isize);
         let ui_thread_id = window.hwnd().ok().map(|hwnd| unsafe { GetWindowThreadProcessId(hwnd.0 as _, null_mut()) });
         let job_id = context.job_id.to_owned();
         let window = window.clone();
         let outcome = windows_file_drag::start_drag(
             ui_thread_id,
+            source_hwnd,
             staged_drag,
             items.to_vec(),
             stream_provider,
