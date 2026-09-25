@@ -1,0 +1,64 @@
+name: Windows drag-out
+
+# Exercises archive drag-out against the real Windows shell: Explorer's folder
+# drop target, and full DoDragDrop gestures driven by injected mouse input into
+# a drop window and into a File Explorer window.
+
+on:
+  push:
+    branches:
+      - 'claude/**'
+    paths:
+      - '.github/workflows/windows-drag-out.yml'
+      - 'src-tauri/src/platform/windows*.rs'
+      - 'src-tauri/src/platform/staged_file_drag.rs'
+      - 'src-tauri/src/commands.rs'
+      - 'src-tauri/Cargo.toml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-drag-out-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  drag-out:
+    name: Windows drag-out x64
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+          cache: npm
+
+      - name: Prepare Windows build environment
+        shell: pwsh
+        run: |
+          .\scripts\prepare-windows-static-build.ps1 `
+            -Environment staging `
+            -Architecture x64 `
+            -InstallMissing `
+            -InstallNodeModules
+
+      - name: Ensure sibling repositories
+        shell: pwsh
+        run: .\scripts\ensure-sibling-repos.ps1
+
+      - name: Build frontend assets
+        shell: pwsh
+        run: npx vite build
+
+      - name: Run Windows drag-out tests
+        shell: pwsh
+        run: |
+          .\scripts\setup-windows-static-env.ps1 `
+            -Architecture x64 `
+            -InstallClang `
+            -Run "cargo test --manifest-path src-tauri/Cargo.toml --lib platform:: -- --include-ignored --test-threads=1 --nocapture"
