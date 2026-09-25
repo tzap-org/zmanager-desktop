@@ -1455,6 +1455,7 @@ pub async fn start_native_file_drag(
         result.map_err(native_file_drag_error_from_command)
     });
 
+    let settle_cancellation = cancellation.clone();
     #[cfg(target_os = "windows")]
     let start_result = {
         // Windows staging and DoDragDrop are synchronous. Keep both off the
@@ -1498,6 +1499,16 @@ pub async fn start_native_file_drag(
         crate::platform::NativeFileDragJobContext { registry: &drag_registry, cancellation, job_id: &job_id, job_kind: kind, job_registry: registry.inner() },
     );
 
+    // Cancelling from the task window interrupts extraction, which the drop
+    // target sees as a failed transfer. Settle that as a cancelled Job so the
+    // task window closes instead of reporting an error.
+    let cancelled_response = || {
+        registry.emit_direct_event(&job_id, JobEventDto::cancelled(Some(kind), "Native drag was cancelled."));
+        NativeFileDragResponse { outcome: NativeFileDragOutcomeDto::Cancelled, session_id: None, job_id: job_id.clone(), dragged_entries: Vec::new() }
+    };
+    if start_result.is_err() && settle_cancellation.is_cancelled() {
+        return Ok(cancelled_response());
+    }
     let start = match start_result.map_err(|error| {
         let mapped = map_native_file_drag_error(error);
         let _ = diagnostics.record(
@@ -1514,6 +1525,9 @@ pub async fn start_native_file_drag(
         Err(error) => return Err(fail_native_drag_job(&registry, &job_id, native_drag_job_kind(&archive_path), error)),
     };
     if let Some(error) = stream_failure.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone() {
+        if settle_cancellation.is_cancelled() {
+            return Ok(cancelled_response());
+        }
         let _ = diagnostics.record(
             "nativeDrag",
             "streamFailed",
