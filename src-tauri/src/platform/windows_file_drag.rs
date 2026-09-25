@@ -17,6 +17,13 @@
 //! 4. After `DoDragDrop` returns the root is retained briefly for file
 //!    managers that finish their copy asynchronously, then removed.
 //!
+//! A release back over the window the drag started from is not a real drop:
+//! Wry's own drop target still answers `DragEnter`/`DragOver` for that window
+//! (it has to, to accept ordinary file drops from Explorer) so the pointer
+//! reads as accepted, even though nothing there consumes a drag-out payload.
+//! `FileDropSource` checks the cursor's window at release and treats that
+//! case as cancelled before staging or the task window are ever reached.
+//!
 //! `DoDragDrop` runs on a dedicated STA thread so the Tauri main thread keeps
 //! dispatching events (the task window is created there) while the target
 //! waits for extraction. That thread shares the UI thread's input state for
@@ -57,10 +64,11 @@ use ::windows::{
     core::{BOOL, Error as WindowsError, HRESULT, Ref, Result as WindowsResult, implement},
 };
 use windows_sys::Win32::{
+    Foundation::POINT,
     System::Threading::{AttachThreadInput, GetCurrentThreadId},
     UI::{
         Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON, VK_RBUTTON},
-        WindowsAndMessaging::{GetSystemMetrics, SM_SWAPBUTTON},
+        WindowsAndMessaging::{GA_ROOT, GetAncestor, GetCursorPos, GetSystemMetrics, SM_SWAPBUTTON, WindowFromPoint},
     },
 };
 
@@ -72,10 +80,13 @@ pub(super) type DestinationNotifier = Arc<dyn Fn() + Send + Sync>;
 /// Runs one drag-out to completion and reports what the destination did.
 ///
 /// `ui_thread_id` is the thread that owns the window where the gesture
-/// started. Blocking here is expected: callers run this off the Tauri main
-/// thread.
+/// started. `source_hwnd` is that same window, used to recognize a release
+/// back over the window the drag started from as an invalid destination
+/// rather than a real drop (see `FileDropSource::pointer_is_over_source_window`).
+/// Blocking here is expected: callers run this off the Tauri main thread.
 pub(super) fn start_drag(
     ui_thread_id: Option<u32>,
+    source_hwnd: Option<isize>,
     staged_drag: StagedFileDrag,
     items: Vec<NativeFileDragItem>,
     stream_provider: NativeFileDragStreamProvider,
@@ -85,7 +96,7 @@ pub(super) fn start_drag(
     let worker_payload = Arc::clone(&payload);
     let worker = thread::Builder::new()
         .name("zmanager-windows-ole-drag".to_string())
-        .spawn(move || run_drag_loop(&worker_payload, ui_thread_id))
+        .spawn(move || run_drag_loop(&worker_payload, ui_thread_id, source_hwnd))
         .map_err(|error| NativeFileDragError::new(format!("Unable to start Windows drag worker: {error}"), Some("Try dragging again.")))?;
     let loop_result = worker.join().map_err(|_| NativeFileDragError::new("Windows drag worker panicked.", Some("Try dragging again.")))?;
     payload.settle(loop_result)
@@ -97,11 +108,12 @@ enum DragLoopResult {
     Cancelled,
 }
 
-fn run_drag_loop(payload: &Arc<DragPayload>, ui_thread_id: Option<u32>) -> Result<DragLoopResult, NativeFileDragError> {
+fn run_drag_loop(payload: &Arc<DragPayload>, ui_thread_id: Option<u32>, source_hwnd: Option<isize>) -> Result<DragLoopResult, NativeFileDragError> {
     // Declared first so COM objects below are released before OLE shuts down.
     let _ole = OleApartment::initialize()?;
     let data_object: IDataObject = FileDragDataObject { payload: Arc::clone(payload) }.into();
-    let drop_source: IDropSource = FileDropSource { payload: Arc::clone(payload), input: Mutex::new(InputAttachment::attach(ui_thread_id)) }.into();
+    let drop_source: IDropSource =
+        FileDropSource { payload: Arc::clone(payload), input: Mutex::new(InputAttachment::attach(ui_thread_id)), source_hwnd }.into();
     let mut effect = DROPEFFECT_NONE;
     // Like 7-Zip, allow move as well as copy: Explorer then renames the
     // extracted files out of the temporary root when it shares the volume.
@@ -355,11 +367,33 @@ impl IDataObject_Impl for FileDragDataObject_Impl {
 struct FileDropSource {
     payload: Arc<DragPayload>,
     input: Mutex<Option<InputAttachment>>,
+    source_hwnd: Option<isize>,
 }
 
 impl FileDropSource {
     fn detach_input(&self) {
         self.input.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).take();
+    }
+
+    /// Whether the pointer is released back over the window the drag started
+    /// from. Wry's own drop target answers `DragEnter`/`DragOver` for every
+    /// window (it must, to accept ordinary file drops from Explorer), so it
+    /// reports an accepting effect even for a session it did not originate.
+    /// Without this check, releasing inside the source window's own GUI would
+    /// still read as a valid destination, staging and extracting the payload
+    /// (and presenting the disposable task window) for a drop nothing acts on.
+    fn pointer_is_over_source_window(&self) -> bool {
+        let Some(source_hwnd) = self.source_hwnd else { return false };
+        let mut point = POINT::default();
+        if unsafe { GetCursorPos(&mut point) } == 0 {
+            return false;
+        }
+        let target = unsafe { WindowFromPoint(point) };
+        if target.is_null() {
+            return false;
+        }
+        let root = unsafe { GetAncestor(target, GA_ROOT) };
+        root as isize == source_hwnd
     }
 }
 
@@ -375,6 +409,9 @@ impl IDropSource_Impl for FileDropSource_Impl {
         // The pointer gesture is over; the target's Drop may now wait on
         // extraction, which must not hold the UI thread's input state.
         self.detach_input();
+        if self.pointer_is_over_source_window() {
+            return DRAGDROP_S_CANCEL;
+        }
         self.payload.release()
     }
 
