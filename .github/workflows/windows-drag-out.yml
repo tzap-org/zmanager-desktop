@@ -61,4 +61,4 @@ jobs:
           .\scripts\setup-windows-static-env.ps1 `
             -Architecture x64 `
             -InstallClang `
-            -Run "cargo test --manifest-path src-tauri/Cargo.toml --lib platform:: -- --include-ignored --test-threads=1 --nocapture"
+            -Run "cargo test --manifest-path src-tauri/Cargo.toml --bins platform:: -- --include-ignored --test-threads=1 --nocapture"
