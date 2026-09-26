@@ -1072,6 +1072,7 @@ fn start_extract_internal_with_origin_and_spawner(
                 tzap_password: password.clone(),
                 tzap_restore_options: Some(tzap_restore_options),
                 cancellation: Some(token.clone()),
+                event_sink: Some(&mut sink),
                 ..Default::default()
             };
             let engine_res = zmanager_core::engine::create_default_engine();
