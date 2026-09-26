@@ -486,7 +486,7 @@ if (!hasFixtureCorpus()) {
       }
 
       it(
-        "deletes the source directory after creation when cleanSource is enabled",
+        "leaves the source directory in place after creation when cleanSource is enabled",
         async () => {
           const temp = makeTempDir("create-clean-source");
           try {
@@ -505,7 +505,7 @@ if (!hasFixtureCorpus()) {
             });
 
             assert.ok(existsSync(destination), "output archive must exist");
-            assert.ok(!existsSync(payload), "cleanSource must remove the selected source tree after a successful create");
+            assert.ok(existsSync(payload), "cleanSource only changes what is excluded from the archive; it must not delete the source tree");
             const { sessionId, snapshot } = await openArchiveIndex(destination);
             try {
               assert.equal(snapshot.status, "ready");
