@@ -1456,48 +1456,19 @@ pub async fn start_native_file_drag(
     });
 
     let settle_cancellation = cancellation.clone();
-    #[cfg(target_os = "windows")]
-    let start_result = {
-        // Windows staging and DoDragDrop are synchronous. Keep both off the
-        // Tauri runtime thread so the disposable task window can render while
-        // the archive is being materialized and while Explorer owns the drag loop.
-        let window = window.clone();
-        let drag_items = drag_items.clone();
-        let drag_registry = drag_registry.inner().clone();
-        let job_registry = registry.inner().clone();
-        let cancellation = cancellation.clone();
-        let job_id = job_id.clone();
-
-        tauri::async_runtime::spawn_blocking(move || {
-            crate::platform::start_native_file_drag(
-                &window,
-                &drag_items,
-                stream_provider,
-                crate::platform::NativeFileDragJobContext {
-                    registry: &drag_registry,
-                    cancellation,
-                    job_id: &job_id,
-                    job_kind: kind,
-                    job_registry: &job_registry,
-                },
-            )
-        })
-        .await
-        .map_err(|error| {
-            map_native_file_drag_error(crate::platform::NativeFileDragError::new(
-                format!("Windows drag worker stopped unexpectedly: {error}"),
-                Some("Try dragging again."),
-            ))
-        })?
-    };
-
-    #[cfg(not(target_os = "windows"))]
-    let start_result = crate::platform::start_native_file_drag(
-        &window,
-        &drag_items,
+    let start_result = crate::platform::run_native_file_drag(
+        crate::platform::NativeFileDragRun {
+            window: window.clone(),
+            items: drag_items.clone(),
+            drag_registry: drag_registry.inner().clone(),
+            job_registry: registry.inner().clone(),
+            cancellation: cancellation.clone(),
+            job_id: job_id.clone(),
+            job_kind: kind,
+        },
         stream_provider,
-        crate::platform::NativeFileDragJobContext { registry: &drag_registry, cancellation, job_id: &job_id, job_kind: kind, job_registry: registry.inner() },
-    );
+    )
+    .await;
 
     // Cancelling from the task window interrupts extraction, which the drop
     // target sees as a failed transfer. Settle that as a cancelled Job so the
