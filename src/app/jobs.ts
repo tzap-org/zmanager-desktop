@@ -57,12 +57,16 @@ export function deriveRetainedJobProgress(
   const facts = snapshot.progressFacts;
   const processedBytes = facts.processedBytes;
   const totalBytes = facts.totalBytes ?? null;
+  const totalEntries = facts.totalEntries ?? null;
   const elapsedMs = facts.activeElapsedMillis;
   const speedBytesPerSecond = elapsedMs > 0 && processedBytes > 0
     ? processedBytes / (elapsedMs / 1000)
     : null;
-  const percent = totalBytes !== null && totalBytes > 0
+  const bytePercent = totalBytes !== null && totalBytes > 0
     ? Math.max(0, Math.min(100, processedBytes / totalBytes * 100))
+    : null;
+  const filePercent = totalEntries !== null && totalEntries > 0
+    ? Math.max(0, Math.min(100, facts.processedEntries / totalEntries * 100))
     : null;
   const phasePercent = snapshot.kind === "tzapCreate" && facts.activePhase
     ? progressPercentForTzapPhase(
@@ -74,7 +78,7 @@ export function deriveRetainedJobProgress(
     : null;
   const progressPercent = snapshot.status === "completed"
     ? 100
-    : phasePercent ?? percent;
+    : phasePercent ?? bytePercent ?? filePercent;
   const writtenBytes = snapshot.terminalSummary?.writtenBytes ?? null;
 
   return {

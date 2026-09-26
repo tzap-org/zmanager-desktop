@@ -42,8 +42,8 @@ use zmanager_core::engine::tzap::{
     TzapArchiveSignatureCheck, TzapArchiveStatusCheck, TzapArchiveTimeCheck, TzapArchiveTrustCheck, TzapArchiveVerification, TzapArchiveVerificationOutcome,
 };
 use zmanager_core::engine::{
-    AppleArchiveCreateOptions, CreateOptions, SevenZCreateOptions, TarGzCreateOptions, TarZstdCreateOptions, TzapCreateOptions, TzapKeySource,
-    TzapRestoreOptions, TzapRestorePolicy, ZipCompression, ZipCreateOptions, is_tzap_archive_path,
+    AppleArchiveCreateOptions, CreateOptions, EntryId, SelectedExtractOptions, SevenZCreateOptions, TarGzCreateOptions, TarZstdCreateOptions,
+    TzapCreateOptions, TzapKeySource, TzapRestoreOptions, TzapRestorePolicy, ZipCompression, ZipCreateOptions, is_tzap_archive_path,
 };
 use zmanager_core::jobs::{CancellationToken, JobEvent, JobEventSink};
 use zmanager_core::manifest::{ManifestFileType, PlanError, PlanOptions, plan_archives};
@@ -1052,54 +1052,19 @@ fn start_extract_internal_with_origin_and_spawner(
 
     spawn_worker(Box::new(move || {
         let mut sink = JobEventCollector::new(&registry_for_thread, job_id.clone());
-        let result = if entry_paths.is_empty() {
-            sink.emit(JobEvent::Started {
-                kind: match kind {
-                    JobKindDto::ZipExtract => zmanager_core::jobs::JobKind::ZipExtract,
-                    JobKindDto::TarZstdExtract => zmanager_core::jobs::JobKind::TarZstdExtract,
-                    JobKindDto::SevenZExtract => zmanager_core::jobs::JobKind::SevenZExtract,
-                    JobKindDto::RarExtract => zmanager_core::jobs::JobKind::RarExtract,
-                    JobKindDto::TzapExtract => zmanager_core::jobs::JobKind::TzapExtract,
-                    JobKindDto::AppleArchiveExtract => zmanager_core::jobs::JobKind::AppleArchiveExtract,
-                    _ => zmanager_core::jobs::JobKind::ArchiveExtract,
-                },
-                total_bytes: None,
-            });
-            let mut options = zmanager_core::engine::ExtractOptions {
-                destination: PathBuf::from(&destination_path),
-                policy,
-                recipient_key_bytes: recipient_private_key.as_ref().map(|k| vec![k.expose_secret().to_vec()]),
-                tzap_password: password.clone(),
-                tzap_restore_options: Some(tzap_restore_options),
-                cancellation: Some(token.clone()),
-                event_sink: Some(&mut sink),
-                ..Default::default()
-            };
-            let engine_res = zmanager_core::engine::create_default_engine();
-            match engine_res {
-                Ok(engine) => {
-                    let open_res = engine.open(
-                        zmanager_core::engine::ArchiveSource::from_path_autodetect(&archive_path),
-                        zmanager_core::engine::OpenOptions { password: password.clone(), recipient_key: None, ..Default::default() },
-                    );
-                    match open_res {
-                        Ok(mut handle) => handle
-                            .extract(&mut options)
-                            .map(|report| JobTerminalSummaryDto {
-                                written_entries: usize::try_from(report.written_entries).unwrap_or(usize::MAX),
-                                skipped_entries: Some(usize::try_from(report.skipped_entries).unwrap_or(usize::MAX)),
-                                written_bytes: report.written_bytes,
-                                warnings: report.warnings,
-                            })
-                            .map_err(crate::platform::archive_error::map_engine_error),
-                        Err(err) => Err(crate::platform::archive_error::map_engine_error(err)),
-                    }
-                }
-                Err(err) => Err(crate::platform::archive_error::map_engine_error(err)),
-            }
-        } else {
-            run_selected_extract_job(&archive_path, &destination_path, &entry_paths, password.as_deref(), policy, tzap_restore_options, &token, &mut sink, kind)
-        };
+        let result = run_extract_job(
+            &archive_path,
+            &destination_path,
+            &entry_paths,
+            &excluded_entry_paths,
+            password,
+            recipient_private_key,
+            policy,
+            tzap_restore_options,
+            &token,
+            &mut sink,
+            kind,
+        );
 
         match result {
             Ok(summary) => {
@@ -1112,6 +1077,180 @@ fn start_extract_internal_with_origin_and_spawner(
     }));
 
     Ok(response)
+}
+
+/// Runs one extraction to completion: the whole archive (Extract All /
+/// Extract to Folder / the quick action, when `entry_paths` is empty) or a
+/// specific selection (Extract Selected). Both cases open the same engine
+/// handle and drive progress through the same `JobContext`-backed sink, so
+/// there is exactly one place that reports extraction progress, not one per
+/// caller.
+#[allow(clippy::too_many_arguments)]
+fn run_extract_job(
+    archive_path: &str,
+    destination_path: &str,
+    entry_paths: &[String],
+    excluded_entry_paths: &[String],
+    password: Option<String>,
+    recipient_private_key: Option<zmanager_core::secrets::SecretBytes>,
+    policy: ExtractionPolicy,
+    tzap_restore_options: TzapRestoreOptions,
+    token: &CancellationToken,
+    sink: &mut JobEventCollector,
+    kind: JobKindDto,
+) -> Result<JobTerminalSummaryDto, CommandErrorDto> {
+    let started_kind = match kind {
+        JobKindDto::ZipExtract => zmanager_core::jobs::JobKind::ZipExtract,
+        JobKindDto::TarZstdExtract => zmanager_core::jobs::JobKind::TarZstdExtract,
+        JobKindDto::SevenZExtract => zmanager_core::jobs::JobKind::SevenZExtract,
+        JobKindDto::RarExtract => zmanager_core::jobs::JobKind::RarExtract,
+        JobKindDto::TzapExtract => zmanager_core::jobs::JobKind::TzapExtract,
+        JobKindDto::AppleArchiveExtract => zmanager_core::jobs::JobKind::AppleArchiveExtract,
+        _ => zmanager_core::jobs::JobKind::ArchiveExtract,
+    };
+
+    let engine_res = zmanager_core::engine::create_default_engine();
+    match engine_res {
+        Ok(engine) => {
+            let open_res = engine.open(
+                zmanager_core::engine::ArchiveSource::from_path_autodetect(archive_path),
+                zmanager_core::engine::OpenOptions { password: password.clone(), recipient_key: None, ..Default::default() },
+            );
+            match open_res {
+                Ok(mut handle) => {
+                    // Listing up front lets both branches know real sizes
+                    // (and, for the selected branch, real EntryIds) before
+                    // Started fires, so the job carries a real total_bytes
+                    // and the UI can render an actual moving percentage
+                    // instead of an indeterminate bar that only ever jumps
+                    // to 100% at completion.
+                    let listing = handle.list().ok();
+                    if entry_paths.is_empty() {
+                        let total_bytes = listing.as_ref().and_then(|listing| {
+                            listing
+                                .entries
+                                .iter()
+                                .filter(|entry| !archive_entry_is_excluded(&entry.path, excluded_entry_paths))
+                                .try_fold(0_u64, |total, entry| total.checked_add(entry.size?))
+                        });
+                        if let Some(listing) = listing.as_ref() {
+                            sink.emit_direct(JobEventDto {
+                                event_type: JobEventKindDto::Started,
+                                job_kind: Some(kind),
+                                phase: None,
+                                code: None,
+                                hint: None,
+                                severity: None,
+                                retryable: None,
+                                path: None,
+                                bytes: None,
+                                total_bytes,
+                                total_bytes_processed: None,
+                                entries: Some(0),
+                                total_entries: Some(
+                                    listing.entries.iter().filter(|entry| !archive_entry_is_excluded(&entry.path, excluded_entry_paths)).count(),
+                                ),
+                                message: None,
+                            });
+                        }
+                        sink.emit(JobEvent::Started { kind: started_kind, total_bytes });
+                        let mut options = zmanager_core::engine::ExtractOptions {
+                            destination: PathBuf::from(destination_path),
+                            policy,
+                            recipient_key_bytes: recipient_private_key.as_ref().map(|k| vec![k.expose_secret().to_vec()]),
+                            tzap_password: password.clone(),
+                            tzap_restore_options: Some(tzap_restore_options),
+                            cancellation: Some(token.clone()),
+                            event_sink: Some(sink),
+                            ..Default::default()
+                        };
+                        handle
+                            .extract(&mut options)
+                            .map(|report| JobTerminalSummaryDto {
+                                written_entries: usize::try_from(report.written_entries).unwrap_or(usize::MAX),
+                                skipped_entries: Some(usize::try_from(report.skipped_entries).unwrap_or(usize::MAX)),
+                                written_bytes: report.written_bytes,
+                                warnings: report.warnings,
+                            })
+                            .map_err(crate::platform::archive_error::map_engine_error)
+                    } else {
+                        match listing {
+                            Some(listing) => {
+                                let mut entry_ids: Vec<EntryId> = Vec::with_capacity(entry_paths.len());
+                                let mut total_bytes = Some(0u64);
+                                let mut missing: Option<&str> = None;
+                                for requested in entry_paths {
+                                    let requested_key = archive_entry_key(requested);
+                                    if let Some(entry) = listing.entries.iter().find(|entry| archive_entry_key(&entry.path) == requested_key) {
+                                        entry_ids.push(entry.id);
+                                        total_bytes = total_bytes.and_then(|total| total.checked_add(entry.size?));
+                                    } else {
+                                        missing = Some(requested);
+                                        break;
+                                    }
+                                }
+                                // JobEvent::Started (the zmanager-core enum) has
+                                // no total_entries field, so emit the raw DTO
+                                // first to retain the file-count fallback. Then
+                                // emit the enum-based Started so the engine's
+                                // core-progress tracker learns the byte total.
+                                sink.emit_direct(JobEventDto {
+                                    event_type: JobEventKindDto::Started,
+                                    job_kind: Some(kind),
+                                    phase: None,
+                                    code: None,
+                                    hint: None,
+                                    severity: None,
+                                    retryable: None,
+                                    path: None,
+                                    bytes: None,
+                                    total_bytes,
+                                    total_bytes_processed: None,
+                                    entries: Some(0),
+                                    total_entries: Some(entry_paths.len()),
+                                    message: None,
+                                });
+                                sink.emit(JobEvent::Started { kind: started_kind, total_bytes });
+                                if let Some(missing) = missing {
+                                    Err(CommandErrorDto::not_found(format!("archive entry not found: {missing}"), None))
+                                } else {
+                                    let mut options = SelectedExtractOptions {
+                                        destination: PathBuf::from(destination_path),
+                                        policy,
+                                        tzap_restore_options: Some(tzap_restore_options),
+                                        cancellation: Some(token.clone()),
+                                        event_sink: Some(sink),
+                                        overwrite_resolver: None,
+                                    };
+                                    handle
+                                        .extract_selected_many(&entry_ids, &mut options)
+                                        .map(|report| JobTerminalSummaryDto {
+                                            written_entries: usize::try_from(report.written_entries).unwrap_or(usize::MAX),
+                                            skipped_entries: Some(usize::try_from(report.skipped_entries).unwrap_or(usize::MAX)),
+                                            written_bytes: report.written_bytes,
+                                            warnings: report.warnings,
+                                        })
+                                        .map_err(crate::platform::archive_error::map_engine_error)
+                                }
+                            }
+                            None => {
+                                sink.emit(JobEvent::Started { kind: started_kind, total_bytes: None });
+                                Err(CommandErrorDto::invalid_request("unable to list archive contents for the selected extraction"))
+                            }
+                        }
+                    }
+                }
+                Err(err) => {
+                    sink.emit(JobEvent::Started { kind: started_kind, total_bytes: None });
+                    Err(crate::platform::archive_error::map_engine_error(err))
+                }
+            }
+        }
+        Err(err) => {
+            sink.emit(JobEvent::Started { kind: started_kind, total_bytes: None });
+            Err(crate::platform::archive_error::map_engine_error(err))
+        }
+    }
 }
 
 fn complete_job_if_needed(registry: &JobRegistry, job_id: &str, kind: JobKindDto, summary: JobTerminalSummaryDto) {
@@ -1625,154 +1764,6 @@ fn start_test_archive_internal(request: TestArchiveRequest, registry: &JobRegist
     });
 
     Ok(response)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_selected_extract_job(
-    archive_path: &str,
-    destination_path: &str,
-    entry_paths: &[String],
-    password: Option<&str>,
-    policy: ExtractionPolicy,
-    tzap_restore_options: TzapRestoreOptions,
-    token: &CancellationToken,
-    sink: &mut JobEventCollector,
-    kind: JobKindDto,
-) -> Result<JobTerminalSummaryDto, CommandErrorDto> {
-    sink.emit_direct(JobEventDto {
-        event_type: JobEventKindDto::Started,
-        job_kind: Some(kind),
-        phase: None,
-        code: None,
-        hint: None,
-        severity: None,
-        retryable: None,
-        path: None,
-        bytes: None,
-        total_bytes: None,
-        total_bytes_processed: None,
-        entries: Some(0),
-        total_entries: Some(entry_paths.len()),
-        message: None,
-    });
-
-    let mut written_entries = 0usize;
-    let mut written_bytes = 0u64;
-
-    for entry_path in entry_paths {
-        if token.is_cancelled() {
-            return Ok(cancel_selected_extract_job(sink, kind, Some(entry_path.clone()), written_entries, written_bytes, entry_paths.len()));
-        }
-
-        sink.emit_direct(JobEventDto {
-            event_type: JobEventKindDto::EntryStarted,
-            job_kind: Some(kind),
-            phase: None,
-            code: None,
-            hint: None,
-            severity: None,
-            retryable: None,
-            path: Some(entry_path.clone()),
-            bytes: None,
-            total_bytes: None,
-            total_bytes_processed: Some(written_bytes),
-            entries: Some(written_entries),
-            total_entries: Some(entry_paths.len()),
-            message: None,
-        });
-
-        let report = archive_browser::extract_entry_with_options(
-            archive_path,
-            entry_path,
-            destination_path,
-            BrowserExtractOptions {
-                password,
-                overwrite: policy.overwrite,
-                strip_components: policy.strip_components,
-                tzap_restore_policy: tzap_restore_options.policy,
-                tzap_allow_degraded: tzap_restore_options.allow_degraded,
-                tzap_allow_absolute_symlinks: tzap_restore_options.allow_absolute_symlinks,
-                ignore_symlinks: policy.ignore_symlinks,
-                limits: None,
-            },
-        )
-        .map_err(crate::platform::map_archive_browser_error)?;
-
-        written_entries = written_entries.saturating_add(1);
-        written_bytes = written_bytes.saturating_add(report.written_bytes);
-        for diagnostic in report.metadata_diagnostics {
-            sink.emit_direct(JobEventDto {
-                event_type: JobEventKindDto::Warning,
-                job_kind: Some(kind),
-                phase: None,
-                code: Some("metadata_degraded"),
-                hint: None,
-                severity: Some(ErrorSeverityDto::Warning),
-                retryable: Some(false),
-                path: Some(entry_path.clone()),
-                bytes: None,
-                total_bytes: None,
-                total_bytes_processed: Some(written_bytes),
-                entries: Some(written_entries),
-                total_entries: Some(entry_paths.len()),
-                message: Some(diagnostic),
-            });
-        }
-        sink.emit_direct(JobEventDto {
-            event_type: JobEventKindDto::EntryFinished,
-            job_kind: Some(kind),
-            phase: None,
-            code: None,
-            hint: None,
-            severity: None,
-            retryable: None,
-            path: Some(entry_path.clone()),
-            bytes: Some(report.written_bytes),
-            total_bytes: None,
-            total_bytes_processed: Some(written_bytes),
-            entries: Some(written_entries),
-            total_entries: Some(entry_paths.len()),
-            message: None,
-        });
-
-        if token.is_cancelled() {
-            return Ok(cancel_selected_extract_job(sink, kind, Some(entry_path.clone()), written_entries, written_bytes, entry_paths.len()));
-        }
-    }
-
-    if token.is_cancelled() {
-        return Ok(cancel_selected_extract_job(sink, kind, None, written_entries, written_bytes, entry_paths.len()));
-    }
-
-    Ok(JobTerminalSummaryDto { written_entries, skipped_entries: None, written_bytes, warnings: Vec::new() })
-}
-
-fn cancel_selected_extract_job(
-    sink: &mut JobEventCollector,
-    kind: JobKindDto,
-    path: Option<String>,
-    written_entries: usize,
-    written_bytes: u64,
-    total_entries: usize,
-) -> JobTerminalSummaryDto {
-    sink.emit_direct(JobEventDto {
-        event_type: JobEventKindDto::Cancelled,
-        job_kind: Some(kind),
-        phase: None,
-        code: Some(constants::COMMAND_ERROR_CANCELLED),
-        hint: None,
-        severity: None,
-        retryable: Some(true),
-        path,
-        bytes: None,
-        total_bytes: None,
-        total_bytes_processed: Some(written_bytes),
-        entries: Some(written_entries),
-        total_entries: Some(total_entries),
-        message: Some("Extraction cancelled.".to_string()),
-    });
-
-    JobTerminalSummaryDto { written_entries, skipped_entries: None, written_bytes, warnings: vec!["Extraction cancelled.".to_string()] }
 }
 
 #[tauri::command]
@@ -4143,6 +4134,225 @@ mod tests {
     }
 
     #[test]
+    fn whole_archive_extract_emits_incremental_entry_progress_events() {
+        let workspace = create_temp_workspace("whole-archive-extract-progress");
+        let sources = workspace.join("sources");
+        let destination_archive = workspace.join("fixture.zip");
+        let extract_destination = workspace.join("extracted");
+        fs::create_dir_all(&sources).expect("source directory should exist");
+        fs::create_dir_all(&extract_destination).expect("extract directory should exist");
+
+        // The shared progress coalescer (zmanager-core's ProgressCoalescer,
+        // used identically by compression) only flushes a BytesProcessed
+        // event once pending bytes cross a 4 MiB floor (or a 1-second
+        // wall-clock interval elapses) - the very first record_activity call
+        // of the whole job always flushes once for free, but a small fixture
+        // can spend that one freebie on a zero-byte directory entry and then
+        // never cross the floor again. Use one entry comfortably larger than
+        // that floor so real incremental byte progress is unambiguous, not
+        // dependent on which entry happens to claim the first free flush.
+        // Uniform bytes compress away almost entirely, which trips the
+        // archive engine's own zip-bomb guard (rejects expansion ratios past
+        // 1000:1) before extraction can even begin. Use a cheap
+        // pseudo-random fill so the payload is large but not absurdly
+        // compressible.
+        const PAYLOAD_BYTES: usize = 10 * 1024 * 1024;
+        let mut payload = vec![0u8; PAYLOAD_BYTES];
+        let mut state: u32 = 0x2545F491;
+        for byte in payload.iter_mut() {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            *byte = (state & 0xff) as u8;
+        }
+        fs::write(sources.join("payload.bin"), payload).expect("fixture payload should write");
+        let registry = crate::job_registry::JobRegistry::new();
+
+        let create_request = StartCreateRequest {
+            sources: vec![sources.to_string_lossy().to_string()],
+            destination_path: destination_archive.to_string_lossy().to_string(),
+            format: crate::dto::ArchiveFormatDto::Zip,
+            clean_source: false,
+            exclude_names: None,
+            exclude_archive_paths: None,
+            include_archive_paths: None,
+            respect_gitignore: false,
+            follow_symlinks: false,
+            replace_existing: true,
+            destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
+            password: None,
+            compression_level: None,
+            volume_size: None,
+            volume_count: None,
+            tzap_recovery_percentage: None,
+            tzap_volume_loss_tolerance: None,
+            zip_compression: None,
+            seven_z_solid: None,
+            seven_z_threads: None,
+            seven_z_chunk_size: None,
+            seven_z_encrypt_file_names: None,
+            tzap_certificates: None,
+            tzap_bootstrap_sidecar: None,
+            preserve_metadata: false,
+        };
+        let create_job = start_create_internal(create_request, &registry).expect("fixture create should start");
+        let (create_poll, _) = wait_for_job_terminal(&registry, &create_job.job_id);
+        assert_eq!(create_poll.status, JobStatusDto::Completed);
+
+        let extract_request = StartExtractRequest {
+            archive_path: destination_archive.to_string_lossy().to_string(),
+            destination_path: extract_destination.to_string_lossy().to_string(),
+            password: None,
+            recipient_key_id: None,
+            overwrite: OverwritePolicyDto::Replace,
+            destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
+            // No entry_paths and select_all left at its default (false, matching
+            // what "Extract All" / the quick action send): this is the
+            // whole-archive branch of start_extract_internal_with_origin_and_spawner
+            // that previously built ExtractOptions with ..Default::default(),
+            // leaving event_sink as None so no intermediate progress ever reached
+            // the job registry.
+            entry_paths: None,
+            select_all: false,
+            excluded_entry_paths: Vec::new(),
+            strip_components: 0,
+            tzap_restore_policy: TzapRestorePolicyDto::Portable,
+            tzap_allow_degraded: false,
+            tzap_allow_absolute_symlinks: false,
+            ignore_symlinks: false,
+        };
+        let extract_job = start_extract_internal(extract_request, &registry).expect("extract command should start a job");
+        let (extract_poll, mut extract_events) = wait_for_job_terminal(&registry, &extract_job.job_id);
+        extract_events.extend_from_slice(&extract_poll.events);
+
+        assert_eq!(extract_poll.status, JobStatusDto::Completed);
+
+        let saw_bytes_processed =
+            extract_events.iter().any(|event| matches!(event.event_type, JobEventKindDto::BytesProcessed) && event.total_bytes_processed.unwrap_or(0) > 0);
+        assert!(
+            saw_bytes_processed,
+            "whole-archive extract should report incremental bytes-processed progress partway through a large entry, not jump straight from Started to Completed"
+        );
+
+        // The raw test-event log intentionally coalesces same-kind events
+        // (record_test_event evicts older EntryStarted/EntryFinished/BytesProcessed
+        // entries as new ones of the same kind arrive, mirroring how the real
+        // snapshot channel only carries the latest state) so it cannot be used to
+        // count how many entries were reported. Instead, read the same
+        // progress_facts snapshot the frontend's deriveRetainedJobProgress
+        // actually consumes: progressPercent stays null (rendering an
+        // indeterminate "stuck" bar) unless totalBytes is known, and
+        // processedBytes/processedEntries must reach the real totals for the
+        // bar to visibly move and finish at 100% rather than jump there.
+        let final_snapshot = registry.current_job_snapshot(&extract_job.job_id).expect("completed extract job should still have a readable snapshot");
+        assert_eq!(
+            final_snapshot.progress_facts.total_bytes,
+            Some(PAYLOAD_BYTES as u64),
+            "whole-archive extract should know the archive's total size up front so the frontend can compute a real progress percentage"
+        );
+        assert_eq!(
+            final_snapshot.progress_facts.processed_bytes, PAYLOAD_BYTES as u64,
+            "whole-archive extract should account for every extracted byte, not just report a terminal summary"
+        );
+        assert_eq!(
+            final_snapshot.progress_facts.processed_entries, 2,
+            "whole-archive extract should account for every extracted entry (the sources/ directory plus payload.bin), not just report a terminal summary"
+        );
+        assert_eq!(
+            final_snapshot.progress_facts.total_entries,
+            Some(2),
+            "whole-archive extract should retain the planned entry count for file-based progress fallback"
+        );
+
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn selected_entries_extract_reports_known_total_bytes_up_front() {
+        let workspace = create_temp_workspace("selected-extract-progress");
+        let sources = workspace.join("sources");
+        let destination_archive = workspace.join("fixture.zip");
+        let extract_destination = workspace.join("extracted");
+        fs::create_dir_all(&sources).expect("source directory should exist");
+        fs::create_dir_all(&extract_destination).expect("extract directory should exist");
+
+        fs::write(sources.join("selected.bin"), vec![7u8; 256 * 1024]).expect("selected fixture payload should write");
+        fs::write(sources.join("unselected.bin"), vec![9u8; 512 * 1024]).expect("unselected fixture payload should write");
+        let registry = crate::job_registry::JobRegistry::new();
+
+        let create_request = StartCreateRequest {
+            sources: vec![sources.to_string_lossy().to_string()],
+            destination_path: destination_archive.to_string_lossy().to_string(),
+            format: crate::dto::ArchiveFormatDto::Zip,
+            clean_source: false,
+            exclude_names: None,
+            exclude_archive_paths: None,
+            include_archive_paths: None,
+            respect_gitignore: false,
+            follow_symlinks: false,
+            replace_existing: true,
+            destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
+            password: None,
+            compression_level: None,
+            volume_size: None,
+            volume_count: None,
+            tzap_recovery_percentage: None,
+            tzap_volume_loss_tolerance: None,
+            zip_compression: None,
+            seven_z_solid: None,
+            seven_z_threads: None,
+            seven_z_chunk_size: None,
+            seven_z_encrypt_file_names: None,
+            tzap_certificates: None,
+            tzap_bootstrap_sidecar: None,
+            preserve_metadata: false,
+        };
+        let create_job = start_create_internal(create_request, &registry).expect("fixture create should start");
+        let (create_poll, _) = wait_for_job_terminal(&registry, &create_job.job_id);
+        assert_eq!(create_poll.status, JobStatusDto::Completed);
+
+        let extract_request = StartExtractRequest {
+            archive_path: destination_archive.to_string_lossy().to_string(),
+            destination_path: extract_destination.to_string_lossy().to_string(),
+            password: None,
+            recipient_key_id: None,
+            overwrite: OverwritePolicyDto::Replace,
+            destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
+            entry_paths: Some(vec!["sources/selected.bin".to_string()]),
+            select_all: false,
+            excluded_entry_paths: Vec::new(),
+            strip_components: 0,
+            tzap_restore_policy: TzapRestorePolicyDto::Portable,
+            tzap_allow_degraded: false,
+            tzap_allow_absolute_symlinks: false,
+            ignore_symlinks: false,
+        };
+        let extract_job = start_extract_internal(extract_request, &registry).expect("extract command should start a job");
+        let (extract_poll, mut extract_events) = wait_for_job_terminal(&registry, &extract_job.job_id);
+        extract_events.extend_from_slice(&extract_poll.events);
+
+        assert_eq!(extract_poll.status, JobStatusDto::Completed);
+
+        let started_event =
+            extract_events.iter().find(|event| matches!(event.event_type, JobEventKindDto::Started)).expect("extract should emit a started event");
+        assert_eq!(
+            started_event.total_bytes,
+            Some(256 * 1024),
+            "selected-entry extract should know the selected entries' total size up front, not the whole archive's, and not leave it unknown"
+        );
+
+        let final_snapshot = registry.current_job_snapshot(&extract_job.job_id).expect("completed extract job should still have a readable snapshot");
+        assert_eq!(
+            final_snapshot.progress_facts.total_bytes,
+            Some(256 * 1024),
+            "the snapshot the frontend actually reads should carry the same known total, not just the raw Started event"
+        );
+        assert_eq!(final_snapshot.progress_facts.processed_bytes, 256 * 1024, "selected-entry extract should account for the selected entry's bytes");
+
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
     fn command_boundary_start_extract_renames_existing_destination_when_requested() {
         let workspace = create_temp_workspace("start-extract-rename-destination");
         let sources = workspace.join("sources");
@@ -5146,16 +5356,25 @@ mod tests {
 
     #[test]
     fn selected_extract_reports_cancelled_without_completed_event_when_token_is_cancelled() {
+        // run_extract_job itself only ever returns Ok/Err (it no longer has its
+        // own "cancelled" short-circuit); a pre-cancelled job still ends up
+        // Cancelled because the registry converts any terminal Failed/Completed
+        // event into Cancelled once a cancel has been requested (see
+        // emit_direct_event), which is the same generic mechanism the
+        // whole-archive path has always relied on for this. A missing archive
+        // is enough to force that terminal Err without needing a real fixture.
         let registry = crate::job_registry::JobRegistry::new();
         let (response, token) = registry.create_job(JobKindDto::ZipExtract);
         registry.request_cancel(&response.job_id).expect("cancel should target the selected extract job");
         assert!(token.is_cancelled(), "registry cancellation should mark the selected extract token");
 
         let mut sink = JobEventCollector::new(&registry, response.job_id.clone());
-        let summary = run_selected_extract_job(
+        let error = run_extract_job(
             "unused.zip",
             "unused-destination",
             &["sources/keep.txt".to_string()],
+            &[],
+            None,
             None,
             extraction_policy(OverwritePolicyDto::Replace, 0, false, &[]),
             TzapRestoreOptions::default(),
@@ -5163,13 +5382,12 @@ mod tests {
             &mut sink,
             JobKindDto::ZipExtract,
         )
-        .expect("pre-cancelled selected extract should finish with a terminal summary");
+        .expect_err("missing archive should fail to open");
+        registry.emit_direct_event(&response.job_id, JobEventDto::failed_from_command_error(JobKindDto::ZipExtract, error));
 
         let poll = registry.take_test_events(&response.job_id).expect("cancelled selected extract job should be pollable");
 
         assert_eq!(poll.status, JobStatusDto::Cancelled);
-        assert_eq!(summary.written_entries, 0);
-        assert_eq!(summary.written_bytes, 0);
         assert!(poll.events.iter().any(|event| matches!(event.event_type, JobEventKindDto::Cancelled)), "selected extract should emit a cancelled event",);
         assert!(!poll.events.iter().any(|event| matches!(event.event_type, JobEventKindDto::Completed)), "cancelled selected extract must not emit completed",);
     }

@@ -56,6 +56,38 @@ describe("retained Job presentation", () => {
     });
   });
 
+  it("falls back to file progress when the byte total is unavailable", () => {
+    expect(deriveRetainedJobProgress(snapshot({
+      progressFacts: {
+        ...snapshot().progressFacts,
+        totalBytes: null,
+      },
+    }))).toMatchObject({
+      processedFiles: 2,
+      totalFiles: 4,
+      progressPercent: 50,
+    });
+  });
+
+  it("prefers byte progress when both byte and file totals are available", () => {
+    expect(deriveRetainedJobProgress(snapshot({
+      progressFacts: {
+        ...snapshot().progressFacts,
+        totalBytes: 200,
+      },
+    })).progressPercent).toBe(25);
+  });
+
+  it("keeps progress indeterminate when neither total is available", () => {
+    expect(deriveRetainedJobProgress(snapshot({
+      progressFacts: {
+        ...snapshot().progressFacts,
+        totalBytes: null,
+        totalEntries: null,
+      },
+    })).progressPercent).toBeNull();
+  });
+
   it("recognizes process and password states without creating frontend Job state", () => {
     expect(isLiveJobStatus("queued")).toBe(true);
     expect(isLiveJobStatus("running")).toBe(true);

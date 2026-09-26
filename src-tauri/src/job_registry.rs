@@ -1196,7 +1196,10 @@ fn sync_core_progress(record: &mut JobRecord) {
     record.progress.processed_bytes = core.processed_bytes;
     record.progress.total_bytes = core.total_bytes;
     record.progress.processed_entries = core.processed_entries;
-    record.progress.total_entries = core.total_entries;
+    // A command may know the planned entry count before the core engine
+    // starts, while the core progress projection only learns the completed
+    // count. Preserve that command-level total until core supplies one.
+    record.progress.total_entries = core.total_entries.or_else(|| record.total_entries.map(|total| total as u64));
     record.progress.current_path = core.current_path.clone();
     record.progress.recent_paths = core.recent_paths.clone();
     record.progress.active_phase = core.active_phase.map(JobPhaseDto::from);
@@ -1552,6 +1555,19 @@ mod tests {
         );
         assert!(snapshots.has_changed().expect("subscription should remain open"));
         assert_eq!(snapshots.borrow_and_update().progress_facts.processed_bytes, 30);
+    }
+
+    #[test]
+    fn core_progress_keeps_command_provided_total_entries() {
+        let registry = JobRegistry::new();
+        let (response, _) = registry.create_job(JobKindDto::ZipExtract);
+        let mut started = JobEventDto::new(JobEventKindDto::Started);
+        started.total_entries = Some(4);
+        registry.emit_direct_event(&response.job_id, started);
+
+        registry.emit_job_event(&response.job_id, zmanager_core::jobs::JobEvent::Started { kind: zmanager_core::jobs::JobKind::ZipExtract, total_bytes: None });
+
+        assert_eq!(registry.current_job_snapshot(&response.job_id).expect("job should remain available").progress_facts.total_entries, Some(4),);
     }
 
     #[test]
