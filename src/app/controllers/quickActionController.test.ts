@@ -405,7 +405,7 @@ describe("quick action controller", () => {
       destinationCollisionStrategy: "rename",
       stripComponents: 0,
       tzapRestorePolicy: "portable",
-      tzapAllowDegraded: false,
+      tzapAllowDegraded: true,
       tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
     } satisfies StartExtractRequest);
@@ -416,7 +416,7 @@ describe("quick action controller", () => {
       destinationCollisionStrategy: "rename",
       stripComponents: 0,
       tzapRestorePolicy: "portable",
-      tzapAllowDegraded: false,
+      tzapAllowDegraded: true,
       tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
       password: "retry-secret",
@@ -438,7 +438,7 @@ describe("quick action controller", () => {
       overwrite: "rename",
       stripComponents: 0,
       tzapRestorePolicy: "portable",
-      tzapAllowDegraded: false,
+      tzapAllowDegraded: true,
       tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
     } satisfies StartExtractRequest);
@@ -461,7 +461,7 @@ describe("quick action controller", () => {
       overwrite: "rename",
       stripComponents: 0,
       tzapRestorePolicy: "portable",
-      tzapAllowDegraded: false,
+      tzapAllowDegraded: true,
       tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
     } satisfies StartExtractRequest);
@@ -483,7 +483,7 @@ describe("quick action controller", () => {
       overwrite: "replace",
       stripComponents: 0,
       tzapRestorePolicy: "portable",
-      tzapAllowDegraded: false,
+      tzapAllowDegraded: true,
       tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
     } satisfies StartExtractRequest);
@@ -506,7 +506,7 @@ describe("quick action controller", () => {
       destinationCollisionStrategy: "rename",
       stripComponents: 0,
       tzapRestorePolicy: "portable",
-      tzapAllowDegraded: false,
+      tzapAllowDegraded: true,
       tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
     } satisfies StartExtractRequest);

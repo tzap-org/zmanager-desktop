@@ -76,7 +76,11 @@ export function buildStartExtractRequest(input: BuildStartExtractRequestInput): 
       : {}),
     stripComponents: input.stripComponents,
     tzapRestorePolicy: input.tzapRestorePolicy ?? "portable",
-    tzapAllowDegraded: input.tzapAllowDegraded ?? false,
+    // Always request degraded restore: a strict reader refusal (e.g. an
+    // archive entry whose attributes can't be projected onto this OS) is
+    // never a useful hard failure for a utility extraction tool. Skipping
+    // what can't be restored and finishing the extraction beats aborting it.
+    tzapAllowDegraded: true,
     tzapAllowAbsoluteSymlinks: input.tzapAllowAbsoluteSymlinks ?? false,
     ignoreSymlinks: input.ignoreSymlinks ?? false,
     ...(input.recipientKeyId?.trim() ? { recipientKeyId: input.recipientKeyId.trim() } : {}),
@@ -107,7 +111,8 @@ export function resolveExtractStartInput(
       : {}),
     entryReferences,
     tzapRestorePolicy: input.tzapRestorePolicy ?? "portable",
-    tzapAllowDegraded: input.tzapAllowDegraded ?? false,
+    // See buildStartExtractRequest: degraded restore is always allowed.
+    tzapAllowDegraded: true,
     tzapAllowAbsoluteSymlinks: input.tzapAllowAbsoluteSymlinks ?? false,
     ignoreSymlinks: input.ignoreSymlinks ?? false,
     ...(input.tzapRecipientKeyId?.trim() ? { tzapRecipientKeyId: input.tzapRecipientKeyId.trim() } : {}),

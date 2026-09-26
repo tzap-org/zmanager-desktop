@@ -802,7 +802,8 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
           } : {}),
           stripComponents: input.stripComponents,
           tzapRestorePolicy: input.tzapRestorePolicy ?? "portable",
-          tzapAllowDegraded: input.tzapAllowDegraded ?? false,
+          // Always allow degraded restore; see extractFlow.buildStartExtractRequest.
+          tzapAllowDegraded: true,
           tzapAllowAbsoluteSymlinks: input.tzapAllowAbsoluteSymlinks ?? false,
           ignoreSymlinks: input.ignoreSymlinks ?? false,
           ...(input.recipientKeyId?.trim() ? { recipientKeyId: input.recipientKeyId.trim() } : {}),

@@ -162,7 +162,7 @@ describe("extract start controller", () => {
       overwrite: "ask",
       stripComponents: 1,
       tzapRestorePolicy: "portable",
-      tzapAllowDegraded: false,
+      tzapAllowDegraded: true,
       tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
     });
@@ -186,7 +186,7 @@ describe("extract start controller", () => {
       stripComponents: 1,
       entryPaths: ["docs/readme.txt"],
       tzapRestorePolicy: "portable",
-      tzapAllowDegraded: false,
+      tzapAllowDegraded: true,
       tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
     });

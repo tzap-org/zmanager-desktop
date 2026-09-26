@@ -555,7 +555,6 @@ fn start_create_internal_with_resolver(
 
     let request_sources = sources;
     let destination = destination_path;
-    let clean_source = request.clean_source;
     let kind_for_thread = kind;
     let plan_options = plan_options_for_thread;
     let diagnostics_for_worker_lifecycle = diagnostics.clone();
@@ -677,16 +676,7 @@ fn start_create_internal_with_resolver(
                     .map_err(crate::platform::archive_error::map_engine_error);
 
             match result {
-                Ok(summary) => {
-                    if clean_source {
-                        match remove_created_source_paths(&request_sources, &destination) {
-                            Ok(()) => complete_job_if_needed(&registry_for_thread, &job_id, kind_for_thread, summary),
-                            Err(error) => registry_for_thread.emit_direct_event(&job_id, JobEventDto::failed_from_command_error(kind_for_thread, error)),
-                        }
-                    } else {
-                        complete_job_if_needed(&registry_for_thread, &job_id, kind_for_thread, summary);
-                    }
-                }
+                Ok(summary) => complete_job_if_needed(&registry_for_thread, &job_id, kind_for_thread, summary),
                 Err(error) => {
                     registry_for_thread.emit_direct_event(&job_id, JobEventDto::failed_from_command_error(kind_for_thread, error));
                 }
@@ -1125,46 +1115,6 @@ fn start_extract_internal_with_origin_and_spawner(
 
 fn complete_job_if_needed(registry: &JobRegistry, job_id: &str, kind: JobKindDto, summary: JobTerminalSummaryDto) {
     let _ = registry.commit_completed(job_id, kind, summary);
-}
-
-/// Removes create sources only after the archive engine has successfully
-/// written the output. The destination is checked first so a source that
-/// contains the output cannot make a successful archive disappear during
-/// cleanup.
-fn remove_created_source_paths(sources: &[PathBuf], destination: &str) -> Result<(), CommandErrorDto> {
-    let destination_path = Path::new(destination);
-    let destination_absolute = if destination_path.exists() {
-        std::fs::canonicalize(destination_path)
-    } else {
-        let parent = destination_path.parent().unwrap_or(Path::new("."));
-        std::fs::canonicalize(parent).map(|parent| parent.join(destination_path.file_name().unwrap_or_default()))
-    }
-    .map_err(|error| map_io_error(destination.to_string(), error))?;
-
-    let mut canonical_sources: Vec<(PathBuf, PathBuf)> = Vec::with_capacity(sources.len());
-    for source in sources {
-        let canonical = std::fs::canonicalize(source).map_err(|error| map_io_error(source.to_string_lossy().to_string(), error))?;
-        if destination_absolute == canonical || destination_absolute.starts_with(&canonical) {
-            return Err(CommandErrorDto::invalid_request("cleanSource cannot remove a source containing the archive destination"));
-        }
-        if !canonical_sources.iter().any(|(_, existing)| existing == &canonical) {
-            // Keep the caller's path for deletion. `canonicalize` follows a
-            // symlink, and deleting that resolved target would violate the
-            // source cleanup contract.
-            canonical_sources.push((source.clone(), canonical));
-        }
-    }
-
-    for (source, _) in canonical_sources {
-        let metadata = match std::fs::symlink_metadata(&source) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-            Err(error) => return Err(map_io_error(source.to_string_lossy().to_string(), error)),
-        };
-        let result = if metadata.is_dir() { std::fs::remove_dir_all(&source) } else { std::fs::remove_file(&source) };
-        result.map_err(|error| map_io_error(source.to_string_lossy().to_string(), error))?;
-    }
-    Ok(())
 }
 
 // Runs off the main thread: archive entry extraction to a temporary root.
@@ -3092,43 +3042,6 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
         fs::create_dir_all(&base).expect("temporary workspace should be created");
         base
-    }
-
-    #[test]
-    fn clean_source_rejects_an_archive_destination_inside_a_source() {
-        let workspace = create_temp_workspace("clean-source-destination-guard");
-        let source = workspace.join("source");
-        let destination = source.join("archive.zip");
-        fs::create_dir_all(&source).expect("source directory should exist");
-        fs::write(source.join("payload.txt"), b"payload").expect("source payload should exist");
-
-        let error = remove_created_source_paths(std::slice::from_ref(&source), &destination.to_string_lossy())
-            .expect_err("source cleanup must refuse to remove its own output");
-
-        assert_eq!(error.code, constants::COMMAND_ERROR_INVALID_REQUEST);
-        assert!(source.join("payload.txt").is_file());
-        let _ = fs::remove_dir_all(&workspace);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn clean_source_removes_a_symlink_without_following_its_target() {
-        use std::os::unix::fs::symlink;
-
-        let workspace = create_temp_workspace("clean-source-symlink");
-        let target = workspace.join("target");
-        let source_link = workspace.join("source-link");
-        let destination = workspace.join("archive.zip");
-        fs::create_dir_all(&target).expect("symlink target should exist");
-        fs::write(target.join("keep.txt"), b"keep").expect("target payload should exist");
-        symlink(&target, &source_link).expect("source symlink should be created");
-        fs::write(&destination, b"archive").expect("archive destination should exist");
-
-        remove_created_source_paths(std::slice::from_ref(&source_link), &destination.to_string_lossy()).expect("symlink source should be removable");
-
-        assert!(!source_link.exists(), "cleanSource should remove the link itself");
-        assert!(target.join("keep.txt").is_file(), "cleanSource must not follow and delete a symlink target");
-        let _ = fs::remove_dir_all(&workspace);
     }
 
     fn write_test_p12(identity_path: &Path, certificate_path: &Path) {
