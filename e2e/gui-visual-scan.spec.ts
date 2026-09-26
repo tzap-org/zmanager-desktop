@@ -200,7 +200,9 @@ test("extract table header context menu toggles visible columns and supports key
   await page.getByRole("tab", { name: "Extract" }).click();
   await loadArchiveWithIcons(page);
 
-  await page.locator("th[data-column-id='size']").focus();
+  const sizeHeader = page.locator("th[data-column-id='size']");
+  await sizeHeader.focus();
+  await expect(sizeHeader).toBeFocused();
   await page.keyboard.press("Shift+F10");
   await expect(page.locator("#context-menu")).toBeVisible();
   await expect(page.locator("#context-menu")).toContainText("Sort Ascending");
@@ -471,7 +473,12 @@ test("primary GUI states have visible, non-overlapping controls", async ({ page 
 
   await page.keyboard.press("Escape");
   await expect(page.locator("#context-menu")).toBeHidden();
-  await page.locator('tr[data-entry-path="documents"]').focus();
+  const documentsRow = page.locator('tr[data-entry-path="documents"]');
+  await documentsRow.focus();
+  // Escape's own focus-restoration (ContextMenuRoot's onCloseAutoFocus) races
+  // this explicit focus call under CI load; confirm focus actually landed
+  // before the shortcut fires, or Shift+F10 is silently dropped.
+  await expect(documentsRow).toBeFocused();
   await page.keyboard.press("Shift+F10");
   await expect(page.locator("#context-menu")).toBeVisible();
   await expect(page.locator("#context-menu [data-context-action]").first()).toContainText("Open");
