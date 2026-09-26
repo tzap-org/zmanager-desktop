@@ -305,6 +305,51 @@ pub fn start_native_file_drag(
     ActivePlatform::start_native_file_drag(window, items, stream_provider, context)
 }
 
+/// Owned inputs for [`run_native_file_drag`], bundled so the dispatch can move
+/// them onto a blocking thread on Windows.
+pub struct NativeFileDragRun {
+    pub window: tauri::WebviewWindow<Wry>,
+    pub items: Vec<NativeFileDragItem>,
+    pub drag_registry: crate::native_drag_session::NativeDragSessionRegistry,
+    pub job_registry: crate::job_registry::JobRegistry,
+    pub cancellation: zmanager_core::jobs::CancellationToken,
+    pub job_id: String,
+    pub job_kind: crate::job_dto::JobKindDto,
+}
+
+/// Runs [`start_native_file_drag`] to completion, choosing the execution
+/// strategy the running platform requires.
+///
+/// Windows staging and `DoDragDrop` are synchronous, so that work runs on a
+/// blocking thread to keep the disposable task window responsive while the
+/// archive is materialized and Explorer owns the drag loop. Other platforms
+/// drive the native drag loop from the async runtime directly.
+pub async fn run_native_file_drag(run: NativeFileDragRun, stream_provider: NativeFileDragStreamProvider) -> Result<NativeFileDragStart, NativeFileDragError> {
+    let NativeFileDragRun { window, items, drag_registry, job_registry, cancellation, job_id, job_kind } = run;
+    #[cfg(target_os = "windows")]
+    {
+        tauri::async_runtime::spawn_blocking(move || {
+            start_native_file_drag(
+                &window,
+                &items,
+                stream_provider,
+                NativeFileDragJobContext { registry: &drag_registry, cancellation, job_id: &job_id, job_kind, job_registry: &job_registry },
+            )
+        })
+        .await
+        .unwrap_or_else(|error| Err(NativeFileDragError::new(format!("Windows drag worker stopped unexpectedly: {error}"), Some("Try dragging again."))))
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        start_native_file_drag(
+            &window,
+            &items,
+            stream_provider,
+            NativeFileDragJobContext { registry: &drag_registry, cancellation, job_id: &job_id, job_kind, job_registry: &job_registry },
+        )
+    }
+}
+
 pub fn handle_run_event(event: &tauri::RunEvent, inbox: &NativeLaunchInbox) {
     #[cfg(target_os = "macos")]
     macos::handle_run_event(event, inbox);
