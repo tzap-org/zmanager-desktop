@@ -696,7 +696,10 @@ fn build_auto_extract_request(config: &ReceiveConfig, received_path: &Path) -> O
         excluded_entry_paths: Vec::new(),
         strip_components: 0,
         tzap_restore_policy: TzapRestorePolicyDto::default(),
-        tzap_allow_degraded: false,
+        // Always allow degraded restore for auto-extract: a received archive
+        // with attributes that can't be projected onto this OS should still
+        // land its files rather than abort the whole receive.
+        tzap_allow_degraded: true,
         tzap_allow_absolute_symlinks: false,
         ignore_symlinks: false,
     })

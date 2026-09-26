@@ -48,7 +48,7 @@ describe("extract flow helpers", () => {
       overwrite: "replace",
       stripComponents: 0,
       tzapRestorePolicy: "portable",
-      tzapAllowDegraded: false,
+      tzapAllowDegraded: true,
       tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
     });
@@ -78,7 +78,7 @@ describe("extract flow helpers", () => {
       entryPaths: ["source/hello.txt"],
       stripComponents: 1,
       tzapRestorePolicy: "portable",
-      tzapAllowDegraded: false,
+      tzapAllowDegraded: true,
       tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
       password: "secret",

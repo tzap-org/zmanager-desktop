@@ -829,7 +829,7 @@ describe("archive workspace load state", () => {
       overwrite: "rename",
       stripComponents: 2,
       tzapRestorePolicy: "portable",
-      tzapAllowDegraded: false,
+      tzapAllowDegraded: true,
       tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
       password: "secret",

@@ -410,7 +410,7 @@ export const zhCnMessages = {
   "create.volumeCount": "分卷数量",
   "create.tzapRecovery": "TZAP 恢复，%",
   "create.cleanSource": "清理源文件",
-  "create.cleanSource.tooltip": "仅在归档成功创建后删除源文件。",
+  "create.cleanSource.tooltip": "从归档中排除常见的版本控制与构建产物（如 .git、node_modules、target、构建输出等）。",
   "create.preserveMetadata": "保留元数据",
   "create.preserveMetadata.zip.tooltip": "在可用时保存 Unix 权限位。ZIP 不会保留所有文件系统属性。",
   "create.preserveMetadata.tarZst.tooltip": "保存文件、文件夹和符号链接的权限位及修改时间。",

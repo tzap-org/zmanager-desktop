@@ -74,7 +74,7 @@ describe("disposable task recovery controller", () => {
       entryPaths: ["docs/readme.txt"],
       stripComponents: 1,
       tzapRestorePolicy: "portable",
-      tzapAllowDegraded: false,
+      tzapAllowDegraded: true,
       tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
       password: "secret",

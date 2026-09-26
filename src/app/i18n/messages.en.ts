@@ -582,7 +582,7 @@ export const enMessages = {
   "create.volumeCount": "Number of volumes",
   "create.tzapRecovery": "TZAP recovery, %",
   "create.cleanSource": "Clean source",
-  "create.cleanSource.tooltip": "Delete the source files only after the archive is created successfully.",
+  "create.cleanSource.tooltip": "Exclude common version-control and build clutter (.git, node_modules, target, build output, and similar) from the archive.",
   "create.preserveMetadata": "Preserve metadata",
   "create.preserveMetadata.zip.tooltip": "Store Unix permission bits when they are available. ZIP does not preserve every filesystem attribute.",
   "create.preserveMetadata.tarZst.tooltip": "Store permission bits and modification times for files, folders, and symbolic links.",
