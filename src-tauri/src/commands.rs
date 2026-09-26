@@ -1126,12 +1126,18 @@ fn run_extract_job(
                     // to 100% at completion.
                     let listing = handle.list().ok();
                     if entry_paths.is_empty() {
-                        let total_bytes = listing.as_ref().and_then(|listing| {
+                        // Best-effort total, mirroring how 7-Zip's own CHandler::Extract
+                        // sums importantTotalUnpacked: entries without a known size (a
+                        // directory, or a format that just doesn't report one) contribute
+                        // 0 rather than poisoning the whole sum to "unknown". A total
+                        // that's missing a few entries' bytes still drives a real,
+                        // mostly-accurate progress bar; None forces an indeterminate one.
+                        let total_bytes = listing.as_ref().map(|listing| {
                             listing
                                 .entries
                                 .iter()
                                 .filter(|entry| !archive_entry_is_excluded(&entry.path, excluded_entry_paths))
-                                .try_fold(0_u64, |total, entry| total.checked_add(entry.size?))
+                                .fold(0_u64, |total, entry| total.saturating_add(entry.size.unwrap_or(0)))
                         });
                         if let Some(listing) = listing.as_ref() {
                             sink.emit_direct(JobEventDto {
@@ -1177,18 +1183,22 @@ fn run_extract_job(
                         match listing {
                             Some(listing) => {
                                 let mut entry_ids: Vec<EntryId> = Vec::with_capacity(entry_paths.len());
-                                let mut total_bytes = Some(0u64);
+                                // Best-effort total: an entry with an unknown size (see the
+                                // whole-archive branch above) contributes 0 rather than
+                                // making the whole selection's total unknown.
+                                let mut total_bytes = 0u64;
                                 let mut missing: Option<&str> = None;
                                 for requested in entry_paths {
                                     let requested_key = archive_entry_key(requested);
                                     if let Some(entry) = listing.entries.iter().find(|entry| archive_entry_key(&entry.path) == requested_key) {
                                         entry_ids.push(entry.id);
-                                        total_bytes = total_bytes.and_then(|total| total.checked_add(entry.size?));
+                                        total_bytes = total_bytes.saturating_add(entry.size.unwrap_or(0));
                                     } else {
                                         missing = Some(requested);
                                         break;
                                     }
                                 }
+                                let total_bytes = Some(total_bytes);
                                 // JobEvent::Started (the zmanager-core enum) has
                                 // no total_entries field, so emit the raw DTO
                                 // first to retain the file-count fallback. Then
