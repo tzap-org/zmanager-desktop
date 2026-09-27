@@ -136,8 +136,17 @@ EOF
 write_stub git <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-if [[ "${1:-}" == "rev-list" ]]; then
+subcommand="${1:-}"
+if [[ "$subcommand" == "-C" ]]; then
+  subcommand="${3:-}"
+fi
+if [[ "$subcommand" == "rev-list" ]]; then
   echo "1"
+  exit 0
+fi
+if [[ "$subcommand" == "diff" ]]; then
+  # scripts/ensure-sibling-repos.sh treats any output here as an unresolved
+  # merge conflict; the stub has nothing to actually merge, so report none.
   exit 0
 fi
 echo "git test stub"
