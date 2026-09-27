@@ -112,26 +112,32 @@ ensure_sibling_repo() {
 
   if [[ -d "$dir" ]]; then
     echo "$name sibling found at: $dir"
-    if [[ -d "$dir/.git" ]]; then
-      echo "Updating $name repository at: $dir"
-      if ! (
-        # Sibling builds track branches by default. Do not fetch every release
-        # tag: tags may be intentionally recreated upstream, and Git rejects
-        # overwriting an existing local tag by default.
-        git -C "$dir" fetch --prune --no-tags origin &&
-        if git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$ref"; then
-          if git -C "$dir" show-ref --verify --quiet "refs/heads/$ref"; then
-            git -C "$dir" checkout "$ref"
-          else
-            git -C "$dir" checkout -b "$ref" --track "origin/$ref"
-          fi &&
-          git -C "$dir" pull --ff-only --no-tags origin "$ref"
-        else
+    if ! git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      echo "The existing $name path is not a Git worktree: $dir" >&2
+      return 1
+    fi
+    echo "Updating $name repository at: $dir"
+    if ! (
+      # Sibling builds track branches by default. Do not fetch every release
+      # tag: tags may be intentionally recreated upstream, and Git rejects
+      # overwriting an existing local tag by default.
+      git -C "$dir" fetch --prune --no-tags origin &&
+      if git -C "$dir" show-ref --verify --quiet "refs/remotes/origin/$ref"; then
+        if git -C "$dir" show-ref --verify --quiet "refs/heads/$ref"; then
           git -C "$dir" checkout "$ref"
-        fi
-      ); then
-        echo "Warning: git update failed for $name at $dir"
+        else
+          git -C "$dir" checkout -b "$ref" --track "origin/$ref"
+        fi &&
+        # Rebase local commits onto the remote and temporarily stash tracked
+        # edits so local development changes survive when Git can reapply them.
+        git -C "$dir" pull --rebase --autostash --no-tags origin "$ref" &&
+        ensure_no_unmerged_conflicts "$dir" "$name"
+      else
+        git -C "$dir" checkout "$ref"
       fi
+    ); then
+      echo "Unable to update $name at $dir; refusing to build." >&2
+      return 1
     fi
   else
     echo "Cloning $name ($ref) into: $dir"
@@ -140,18 +146,39 @@ ensure_sibling_repo() {
   fi
 }
 
+ensure_no_unmerged_conflicts() {
+  local dir="$1"
+  local name="$2"
+  local conflicts
+  conflicts="$(git -C "$dir" diff --name-only --diff-filter=U)"
+  if [[ -n "$conflicts" ]]; then
+    echo "Git update left unresolved conflicts for $name at $dir:" >&2
+    printf '%s\n' "$conflicts" >&2
+    return 1
+  fi
+}
+
 # ── zmanager-desktop ───────────────────────────────────────────────────
 
 zmanager_desktop_dir="${ZMANAGER_DESKTOP_DIR:-$parent_dir/zmanager-desktop}"
 
-if [[ -d "$repo_root/.git" ]]; then
+if git -C "$repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "Updating zmanager-desktop repository at: $repo_root"
-  git -C "$repo_root" pull || echo "Warning: git pull failed for zmanager-desktop at $repo_root"
+  if ! git -C "$repo_root" pull --rebase --autostash ||
+    ! ensure_no_unmerged_conflicts "$repo_root" "zmanager-desktop"; then
+    echo "Unable to update zmanager-desktop at $repo_root; refusing to build." >&2
+    exit 1
+  fi
 fi
 
-if [[ "$zmanager_desktop_dir" != "$repo_root" && -d "$zmanager_desktop_dir/.git" ]]; then
+if [[ "$zmanager_desktop_dir" != "$repo_root" ]] &&
+  git -C "$zmanager_desktop_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "Updating sibling zmanager-desktop at: $zmanager_desktop_dir"
-  git -C "$zmanager_desktop_dir" pull || echo "Warning: git pull failed for zmanager-desktop at $zmanager_desktop_dir"
+  if ! git -C "$zmanager_desktop_dir" pull --rebase --autostash ||
+    ! ensure_no_unmerged_conflicts "$zmanager_desktop_dir" "sibling zmanager-desktop"; then
+    echo "Unable to update sibling zmanager-desktop at $zmanager_desktop_dir; refusing to build." >&2
+    exit 1
+  fi
 fi
 
 # ── tzap ───────────────────────────────────────────────────────────────

@@ -121,6 +121,28 @@ function Resolve-GitCommand {
 
 $git = Resolve-GitCommand
 
+function Test-GitWorktree {
+    param([string]$Directory)
+
+    & $git -C $Directory rev-parse --is-inside-work-tree *> $null
+    return $LASTEXITCODE -eq 0
+}
+
+function Assert-NoUnmergedConflicts {
+    param(
+        [string]$Directory,
+        [string]$Name
+    )
+
+    $conflicts = & $git -C $Directory diff --name-only --diff-filter=U
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to inspect Git conflicts for $Name at ${Directory}."
+    }
+    if ($conflicts) {
+        throw "Git update left unresolved conflicts for $Name at ${Directory}: $($conflicts -join ', ')"
+    }
+}
+
 function Ensure-SiblingRepo {
     param(
         [string]$Name,
@@ -131,45 +153,48 @@ function Ensure-SiblingRepo {
 
     if (Test-Path $Directory) {
         Write-Host "$Name sibling found at: $Directory"
-        if (Test-Path (Join-Path $Directory ".git")) {
-            Write-Host "Updating $Name repository at: $Directory"
+        if (-not (Test-GitWorktree -Directory $Directory)) {
+            throw "The existing $Name path is not a Git worktree: $Directory"
+        }
+
+        Write-Host "Updating $Name repository at: $Directory"
+        try {
+            # Sibling builds track branches by default. Do not fetch every
+            # release tag: tags may be intentionally recreated upstream,
+            # and Git rejects overwriting an existing local tag by default.
+            Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "fetch", "--prune", "--no-tags", "origin")
+
+            $remoteBranchRef = "refs/remotes/origin/$BranchRef"
+            $localBranchRef = "refs/heads/$BranchRef"
+            $isRemoteBranch = $false
             try {
-                # Sibling builds track branches by default. Do not fetch every
-                # release tag: tags may be intentionally recreated upstream,
-                # and Git rejects overwriting an existing local tag by default.
-                Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "fetch", "--prune", "--no-tags", "origin")
-
-                $remoteBranchRef = "refs/remotes/origin/$BranchRef"
-                $localBranchRef = "refs/heads/$BranchRef"
-                $isRemoteBranch = $false
-                try {
-                    Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "show-ref", "--verify", "--quiet", $remoteBranchRef)
-                    $isRemoteBranch = $true
-                } catch {
-                    # The requested ref may be a tag or commit rather than a remote branch.
-                }
-
-                if ($isRemoteBranch) {
-                    $isLocalBranch = $false
-                    try {
-                        Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "show-ref", "--verify", "--quiet", $localBranchRef)
-                        $isLocalBranch = $true
-                    } catch {
-                        # Create a local tracking branch below when one does not exist.
-                    }
-
-                    if ($isLocalBranch) {
-                        Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "checkout", $BranchRef)
-                    } else {
-                        Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "checkout", "-b", $BranchRef, "--track", "origin/$BranchRef")
-                    }
-                    Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "pull", "--ff-only", "--no-tags", "origin", $BranchRef)
-                } else {
-                    Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "checkout", $BranchRef)
-                }
+                Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "show-ref", "--verify", "--quiet", $remoteBranchRef)
+                $isRemoteBranch = $true
             } catch {
-                Write-Host "Warning: git update failed for $Name at ${Directory}: $_"
+                # The requested ref may be a tag or commit rather than a remote branch.
             }
+
+            if ($isRemoteBranch) {
+                $isLocalBranch = $false
+                try {
+                    Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "show-ref", "--verify", "--quiet", $localBranchRef)
+                    $isLocalBranch = $true
+                } catch {
+                    # Create a local tracking branch below when one does not exist.
+                }
+
+                if ($isLocalBranch) {
+                    Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "checkout", $BranchRef)
+                } else {
+                    Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "checkout", "-b", $BranchRef, "--track", "origin/$BranchRef")
+                }
+                Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "pull", "--rebase", "--autostash", "--no-tags", "origin", $BranchRef)
+                Assert-NoUnmergedConflicts -Directory $Directory -Name $Name
+            } else {
+                Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "checkout", $BranchRef)
+            }
+        } catch {
+            throw "Unable to update $Name at ${Directory}; refusing to build. $_"
         }
     } else {
         Write-Host "Cloning $Name ($BranchRef) into: $Directory"
@@ -184,21 +209,25 @@ function Ensure-SiblingRepo {
 
 $zmanagerDesktopDir = if ($env:ZMANAGER_DESKTOP_DIR) { $env:ZMANAGER_DESKTOP_DIR } else { Join-Path $parentDir "zmanager-desktop" }
 
-if (Test-Path (Join-Path $repoRoot ".git")) {
+if (Test-GitWorktree -Directory $repoRoot) {
     Write-Host "Updating zmanager-desktop repository at: $repoRoot"
-    try {
-        Invoke-Native -FilePath $git -Arguments @("-C", $repoRoot, "pull")
+        try {
+            Invoke-Native -FilePath $git -Arguments @("-C", $repoRoot, "pull", "--rebase", "--autostash")
+            Assert-NoUnmergedConflicts -Directory $repoRoot -Name "zmanager-desktop"
     } catch {
-        Write-Host "Warning: git pull failed for zmanager-desktop at ${repoRoot}: $_"
+        throw "Unable to update zmanager-desktop at ${repoRoot}; refusing to build. $_"
     }
 }
 
-if ($zmanagerDesktopDir -ne $repoRoot -and (Test-Path (Join-Path $zmanagerDesktopDir ".git"))) {
-    Write-Host "Updating sibling zmanager-desktop repository at: $zmanagerDesktopDir"
-    try {
-        Invoke-Native -FilePath $git -Arguments @("-C", $zmanagerDesktopDir, "pull")
-    } catch {
-        Write-Host "Warning: git pull failed for zmanager-desktop at ${zmanagerDesktopDir}: $_"
+if ($zmanagerDesktopDir -ne $repoRoot) {
+    if (Test-GitWorktree -Directory $zmanagerDesktopDir) {
+        Write-Host "Updating sibling zmanager-desktop repository at: $zmanagerDesktopDir"
+        try {
+            Invoke-Native -FilePath $git -Arguments @("-C", $zmanagerDesktopDir, "pull", "--rebase", "--autostash")
+            Assert-NoUnmergedConflicts -Directory $zmanagerDesktopDir -Name "sibling zmanager-desktop"
+        } catch {
+            throw "Unable to update sibling zmanager-desktop at ${zmanagerDesktopDir}; refusing to build. $_"
+        }
     }
 }
 
