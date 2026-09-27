@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use zmanager_core::archive_browser::{self, BrowserEntry, BrowserListOptions};
 
+use crate::archive_selection::ArchivePathSet;
 use crate::dto::{
     ArchiveChildrenPageDto, ArchiveChildrenRequest, ArchiveEntryDto, ArchiveEntryKindDto, ArchiveIndexSnapshotDto, ArchiveIndexStartResponseDto,
     ArchiveIndexStatusDto, ArchiveSearchRequest, StartArchiveIndexRequest,
@@ -378,12 +379,16 @@ impl ArchiveIndexRegistry {
             return Ok(None);
         };
         let index = record.index.lock().unwrap_or_else(|error| error.into_inner());
-        let mut selected_paths = BTreeSet::new();
-        let mut selected_entries = Vec::new();
+        // A cached index can only answer a folder request once it holds the
+        // folder's whole subtree; the selection itself is then resolved the
+        // same way as any other listing.
         for requested in entry_paths {
             let requested = normalize_archive_path(requested);
             let direct = index.entries.get(&requested);
-            if on_demand_archive && !direct.is_some_and(|entry| entry.kind == ArchiveEntryKindDto::File) {
+            if direct.is_some_and(|entry| entry.kind == ArchiveEntryKindDto::File) {
+                continue;
+            }
+            if on_demand_archive {
                 // TZAP sessions intentionally index only directories that have
                 // been visited. A cached folder result is therefore only a
                 // partial answer; let the drag command relist the archive so
@@ -391,38 +396,22 @@ impl ArchiveIndexRegistry {
                 // folder.
                 return Ok(None);
             }
-            if let Some(entry) = direct
-                && entry.kind == ArchiveEntryKindDto::File
-            {
-                if selected_paths.insert(entry.path.clone()) {
-                    selected_entries.push(entry.clone());
-                }
-                continue;
-            }
             if direct.is_some_and(|entry| entry.kind != ArchiveEntryKindDto::Directory) {
                 return Err(CommandErrorDto::unsupported_format(format!("entry cannot be dragged out as a virtual file: {requested}")));
             }
-
             if record.snapshot.status == ArchiveIndexStatusDto::Indexing {
                 return Ok(None);
             }
-            let prefix = format!("{requested}/");
-            let mut descendants =
-                index.entries.values().filter(|entry| entry.kind == ArchiveEntryKindDto::File && entry.path.starts_with(&prefix)).cloned().collect::<Vec<_>>();
-            descendants.sort_by(|left, right| left.path.cmp(&right.path));
-            if descendants.is_empty() {
-                return Err(CommandErrorDto::not_found(
-                    format!("archive entry not found: {requested}"),
-                    Some("Open the archive again or choose a visible entry.".to_string()),
-                ));
-            }
-            for entry in descendants {
-                if selected_paths.insert(entry.path.clone()) {
-                    selected_entries.push(entry);
-                }
-            }
         }
-        Ok(Some(selected_entries))
+        let selected = ArchivePathSet::new(entry_paths).select(index.entries.values(), |entry| entry.path.as_str()).map_err(|missing| {
+            CommandErrorDto::not_found(format!("archive entry not found: {missing}"), Some("Open the archive again or choose a visible entry.".to_string()))
+        })?;
+        let mut files = selected.into_iter().filter(|entry| entry.kind == ArchiveEntryKindDto::File).cloned().collect::<Vec<_>>();
+        if files.is_empty() {
+            return Err(CommandErrorDto::unsupported_format(format!("selection has no regular file entries to drag out: {}", entry_paths.join(", "))));
+        }
+        files.sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(Some(files))
     }
 
     pub fn drag_all_entries(&self, archive_path: &str, excluded_entry_paths: &[String]) -> Result<Option<Vec<ArchiveEntryDto>>, CommandErrorDto> {
@@ -451,12 +440,9 @@ impl ArchiveIndexRegistry {
         }
 
         let index = record.index.lock().unwrap_or_else(|error| error.into_inner());
-        let mut entries = index
-            .entries
-            .values()
-            .filter(|entry| entry.kind == ArchiveEntryKindDto::File && !archive_entry_is_excluded(&entry.path, excluded_entry_paths))
-            .cloned()
-            .collect::<Vec<_>>();
+        let excluded = ArchivePathSet::new(excluded_entry_paths);
+        let mut entries =
+            index.entries.values().filter(|entry| entry.kind == ArchiveEntryKindDto::File && !excluded.covers(&entry.path)).cloned().collect::<Vec<_>>();
         entries.sort_by(|left, right| left.path.cmp(&right.path));
         Ok(Some(entries))
     }
@@ -983,14 +969,6 @@ fn archive_name(path: &str) -> &str {
 
 fn normalize_archive_path(path: &str) -> String {
     path.replace('\\', "/").split('/').filter(|segment| !segment.is_empty() && *segment != ".").collect::<Vec<_>>().join("/")
-}
-
-fn archive_entry_is_excluded(path: &str, excluded_entry_paths: &[String]) -> bool {
-    let entry_path = normalize_archive_path(path);
-    excluded_entry_paths.iter().any(|excluded| {
-        let excluded_path = normalize_archive_path(excluded);
-        entry_path == excluded_path || entry_path.starts_with(&format!("{excluded_path}/"))
-    })
 }
 
 fn cursor_signature(session_id: &str, parent: &str, revision: &str) -> u64 {

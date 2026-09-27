@@ -12,6 +12,7 @@ use openssl::pkcs12::Pkcs12;
 use openssl::x509::X509;
 use tauri::{AppHandle, State, WebviewWindow, ipc::Channel};
 
+use crate::archive_selection::{ArchivePathSet, archive_entry_key};
 #[cfg(test)]
 use crate::dto::ArchiveListingResponse;
 #[cfg(test)]
@@ -1132,11 +1133,12 @@ fn run_extract_job(
                         // 0 rather than poisoning the whole sum to "unknown". A total
                         // that's missing a few entries' bytes still drives a real,
                         // mostly-accurate progress bar; None forces an indeterminate one.
+                        let excluded = ArchivePathSet::new(excluded_entry_paths);
                         let total_bytes = listing.as_ref().map(|listing| {
                             listing
                                 .entries
                                 .iter()
-                                .filter(|entry| !archive_entry_is_excluded(&entry.path, excluded_entry_paths))
+                                .filter(|entry| !excluded.covers(&entry.path))
                                 .fold(0_u64, |total, entry| total.saturating_add(entry.size.unwrap_or(0)))
                         });
                         if let Some(listing) = listing.as_ref() {
@@ -1153,9 +1155,7 @@ fn run_extract_job(
                                 total_bytes,
                                 total_bytes_processed: None,
                                 entries: Some(0),
-                                total_entries: Some(
-                                    listing.entries.iter().filter(|entry| !archive_entry_is_excluded(&entry.path, excluded_entry_paths)).count(),
-                                ),
+                                total_entries: Some(listing.entries.iter().filter(|entry| !excluded.covers(&entry.path)).count()),
                                 message: None,
                             });
                         }
@@ -1182,23 +1182,16 @@ fn run_extract_job(
                     } else {
                         match listing {
                             Some(listing) => {
-                                let mut entry_ids: Vec<EntryId> = Vec::with_capacity(entry_paths.len());
+                                // A selected folder selects its whole subtree: the engine
+                                // extracts exactly the IDs it is given, so a folder passed
+                                // alone would only be created empty.
+                                let selection = ArchivePathSet::new(entry_paths).select(&listing.entries, |entry| entry.path.as_str());
+                                let selected = selection.as_deref().unwrap_or_default();
+                                let entry_ids: Vec<EntryId> = selected.iter().map(|entry| entry.id).collect();
                                 // Best-effort total: an entry with an unknown size (see the
                                 // whole-archive branch above) contributes 0 rather than
                                 // making the whole selection's total unknown.
-                                let mut total_bytes = 0u64;
-                                let mut missing: Option<&str> = None;
-                                for requested in entry_paths {
-                                    let requested_key = archive_entry_key(requested);
-                                    if let Some(entry) = listing.entries.iter().find(|entry| archive_entry_key(&entry.path) == requested_key) {
-                                        entry_ids.push(entry.id);
-                                        total_bytes = total_bytes.saturating_add(entry.size.unwrap_or(0));
-                                    } else {
-                                        missing = Some(requested);
-                                        break;
-                                    }
-                                }
-                                let total_bytes = Some(total_bytes);
+                                let total_bytes = Some(selected.iter().fold(0_u64, |total, entry| total.saturating_add(entry.size.unwrap_or(0))));
                                 // JobEvent::Started (the zmanager-core enum) has
                                 // no total_entries field, so emit the raw DTO
                                 // first to retain the file-count fallback. Then
@@ -1217,11 +1210,11 @@ fn run_extract_job(
                                     total_bytes,
                                     total_bytes_processed: None,
                                     entries: Some(0),
-                                    total_entries: Some(entry_paths.len()),
+                                    total_entries: Some(entry_ids.len()),
                                     message: None,
                                 });
                                 sink.emit(JobEvent::Started { kind: started_kind, total_bytes });
-                                if let Some(missing) = missing {
+                                if let Err(missing) = selection {
                                     Err(CommandErrorDto::not_found(format!("archive entry not found: {missing}"), None))
                                 } else {
                                     let mut options = SelectedExtractOptions {
@@ -2152,63 +2145,31 @@ fn native_drag_items_from_listing(
     select_all: bool,
     excluded_entry_paths: &[String],
 ) -> Result<Vec<crate::platform::NativeFileDragItem>, CommandErrorDto> {
-    let mut selected_entry_keys = HashSet::new();
-    let mut selected_entries = Vec::new();
+    use zmanager_core::archive_browser::BrowserEntryKind;
 
-    if select_all {
-        for entry in entries {
-            if entry.kind == zmanager_core::archive_browser::BrowserEntryKind::File && !archive_entry_is_excluded(&entry.path, excluded_entry_paths) {
-                push_native_drag_listing_entry(entry, &mut selected_entry_keys, &mut selected_entries);
-            }
-        }
+    let is_file = |entry: &&zmanager_core::archive_browser::BrowserEntry| entry.kind == BrowserEntryKind::File;
+    let selected_entries = if select_all {
+        let excluded = ArchivePathSet::new(excluded_entry_paths);
+        entries.iter().filter(is_file).filter(|entry| !excluded.covers(&entry.path)).collect::<Vec<_>>()
     } else {
-        for entry_path in entry_paths {
-            let requested_key = archive_entry_key(entry_path);
-            let Some(selected) = entries.iter().find(|entry| archive_entry_key(&entry.path) == requested_key) else {
-                let before = selected_entries.len();
-                let folder_key = archive_folder_key(entry_path);
-                for descendant in entries {
-                    if descendant.kind != zmanager_core::archive_browser::BrowserEntryKind::File {
-                        continue;
-                    }
-                    if entry_is_under_folder_key(&archive_entry_key(&descendant.path), &folder_key) {
-                        push_native_drag_listing_entry(descendant, &mut selected_entry_keys, &mut selected_entries);
-                    }
-                }
-                if selected_entries.len() > before {
-                    continue;
-                }
-                return Err(CommandErrorDto::not_found(
-                    format!("archive entry not found: {entry_path}"),
-                    Some("Open the archive again or choose a visible entry.".to_string()),
-                ));
-            };
-
-            match selected.kind {
-                zmanager_core::archive_browser::BrowserEntryKind::File => {
-                    push_native_drag_listing_entry(selected, &mut selected_entry_keys, &mut selected_entries);
-                }
-                zmanager_core::archive_browser::BrowserEntryKind::Directory => {
-                    let before = selected_entries.len();
-                    let folder_key = archive_folder_key(&selected.path);
-                    for descendant in entries {
-                        if descendant.kind != zmanager_core::archive_browser::BrowserEntryKind::File {
-                            continue;
-                        }
-                        if entry_is_under_folder_key(&archive_entry_key(&descendant.path), &folder_key) {
-                            push_native_drag_listing_entry(descendant, &mut selected_entry_keys, &mut selected_entries);
-                        }
-                    }
-                    if selected_entries.len() == before {
-                        return Err(CommandErrorDto::unsupported_format(format!("directory has no regular file entries to drag out: {}", selected.path)));
-                    }
-                }
-                _ => {
-                    return Err(CommandErrorDto::unsupported_format(format!("entry cannot be dragged out as a virtual file: {}", selected.path)));
-                }
-            }
+        let requested = ArchivePathSet::new(entry_paths);
+        let selected = requested.select(entries, |entry| entry.path.as_str()).map_err(|missing| {
+            CommandErrorDto::not_found(format!("archive entry not found: {missing}"), Some("Open the archive again or choose a visible entry.".to_string()))
+        })?;
+        // Only regular files become virtual files; a folder contributes the
+        // files beneath it, but a directly selected link or special entry is
+        // refused rather than silently dropped.
+        if let Some(entry) =
+            selected.iter().find(|entry| !matches!(entry.kind, BrowserEntryKind::File | BrowserEntryKind::Directory) && requested.contains(&entry.path))
+        {
+            return Err(CommandErrorDto::unsupported_format(format!("entry cannot be dragged out as a virtual file: {}", entry.path)));
         }
-    }
+        let files = selected.into_iter().filter(is_file).collect::<Vec<_>>();
+        if files.is_empty() {
+            return Err(CommandErrorDto::unsupported_format(format!("selection has no regular file entries to drag out: {}", entry_paths.join(", "))));
+        }
+        files
+    };
 
     let mut candidates = Vec::with_capacity(selected_entries.len());
     for entry in selected_entries {
@@ -2220,40 +2181,6 @@ fn native_drag_items_from_listing(
     }
 
     crate::platform::prepare_native_file_drag(&candidates, strip_components).map_err(map_native_file_drag_error)
-}
-
-fn push_native_drag_listing_entry<'a>(
-    entry: &'a zmanager_core::archive_browser::BrowserEntry,
-    selected_entry_keys: &mut HashSet<String>,
-    selected_entries: &mut Vec<&'a zmanager_core::archive_browser::BrowserEntry>,
-) {
-    if selected_entry_keys.insert(archive_entry_key(&entry.path)) {
-        selected_entries.push(entry);
-    }
-}
-
-fn archive_entry_key(path: &str) -> String {
-    path.split(['/', '\\']).filter(|component| !component.is_empty()).collect::<Vec<_>>().join("/")
-}
-
-fn archive_entry_is_excluded(path: &str, excluded_entry_paths: &[String]) -> bool {
-    let entry_key = archive_entry_key(path);
-    excluded_entry_paths.iter().any(|excluded| {
-        let excluded_key = archive_entry_key(excluded);
-        entry_key == excluded_key || entry_key.starts_with(&format!("{excluded_key}/"))
-    })
-}
-
-fn archive_folder_key(path: &str) -> String {
-    let mut key = archive_entry_key(path);
-    if !key.ends_with('/') {
-        key.push('/');
-    }
-    key
-}
-
-fn entry_is_under_folder_key(entry_key: &str, folder_key: &str) -> bool {
-    entry_key.starts_with(folder_key) && entry_key.len() > folder_key.len()
 }
 
 fn stream_native_drag_entry(archive_path: &str, password: Option<&str>, entry_path: &str, output: &mut dyn Write) -> Result<u64, CommandErrorDto> {
@@ -4140,6 +4067,82 @@ mod tests {
         assert!(extract_poll.terminal_summary.is_some());
 
         assert_eq!(fs::read_to_string(extract_destination.join("sources").join("README.md")).expect("extracted README should be readable"), "# extractor");
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn command_boundary_extract_selected_tzap_folder_includes_its_whole_subtree() {
+        let workspace = create_temp_workspace("extract-selected-tzap-folder");
+        let sources = workspace.join("sources");
+        let destination_archive = workspace.join("fixture.tzap");
+        let extract_destination = workspace.join("extracted");
+        fs::create_dir_all(sources.join("docs").join("nested")).expect("source directories should exist");
+        fs::create_dir_all(&extract_destination).expect("extract directory should exist");
+
+        fs::write(sources.join("docs").join("a.txt"), b"alpha").expect("folder file should write");
+        fs::write(sources.join("docs").join("nested").join("b.txt"), b"beta").expect("nested file should write");
+        fs::write(sources.join("other.txt"), b"other").expect("sibling file should write");
+        let registry = crate::job_registry::JobRegistry::new();
+
+        let create_request = StartCreateRequest {
+            sources: vec![sources.to_string_lossy().to_string()],
+            destination_path: destination_archive.to_string_lossy().to_string(),
+            format: crate::dto::ArchiveFormatDto::Tzap,
+            clean_source: false,
+            exclude_names: None,
+            exclude_archive_paths: None,
+            include_archive_paths: None,
+            respect_gitignore: false,
+            follow_symlinks: false,
+            replace_existing: true,
+            destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
+            password: None,
+            compression_level: None,
+            volume_size: None,
+            volume_count: None,
+            tzap_recovery_percentage: None,
+            tzap_volume_loss_tolerance: None,
+            zip_compression: None,
+            seven_z_solid: None,
+            seven_z_threads: None,
+            seven_z_chunk_size: None,
+            seven_z_encrypt_file_names: None,
+            tzap_certificates: None,
+            tzap_bootstrap_sidecar: None,
+            preserve_metadata: false,
+        };
+        let create_job = start_create_internal(create_request, &registry).expect("fixture create should start");
+        let (create_poll, _) = wait_for_job_terminal(&registry, &create_job.job_id);
+        assert_eq!(create_poll.status, JobStatusDto::Completed);
+
+        let extract_request = StartExtractRequest {
+            archive_path: destination_archive.to_string_lossy().to_string(),
+            destination_path: extract_destination.to_string_lossy().to_string(),
+            password: None,
+            recipient_key_id: None,
+            overwrite: OverwritePolicyDto::Replace,
+            destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
+            entry_paths: Some(vec!["sources/docs".to_string()]),
+            select_all: false,
+            excluded_entry_paths: Vec::new(),
+            strip_components: 0,
+            tzap_restore_policy: TzapRestorePolicyDto::Portable,
+            tzap_allow_degraded: false,
+            tzap_allow_absolute_symlinks: false,
+            ignore_symlinks: false,
+        };
+        let extract_job = start_extract_internal(extract_request, &registry).expect("selected extract should start a job");
+        let (extract_poll, mut extract_events) = wait_for_job_terminal(&registry, &extract_job.job_id);
+        extract_events.extend_from_slice(&extract_poll.events);
+
+        assert_eq!(extract_poll.status, JobStatusDto::Completed);
+        let total_entries =
+            extract_events.iter().find_map(|event| matches!(event.event_type, JobEventKindDto::Started).then_some(event.total_entries).flatten());
+        assert!(total_entries.is_some_and(|total| total >= 2), "folder selection should count its descendants, got {total_entries:?}");
+        let docs = extract_destination.join("sources").join("docs");
+        assert_eq!(fs::read_to_string(docs.join("a.txt")).expect("folder file should extract"), "alpha");
+        assert_eq!(fs::read_to_string(docs.join("nested").join("b.txt")).expect("nested file should extract"), "beta");
+        assert!(!extract_destination.join("sources").join("other.txt").exists(), "unselected sibling should not extract");
         let _ = fs::remove_dir_all(&workspace);
     }
 

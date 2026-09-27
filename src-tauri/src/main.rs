@@ -3,6 +3,7 @@
 mod account;
 mod archive_file_types;
 mod archive_index;
+mod archive_selection;
 mod commands;
 mod constants;
 mod default_handlers;
