@@ -1696,7 +1696,7 @@ fn start_test_archive_internal(request: TestArchiveRequest, registry: &JobRegist
     let retry_entry_paths = entry_paths.clone();
     let selected_entry_keys = Arc::new(entry_paths.into_iter().collect::<HashSet<_>>());
 
-    let (accepted_job, _token) =
+    let (accepted_job, token) =
         registry.try_accept_job(JobKindDto::TestArchive, crate::job_dto::AcceptedJobOriginDto::MainWindow).map_err(subscription_error)?;
     let response = accepted_job.job.clone();
     registry
@@ -1752,7 +1752,7 @@ fn start_test_archive_internal(request: TestArchiveRequest, registry: &JobRegist
                     recipient_key: None,
                     recipient_key_bytes: None,
                     tzap_x509_trust: None,
-                    cancellation: None,
+                    cancellation: Some(token),
                 })
                 .map_err(crate::platform::archive_error::map_engine_error)?;
             Ok(JobTerminalSummaryDto {
