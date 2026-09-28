@@ -382,11 +382,16 @@ export async function openTaskWindowForJob(started: StartedTaskJob): Promise<str
   }).toString()}`;
 
   try {
-    // The accepted-job feed normally presents this window for us. Reuse it
-    // when it is already present; creating another webview with the same
-    // label fails on Linux WebKitGTK and also leaves the original window
-    // behind when the helper exits early.
-    if (!(await browser.tauri.listWindows()).includes(label)) {
+    // The accepted-job feed normally presents this window for us within a
+    // few event-loop turns of the job being accepted. Give it a real head
+    // start before creating a second window ourselves for the same label:
+    // racing our own creation against production's is what produces the
+    // window-handle corruption ("no such window", or the window vanishing
+    // moments after switchWindow selects it) seen in CI, not a genuinely
+    // slow accepted-job feed - the two near-simultaneous creation attempts
+    // for the same label appear to be able to leave only a half-torn-down
+    // window behind on Windows.
+    if (!(await waitForWindowLabel(label, 3_000))) {
       try {
         await browser.tauri.execute(
           async ({ core }, windowLabel: string, windowUrl: string) => core.invoke("plugin:webview|create_webview_window", {
@@ -407,24 +412,33 @@ export async function openTaskWindowForJob(started: StartedTaskJob): Promise<str
           url,
         );
       } catch (error) {
-        // The accepted-job feed can create the window after the list check
-        // but before this explicit creation. In that race, the duplicate
-        // label means the production-created window is the one to reuse.
+        // The accepted-job feed can still win between the poll above and
+        // this explicit creation. In that race, the duplicate label means
+        // the production-created window is the one to reuse.
         const message = error instanceof Error ? error.message : String(error);
         if (!message.includes("already exists") || !message.includes(label)) {
           throw error;
         }
       }
+      await browser.waitUntil(
+        async () => (await browser.tauri.listWindows()).includes(label),
+        { timeout: 10_000, timeoutMsg: `task window ${label} was not created` },
+      );
     }
-    await browser.waitUntil(
-      async () => (await browser.tauri.listWindows()).includes(label),
-      { timeout: 10_000, timeoutMsg: `task window ${label} was not created` },
-    );
     await switchToWindowAndWaitForContent(label);
     return label;
   } catch (error) {
     await closeTaskWindow(label);
     throw error;
+  }
+}
+
+async function waitForWindowLabel(label: string, timeoutMs: number): Promise<boolean> {
+  try {
+    await browser.waitUntil(async () => (await browser.tauri.listWindows()).includes(label), { timeout: timeoutMs });
+    return true;
+  } catch {
+    return false;
   }
 }
 
