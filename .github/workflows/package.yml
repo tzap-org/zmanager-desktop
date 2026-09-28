@@ -129,6 +129,27 @@ jobs:
         shell: pwsh
         run: .\scripts\ensure-sibling-repos.ps1
 
+      - name: Build frontend assets for Windows drag-out tests
+        if: matrix.flavor == 'windows' && matrix.arch == 'x64'
+        shell: pwsh
+        run: npx vite build
+
+      - name: Run Windows native drag-out tests
+        # Exercises archive drag-out against the real Windows shell: Explorer's
+        # folder drop target, and full DoDragDrop gestures driven by injected
+        # mouse input into a drop window and into a File Explorer window. This
+        # is the same coverage windows-drag-out.yml runs on claude/** branches;
+        # running it here too keeps main continuously covered now that feature
+        # branches for this area are deleted after merge. Requires an
+        # interactive desktop session, so it only runs on the x64 runner.
+        if: matrix.flavor == 'windows' && matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          .\scripts\setup-windows-static-env.ps1 `
+            -Architecture x64 `
+            -InstallClang `
+            -Run "cargo test --manifest-path src-tauri/Cargo.toml --bins platform:: -- --include-ignored --test-threads=1 --nocapture"
+
       - name: Run staging Windows standalone E2E
         # The ARM64 hosted runner does not provide the browser/default-browser
         # integration required by the account handoff test. The ARM package is
