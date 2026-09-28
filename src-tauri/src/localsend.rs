@@ -658,6 +658,7 @@ fn maybe_auto_extract(shared: &LocalSendState, job_registry: &JobRegistry, diagn
         job_registry,
         None,
         crate::job_dto::AcceptedJobOriginDto::LocalSendAutoExtract,
+        None,
     ) {
         let _ = diagnostics.record(
             "localSend",

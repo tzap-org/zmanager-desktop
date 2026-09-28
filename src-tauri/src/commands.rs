@@ -1092,6 +1092,43 @@ fn start_extract_internal_with_origin_and_spawner(
 /// handle and drive progress through the same `JobContext`-backed sink, so
 /// there is exactly one place that reports extraction progress, not one per
 /// caller.
+struct InteractiveOverwriteResolver {
+    app: AppHandle,
+}
+
+impl InteractiveOverwriteResolver {
+    fn new(app: AppHandle) -> Self {
+        Self { app }
+    }
+}
+
+impl zmanager_core::safety::OverwriteResolver for InteractiveOverwriteResolver {
+    fn decide(&mut self, conflict: &zmanager_core::safety::OverwriteConflict) -> zmanager_core::safety::OverwriteDecision {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        let message = format!(
+            "An item already exists at:\n{}\n\nArchive item:\n{}\n\nChoose how to continue.",
+            conflict.destination_path.display(),
+            conflict.archive_path,
+        );
+
+        self.app
+            .dialog()
+            .message(message)
+            .title("Extraction conflict")
+            .kind(MessageDialogKind::Warning)
+            .buttons(MessageDialogButtons::YesNoCancelCustom("Replace".into(), "Skip".into(), "Cancel".into()))
+            .show_with_result(move |result| {
+                let _ = sender.send(result);
+            });
+
+        match receiver.recv() {
+            Ok(MessageDialogResult::Yes) => zmanager_core::safety::OverwriteDecision::Replace,
+            Ok(MessageDialogResult::No) => zmanager_core::safety::OverwriteDecision::Skip,
+            _ => zmanager_core::safety::OverwriteDecision::Quit,
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_extract_job(
     archive_path: &str,
@@ -5439,6 +5476,7 @@ mod tests {
             &token,
             &mut sink,
             JobKindDto::ZipExtract,
+            None,
         )
         .expect_err("missing archive should fail to open");
         registry.emit_direct_event(&response.job_id, JobEventDto::failed_from_command_error(JobKindDto::ZipExtract, error));
