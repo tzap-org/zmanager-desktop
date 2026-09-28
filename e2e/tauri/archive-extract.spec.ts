@@ -66,15 +66,14 @@ type SymlinkHandling = "preserved" | "dropped" | "materialized";
 
 /**
  * Formats that both write and read the shared payload tree, and what each does
- * with the symlink. TZAP materializes the source symlink as a regular file on
- * Linux, while the native macOS writer preserves it as a symlink.
+ * with the symlink. TZAP preserves the source symlink on the Unix platforms
+ * covered by the native GUI matrix.
  *
  * These values record measured behaviour, not intent. Notably the committed
  * `basic.7z` and `basic.tzap` fixtures carry the link as a regular *file*,
  * because the CLI that generated them followed it. The application create
- * path drops the 7z link and has platform-specific TZAP symlink handling.
- * Deliberately covering `followSymlinks: true` belongs with the rest of the
- * create-option matrix.
+ * path drops the 7z link but preserves the TZAP link. Deliberately covering
+ * `followSymlinks: true` belongs with the rest of the create-option matrix.
  *
  * `appleArchive` is macOS-only and is added below at runtime rather than being
  * gated with a skip, so the list stays honest about what actually ran.
@@ -92,11 +91,7 @@ const ROUND_TRIP_FORMATS: ReadonlyArray<RoundTripFormat> = [
     symlinks: "preserved",
   },
   { format: "sevenZ", extension: "7z", symlinks: "dropped" },
-  {
-    format: "tzap",
-    extension: "tzap",
-    symlinks: process.platform === "darwin" ? "preserved" : "materialized",
-  },
+  { format: "tzap", extension: "tzap", symlinks: "preserved" },
   { format: "tarGz", extension: "tar.gz", symlinks: "preserved" },
   { format: "tarZst", extension: "tar.zst", symlinks: "preserved" },
 ];
