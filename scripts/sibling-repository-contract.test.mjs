@@ -28,7 +28,6 @@ const siblingDirectories = [
   ["ZMANAGER_ISO9660_FORENSIC", "iso9660-forensic"],
   ["ZMANAGER_NTFS_FORENSIC", "ntfs-forensic"],
   ["ZMANAGER_UDF_FORENSIC", "udf-forensic"],
-  ["ZMANAGER_DPP", "dpp"],
 ];
 
 function git(cwd, args) {
@@ -93,6 +92,16 @@ test("sibling bootstrap provisions the LocalSend path dependency", () => {
       `${name} bootstrap must expose the LocalSend ref override`);
     assert.match(content, /ZMANAGER_LOCALSEND_DIR/,
       `${name} bootstrap must expose the LocalSend directory override`);
+  }
+});
+
+test("published DPP does not require a sibling checkout", () => {
+  for (const [name, content] of [
+    ["shell", shellBootstrap],
+    ["PowerShell", powershellBootstrap],
+  ]) {
+    assert.doesNotMatch(content, /ZMANAGER_DPP|ensure[_-]sibling[_-]repo[^\n]*dpp|Ensure-SiblingRepo[^\n]*dpp/i,
+      `${name} bootstrap must not provision a DPP sibling repository`);
   }
 });
 

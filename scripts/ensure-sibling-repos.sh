@@ -12,7 +12,6 @@ set -euo pipefail
 #   - iso9660-forensic (https://github.com/frankmanzhu/iso9660-forensic)
 #   - ntfs-forensic (https://github.com/frankmanzhu/ntfs-forensic)
 #   - udf-forensic (https://github.com/frankmanzhu/udf-forensic)
-#   - dpp (https://github.com/frankmanzhu/dpp)
 #
 # Override defaults via environment variables:
 #   ZMANAGER_TZAP_REPO                 – tzap repository URL
@@ -31,8 +30,6 @@ set -euo pipefail
 #   ZMANAGER_NTFS_FORENSIC_REF         – branch or tag to check out (default: main)
 #   ZMANAGER_UDF_FORENSIC_REPO         – udf-forensic repository URL
 #   ZMANAGER_UDF_FORENSIC_REF          – branch or tag to check out (default: main)
-#   ZMANAGER_DPP_REPO                  – dpp repository URL
-#   ZMANAGER_DPP_REF                   – branch or tag to check out (default: main)
 #
 # Pass --skip-zmanager to skip cloning the zmanager sibling entirely.
 
@@ -66,10 +63,6 @@ ntfs_forensic_dir="${ZMANAGER_NTFS_FORENSIC_DIR:-$parent_dir/ntfs-forensic}"
 udf_forensic_repo="${ZMANAGER_UDF_FORENSIC_REPO:-https://github.com/frankmanzhu/udf-forensic}"
 udf_forensic_ref="${ZMANAGER_UDF_FORENSIC_REF:-main}"
 udf_forensic_dir="${ZMANAGER_UDF_FORENSIC_DIR:-$parent_dir/udf-forensic}"
-
-dpp_repo="${ZMANAGER_DPP_REPO:-https://github.com/frankmanzhu/dpp}"
-dpp_ref="${ZMANAGER_DPP_REF:-main}"
-dpp_dir="${ZMANAGER_DPP_DIR:-$parent_dir/dpp}"
 
 skip_zmanager=0
 
@@ -205,6 +198,3 @@ ensure_sibling_repo "ntfs-forensic" "$ntfs_forensic_dir" "$ntfs_forensic_repo" "
 
 # ── udf-forensic ───────────────────────────────────────────────────────
 ensure_sibling_repo "udf-forensic" "$udf_forensic_dir" "$udf_forensic_repo" "$udf_forensic_ref"
-
-# ── dpp ────────────────────────────────────────────────────────────────
-ensure_sibling_repo "dpp" "$dpp_dir" "$dpp_repo" "$dpp_ref"

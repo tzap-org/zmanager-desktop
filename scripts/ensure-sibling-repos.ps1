@@ -10,7 +10,7 @@ Ensures all required sibling repositories exist and are kept up to date.
 
 .DESCRIPTION
 Clones and updates sibling repositories (tzap, zmanager, forensic-vfs-engine,
-localsend-rs, iso9660-forensic, ntfs-forensic, udf-forensic, dpp) into the parent directory of this repo so
+localsend-rs, iso9660-forensic, ntfs-forensic, udf-forensic) into the parent directory of this repo so
 that Cargo path dependencies and bindings resolve.
 
 Override defaults via environment variables:
@@ -35,9 +35,6 @@ Override defaults via environment variables:
   ZMANAGER_UDF_FORENSIC_REPO         – udf-forensic repository URL
   ZMANAGER_UDF_FORENSIC_REF          – branch or tag to check out (default: main)
   ZMANAGER_UDF_FORENSIC_DIR          – absolute path for udf-forensic clone
-  ZMANAGER_DPP_REPO                  – dpp repository URL
-  ZMANAGER_DPP_REF                   – branch or tag to check out (default: main)
-  ZMANAGER_DPP_DIR                   – absolute path for dpp clone
 
 .Parameter ParentDir
 Absolute path to the parent directory where sibling repositories should
@@ -84,10 +81,6 @@ $ntfsForensicDir = if ($env:ZMANAGER_NTFS_FORENSIC_DIR) { $env:ZMANAGER_NTFS_FOR
 $udfForensicRepo = if ($env:ZMANAGER_UDF_FORENSIC_REPO) { $env:ZMANAGER_UDF_FORENSIC_REPO } else { "https://github.com/frankmanzhu/udf-forensic" }
 $udfForensicRef = if ($env:ZMANAGER_UDF_FORENSIC_REF) { $env:ZMANAGER_UDF_FORENSIC_REF } else { "main" }
 $udfForensicDir = if ($env:ZMANAGER_UDF_FORENSIC_DIR) { $env:ZMANAGER_UDF_FORENSIC_DIR } else { Join-Path $parentDir "udf-forensic" }
-
-$dppRepo = if ($env:ZMANAGER_DPP_REPO) { $env:ZMANAGER_DPP_REPO } else { "https://github.com/frankmanzhu/dpp" }
-$dppRef = if ($env:ZMANAGER_DPP_REF) { $env:ZMANAGER_DPP_REF } else { "main" }
-$dppDir = if ($env:ZMANAGER_DPP_DIR) { $env:ZMANAGER_DPP_DIR } else { Join-Path $parentDir "dpp" }
 
 function Invoke-Native {
     param(
@@ -255,6 +248,3 @@ Ensure-SiblingRepo -Name "ntfs-forensic" -Directory $ntfsForensicDir -RepoUrl $n
 
 # ── udf-forensic ───────────────────────────────────────────────────────
 Ensure-SiblingRepo -Name "udf-forensic" -Directory $udfForensicDir -RepoUrl $udfForensicRepo -BranchRef $udfForensicRef
-
-# ── dpp ────────────────────────────────────────────────────────────────
-Ensure-SiblingRepo -Name "dpp" -Directory $dppDir -RepoUrl $dppRepo -BranchRef $dppRef
