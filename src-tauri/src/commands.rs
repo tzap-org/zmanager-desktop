@@ -1097,10 +1097,18 @@ fn start_extract_internal_with_origin_and_spawner(
 /// caller.
 struct InteractiveOverwriteResolver {
     app: AppHandle,
+    job_id: String,
     mode: InteractiveOverwriteMode,
     cancellation: CancellationToken,
     locale: InteractiveOverwriteLocale,
+    archive_listing: Option<Arc<zmanager_core::engine::ArchiveListing>>,
+    task_window_awaited: bool,
 }
+
+/// How long the first prompt waits for the job's task window, which the
+/// frontend opens only after `start_extract` returns: an early conflict would
+/// otherwise show an ownerless dialog that the new task window then covers.
+const TASK_WINDOW_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum InteractiveOverwriteMode {
@@ -1133,9 +1141,45 @@ impl InteractiveOverwriteLocale {
     }
 }
 
+/// Size and modification time shown for each side of an overwrite conflict,
+/// mirroring the details 7-Zip's overwrite dialog lists for both files.
+#[derive(Debug, Clone, Default, Eq, PartialEq)]
+struct OverwriteItemDetails {
+    is_directory: bool,
+    size: Option<u64>,
+    modified: Option<String>,
+}
+
 impl InteractiveOverwriteResolver {
-    fn new(app: AppHandle, cancellation: CancellationToken, locale: Option<&str>) -> Self {
-        Self { app, mode: InteractiveOverwriteMode::Ask, cancellation, locale: InteractiveOverwriteLocale::from_request(locale) }
+    fn new(app: AppHandle, job_id: String, cancellation: CancellationToken, locale: Option<&str>) -> Self {
+        Self {
+            app,
+            job_id,
+            mode: InteractiveOverwriteMode::Ask,
+            cancellation,
+            locale: InteractiveOverwriteLocale::from_request(locale),
+            archive_listing: None,
+            task_window_awaited: false,
+        }
+    }
+
+    /// The job's visible task window, waiting for it only on the first prompt:
+    /// once the user sends the job to the background the window stays gone.
+    fn task_window(&mut self) -> Option<tauri::WebviewWindow> {
+        let label = format!("task-{}", self.job_id);
+        let visible = |app: &AppHandle| tauri::Manager::get_webview_window(app, &label).filter(|window| window.is_visible().unwrap_or(false));
+        if self.task_window_awaited {
+            return visible(&self.app);
+        }
+        self.task_window_awaited = true;
+        let deadline = Instant::now() + TASK_WINDOW_WAIT;
+        loop {
+            let window = visible(&self.app);
+            if window.is_some() || Instant::now() >= deadline || self.cancellation.is_cancelled() {
+                return window;
+            }
+            thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
 
     fn show_prompt(&self, title: &str, message: String, buttons: MessageDialogButtons) -> MessageDialogResult {
@@ -1146,7 +1190,55 @@ impl InteractiveOverwriteResolver {
         receive_dialog_result(&receiver, &self.cancellation)
     }
 
-    fn prompt_decision(&self, conflict: &zmanager_core::safety::OverwriteConflict) -> OverwritePromptDecision {
+    fn archive_item_details(&self, archive_path: &str) -> OverwriteItemDetails {
+        let key = archive_entry_key(archive_path);
+        self.archive_listing
+            .as_ref()
+            .and_then(|listing| listing.entries.iter().find(|entry| archive_entry_key(&entry.path) == key))
+            .map(|entry| OverwriteItemDetails {
+                is_directory: entry.kind == zmanager_core::archive_browser::BrowserEntryKind::Directory,
+                size: entry.size,
+                modified: entry.modified.as_deref().and_then(parse_listing_time).and_then(crate::platform::format_local_time),
+            })
+            .unwrap_or_default()
+    }
+
+    fn prompt_decision(&mut self, conflict: &zmanager_core::safety::OverwriteConflict) -> OverwritePromptDecision {
+        let existing = existing_item_details(&conflict.destination_path);
+        let incoming = self.archive_item_details(&conflict.archive_path);
+        let content = overwrite_prompt_content(self.locale, &display_path(&conflict.destination_path), &existing, &conflict.archive_path, &incoming);
+        let prompt = match self.locale {
+            InteractiveOverwriteLocale::English => crate::platform::OverwritePrompt {
+                title: "Confirm file replacement",
+                instruction: "The destination folder already contains this item.",
+                content: &content,
+                replace: "&Replace",
+                replace_all: "Replace &all",
+                skip: "&Skip",
+                skip_all: "Skip a&ll",
+                rename_all: "Re&name all",
+            },
+            InteractiveOverwriteLocale::SimplifiedChinese => crate::platform::OverwritePrompt {
+                title: "确认替换文件",
+                instruction: "目标文件夹已包含此项目。",
+                content: &content,
+                replace: "替换(&R)",
+                replace_all: "全部替换(&A)",
+                skip: "跳过(&S)",
+                skip_all: "全部跳过(&L)",
+                rename_all: "全部重命名(&N)",
+            },
+        };
+        let owner = self.task_window();
+        if let Some(choice) = crate::platform::show_overwrite_prompt(&prompt, owner.as_ref(), &self.cancellation) {
+            return single_prompt_decision(choice);
+        }
+        self.prompt_chained_decision(conflict)
+    }
+
+    /// Fallback for platforms without a single native dialog that can hold
+    /// every choice: three-button message boxes chained through "More options".
+    fn prompt_chained_decision(&self, conflict: &zmanager_core::safety::OverwriteConflict) -> OverwritePromptDecision {
         let (title, message, replace_this, replace_all, more_options) = match self.locale {
             InteractiveOverwriteLocale::English => (
                 "Confirm file replacement",
@@ -1218,6 +1310,88 @@ fn options_prompt_decision(result: MessageDialogResult, skip_this: &str, skip_al
         MessageDialogResult::Custom(choice) if choice == rename_all => Some(OverwritePromptDecision::RenameAll),
         _ => None,
     }
+}
+
+fn single_prompt_decision(choice: crate::platform::OverwritePromptChoice) -> OverwritePromptDecision {
+    match choice {
+        crate::platform::OverwritePromptChoice::Replace => OverwritePromptDecision::Replace,
+        crate::platform::OverwritePromptChoice::ReplaceAll => OverwritePromptDecision::ReplaceAll,
+        crate::platform::OverwritePromptChoice::Skip => OverwritePromptDecision::Skip,
+        crate::platform::OverwritePromptChoice::SkipAll => OverwritePromptDecision::SkipAll,
+        crate::platform::OverwritePromptChoice::RenameAll => OverwritePromptDecision::RenameAll,
+        crate::platform::OverwritePromptChoice::Cancel => OverwritePromptDecision::Quit,
+    }
+}
+
+fn existing_item_details(path: &Path) -> OverwriteItemDetails {
+    let metadata = std::fs::symlink_metadata(path).ok();
+    OverwriteItemDetails {
+        is_directory: metadata.as_ref().is_some_and(|metadata| metadata.is_dir()),
+        size: metadata.as_ref().filter(|metadata| metadata.is_file()).map(|metadata| metadata.len()),
+        modified: metadata.as_ref().and_then(|metadata| metadata.modified().ok()).and_then(crate::platform::format_local_time),
+    }
+}
+
+/// Drops the Windows verbatim prefix (`\\?\`, `\\?\UNC\`) the engine uses for
+/// long paths, which is noise in a path shown to the user.
+fn display_path(path: &Path) -> String {
+    let path = path.display().to_string();
+    if let Some(unc) = path.strip_prefix(r"\\?\UNC\") { format!(r"\\{unc}") } else { path.strip_prefix(r"\\?\").map(str::to_owned).unwrap_or(path) }
+}
+
+/// Parses a listing `modified` value: Unix seconds, optionally with a
+/// fractional part (`"1700000000"`, `"-2.25"`). The fraction is dropped because
+/// the prompt shows whole seconds.
+fn parse_listing_time(value: &str) -> Option<SystemTime> {
+    let seconds: i64 = value.split('.').next()?.parse().ok()?;
+    let magnitude = std::time::Duration::from_secs(seconds.unsigned_abs());
+    if seconds >= 0 { UNIX_EPOCH.checked_add(magnitude) } else { UNIX_EPOCH.checked_sub(magnitude) }
+}
+
+fn overwrite_prompt_content(
+    locale: InteractiveOverwriteLocale,
+    existing_path: &str,
+    existing: &OverwriteItemDetails,
+    archive_path: &str,
+    incoming: &OverwriteItemDetails,
+) -> String {
+    let existing = overwrite_item_block(locale, existing_path, existing);
+    let incoming = overwrite_item_block(locale, archive_path, incoming);
+    match locale {
+        InteractiveOverwriteLocale::English => {
+            format!("Would you like to replace the existing item\n{existing}\n\nwith this one from the archive?\n{incoming}")
+        }
+        InteractiveOverwriteLocale::SimplifiedChinese => format!("是否将现有项目\n{existing}\n\n替换为归档中的此项目？\n{incoming}"),
+    }
+}
+
+fn overwrite_item_block(locale: InteractiveOverwriteLocale, path: &str, details: &OverwriteItemDetails) -> String {
+    let (folder, bytes, modified) = match locale {
+        InteractiveOverwriteLocale::English => ("Folder", "bytes", "Modified:"),
+        InteractiveOverwriteLocale::SimplifiedChinese => ("文件夹", "字节", "修改时间："),
+    };
+    let mut block = path.to_owned();
+    if details.is_directory {
+        block.push_str(&format!("\n{folder}"));
+    } else if let Some(size) = details.size {
+        block.push_str(&format!("\n{} {bytes}", group_digits(size)));
+    }
+    if let Some(time) = details.modified.as_deref().filter(|time| !time.is_empty()) {
+        block.push_str(&format!("\n{modified} {time}"));
+    }
+    block
+}
+
+fn group_digits(value: u64) -> String {
+    let digits = value.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
 }
 
 fn receive_dialog_result(receiver: &std::sync::mpsc::Receiver<MessageDialogResult>, cancellation: &CancellationToken) -> MessageDialogResult {
@@ -1297,6 +1471,54 @@ mod interactive_overwrite_resolver_tests {
     }
 
     #[test]
+    fn single_dialog_choices_map_to_the_expected_actions() {
+        use crate::platform::OverwritePromptChoice;
+        assert_eq!(single_prompt_decision(OverwritePromptChoice::Replace), OverwritePromptDecision::Replace);
+        assert_eq!(single_prompt_decision(OverwritePromptChoice::ReplaceAll), OverwritePromptDecision::ReplaceAll);
+        assert_eq!(single_prompt_decision(OverwritePromptChoice::Skip), OverwritePromptDecision::Skip);
+        assert_eq!(single_prompt_decision(OverwritePromptChoice::SkipAll), OverwritePromptDecision::SkipAll);
+        assert_eq!(single_prompt_decision(OverwritePromptChoice::RenameAll), OverwritePromptDecision::RenameAll);
+        assert_eq!(single_prompt_decision(OverwritePromptChoice::Cancel), OverwritePromptDecision::Quit);
+    }
+
+    #[test]
+    fn prompt_content_lists_both_items_with_known_details() {
+        let existing = OverwriteItemDetails { is_directory: false, size: Some(1_234_567), modified: Some("2026-09-28 10:11:12".into()) };
+        let incoming = OverwriteItemDetails { is_directory: false, size: Some(42), modified: None };
+        assert_eq!(
+            overwrite_prompt_content(InteractiveOverwriteLocale::English, r"C:\out\a.txt", &existing, "dir/a.txt", &incoming),
+            "Would you like to replace the existing item\nC:\\out\\a.txt\n1,234,567 bytes\nModified: 2026-09-28 10:11:12\n\nwith this one from the archive?\ndir/a.txt\n42 bytes"
+        );
+        let folder = OverwriteItemDetails { is_directory: true, size: None, modified: None };
+        assert_eq!(overwrite_item_block(InteractiveOverwriteLocale::SimplifiedChinese, "dir", &folder), "dir\n文件夹");
+        assert_eq!(overwrite_item_block(InteractiveOverwriteLocale::English, "unknown", &OverwriteItemDetails::default()), "unknown");
+    }
+
+    #[test]
+    fn displayed_paths_drop_the_verbatim_prefix() {
+        assert_eq!(display_path(Path::new(r"\\?\C:\out\a.txt")), r"C:\out\a.txt");
+        assert_eq!(display_path(Path::new(r"\\?\UNC\server\share\a.txt")), r"\\server\share\a.txt");
+        assert_eq!(display_path(Path::new(r"C:\out\a.txt")), r"C:\out\a.txt");
+    }
+
+    #[test]
+    fn listing_times_parse_as_unix_seconds() {
+        assert_eq!(parse_listing_time("1700000000"), Some(UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000)));
+        assert_eq!(parse_listing_time("1700000000.25"), Some(UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000)));
+        assert_eq!(parse_listing_time("-2.75"), Some(UNIX_EPOCH - std::time::Duration::from_secs(2)));
+        assert_eq!(parse_listing_time("2026-09-28"), None);
+        assert_eq!(parse_listing_time(""), None);
+    }
+
+    #[test]
+    fn digit_grouping_inserts_thousands_separators() {
+        assert_eq!(group_digits(0), "0");
+        assert_eq!(group_digits(999), "999");
+        assert_eq!(group_digits(1000), "1,000");
+        assert_eq!(group_digits(12_345_678), "12,345,678");
+    }
+
+    #[test]
     fn overwrite_modes_apply_to_this_and_later_conflicts() {
         let mut mode = InteractiveOverwriteMode::Ask;
         assert_eq!(apply_prompt_decision(&mut mode, OverwritePromptDecision::Replace), zmanager_core::safety::OverwriteDecision::Replace);
@@ -1361,14 +1583,18 @@ fn run_extract_job(
             );
             match open_res {
                 Ok(mut handle) => {
-                    let mut overwrite_resolver = app.map(|app| InteractiveOverwriteResolver::new(app, token.clone(), locale.as_deref()));
+                    let mut overwrite_resolver =
+                        app.map(|app| InteractiveOverwriteResolver::new(app, sink.job_id().to_owned(), token.clone(), locale.as_deref()));
                     // Listing up front lets both branches know real sizes
                     // (and, for the selected branch, real EntryIds) before
                     // Started fires, so the job carries a real total_bytes
                     // and the UI can render an actual moving percentage
                     // instead of an indeterminate bar that only ever jumps
                     // to 100% at completion.
-                    let listing = handle.list().ok();
+                    let listing = handle.list().ok().map(Arc::new);
+                    if let Some(resolver) = overwrite_resolver.as_mut() {
+                        resolver.archive_listing = listing.clone();
+                    }
                     if entry_paths.is_empty() {
                         // Best-effort total, mirroring how 7-Zip's own CHandler::Extract
                         // sums importantTotalUnpacked: entries without a known size (a

@@ -1359,6 +1359,10 @@ pub struct JobEventCollector {
 }
 
 impl JobEventCollector {
+    pub fn job_id(&self) -> &str {
+        &self.job_id
+    }
+
     pub fn new(registry: &JobRegistry, job_id: String) -> Self {
         Self { registry: registry.clone(), job_id }
     }

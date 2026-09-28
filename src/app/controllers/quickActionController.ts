@@ -11,7 +11,7 @@ import { isSupportedArchivePath } from "../archiveFileTypes";
 import { resolveDestinationCollisionStrategy } from "../collisionPolicy";
 import { NOOP_DIAGNOSTIC_RECORDER, type DiagnosticRecorder } from "../diagnostics";
 import { createFormatSupportsPassword, type CreateArchiveFormat } from "../createFlow";
-import { buildStartExtractRequest } from "../extractFlow";
+import { buildStartExtractRequest, type ExtractOverwritePolicy } from "../extractFlow";
 import type { MessageKey, MessageParams } from "../i18n/translator";
 import {
   createDefaultsForFormat,
@@ -282,10 +282,12 @@ export function createQuickActionController(
           }
 
           const preferences = options.preferences();
-          const overwrite = preferences.defaultExtractOverwrite === "replace" ? "replace" : "rename";
-          const destinationCollisionStrategy = overwrite === "replace"
-            ? undefined
-            : destinationPlan.destinationCollisionStrategy;
+          const overwrite = quickExtractOverwrite(preferences.defaultExtractOverwrite);
+          // Only "rename" sidesteps an existing destination folder; "replace"
+          // and "ask" extract into it and resolve each conflicting file.
+          const destinationCollisionStrategy = overwrite === "rename"
+            ? destinationPlan.destinationCollisionStrategy
+            : undefined;
           const request = buildStartExtractRequest({
             archivePath,
             destinationPath: destinationPlan.destinationPath,
@@ -363,4 +365,14 @@ export function createQuickActionController(
     openQuickExtractReview,
     startQuickExtract,
   };
+}
+
+/**
+ * Quick actions honor the default overwrite policy, except "refuse": a
+ * one-click extraction that fails on the first existing file is never what the
+ * user wanted, so it falls back to renaming. "ask" shows the same conflict
+ * prompt as an in-app extraction.
+ */
+function quickExtractOverwrite(policy: ExtractOverwritePolicy): ExtractOverwritePolicy {
+  return policy === "replace" || policy === "ask" ? policy : "rename";
 }

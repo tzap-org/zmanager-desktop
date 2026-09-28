@@ -19,6 +19,9 @@ mod staged_file_drag;
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 mod windows_drag_path;
 
+#[cfg(target_os = "windows")]
+mod windows_overwrite_prompt;
+
 #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 compile_error!("ZManager Desktop requires a NativePlatform adapter for this operating system");
 
@@ -311,6 +314,63 @@ pub fn start_native_file_drag(
     context: NativeFileDragJobContext<'_>,
 ) -> Result<NativeFileDragStart, NativeFileDragError> {
     ActivePlatform::start_native_file_drag(window, items, stream_provider, context)
+}
+
+/// Localized text for the extraction overwrite prompt.
+pub(crate) struct OverwritePrompt<'a> {
+    pub title: &'a str,
+    pub instruction: &'a str,
+    pub content: &'a str,
+    pub replace: &'a str,
+    pub replace_all: &'a str,
+    pub skip: &'a str,
+    pub skip_all: &'a str,
+    pub rename_all: &'a str,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub(crate) enum OverwritePromptChoice {
+    Replace,
+    ReplaceAll,
+    Skip,
+    SkipAll,
+    RenameAll,
+    Cancel,
+}
+
+/// Shows every overwrite choice in one native dialog, blocking until the user
+/// answers or `cancellation` fires. Returns `None` when this platform has no
+/// such dialog (or it could not be shown), so the caller falls back to chained
+/// three-button prompts.
+pub(crate) fn show_overwrite_prompt(
+    prompt: &OverwritePrompt<'_>,
+    owner: Option<&tauri::WebviewWindow>,
+    cancellation: &zmanager_core::jobs::CancellationToken,
+) -> Option<OverwritePromptChoice> {
+    #[cfg(target_os = "windows")]
+    {
+        windows_overwrite_prompt::show(prompt, owner, cancellation)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (prompt, owner, cancellation);
+        None
+    }
+}
+
+/// `time` in the user's local time zone (`YYYY-MM-DD HH:MM:SS`), when the
+/// platform can convert it.
+pub(crate) fn format_local_time(time: std::time::SystemTime) -> Option<String> {
+    #[cfg(target_os = "windows")]
+    {
+        windows_overwrite_prompt::format_local_time(time)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = time;
+        None
+    }
 }
 
 /// Owned inputs for [`run_native_file_drag`], bundled so the dispatch can move
