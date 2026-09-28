@@ -831,6 +831,8 @@ fn start_macos_file_promise_drag(
 
 #[cfg(test)]
 mod tests {
+    use crate::platform::NativeFileDragItemKind;
+
     use super::*;
 
     fn candidate(path: &str) -> NativeFileDragCandidate {
