@@ -21,9 +21,12 @@ const password = process.env.TZAP_E2E_PASSWORD;
 const boundaryResults: Record<string, { status: "passed" | "failed"; detail?: string }> = {};
 
 // The OS opening a real browser and navigating it is slower on a loaded
-// hosted runner than the default 30s budget assumes; give it headroom before
-// falling back to the chained-dialog path.
-const BROWSER_NAVIGATION_TIMEOUT_SECONDS = 45;
+// hosted runner than a short budget assumes. CI evidence: this consistently
+// took ~59s and failed on the macos-15-intel runner (twice straight, while
+// macos-15 arm64 passed both times) even after raising this from the
+// original 30s to 45s — GitHub's Intel macOS runners are the older, more
+// contended pool, so give this real headroom rather than nudge it again.
+const BROWSER_NAVIGATION_TIMEOUT_SECONDS = 90;
 
 // jasmineOpts.defaultTimeoutInterval (wdio.conf.ts) is 60s, sized for
 // ordinary UI-only specs. These two tests drive a real browser against the
@@ -33,9 +36,9 @@ const BROWSER_NAVIGATION_TIMEOUT_SECONDS = 45;
 // its own job waits) they need an explicit per-test timeout sized to what
 // they actually await, not the UI-only default.
 //
-// Test 1 budget: BROWSER_NAVIGATION_TIMEOUT_SECONDS (45s) + browser launch
-// and login-page round trip (~45s) + waitForSignedIn (60s).
-const BROWSER_HANDOFF_TEST_TIMEOUT_MS = 150_000;
+// Test 1 budget: BROWSER_NAVIGATION_TIMEOUT_SECONDS (90s) + browser launch
+// and login-page round trip (~45s) + waitForSignedIn (60s) + buffer.
+const BROWSER_HANDOFF_TEST_TIMEOUT_MS = 240_000;
 // Test 2 budget: two sequential runJobInTaskWindow calls (120s each) plus
 // certificate enrollment and two online/offline verification round trips.
 const ENROLL_AND_VERIFY_TEST_TIMEOUT_MS = 300_000;
