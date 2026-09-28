@@ -11,7 +11,7 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::dto::NativeFileDragRequest;
 use crate::job_dto::JobKindDto;
-use crate::platform::{NativeFileDragError, NativeFileDragItem, NativeFileDragStreamProvider};
+use crate::platform::{NativeFileDragError, NativeFileDragItem, NativeFileDragItemKind, NativeFileDragStreamProvider};
 use zmanager_core::jobs::CancellationToken;
 
 const MAX_SESSIONS: usize = 16;
@@ -194,7 +194,7 @@ impl NativeDragSessionRegistry {
             .into_iter()
             .map(|(promise_path, members)| NativeFilePromiseDescriptor {
                 promised_name: promise_path.clone(),
-                is_directory: members.iter().any(|member| member.display_path != promise_path),
+                is_directory: members.iter().any(|member| member.kind == NativeFileDragItemKind::Directory || member.display_path != promise_path),
                 promise_path,
             })
             .collect::<Vec<_>>();
@@ -217,7 +217,7 @@ impl NativeDragSessionRegistry {
             (members.clone(), Arc::clone(&session.stream_provider), session.cancellation.clone())
         };
 
-        let is_directory = members.iter().any(|member| member.display_path != promise_path);
+        let is_directory = members.iter().any(|member| member.kind == NativeFileDragItemKind::Directory || member.display_path != promise_path);
         let result = if is_directory {
             write_directory_promise(destination, promise_path, &members, &provider, &cancellation)
         } else {
@@ -338,13 +338,15 @@ fn write_directory_promise(
                 .and_then(|path| path.strip_prefix('/'))
                 .ok_or_else(|| NativeFileDragError::invalid_request("Invalid promised directory member"))?;
             let relative_path = Path::new(relative);
-            if relative_path.as_os_str().is_empty()
-                || relative_path.is_absolute()
-                || relative_path.components().any(|part| matches!(part, Component::ParentDir))
-            {
+            if relative_path.is_absolute() || relative_path.components().any(|part| matches!(part, Component::ParentDir)) {
                 return Err(NativeFileDragError::invalid_request("Invalid promised directory member"));
             }
-            total = total.saturating_add(write_file_promise(&destination.join(relative_path), &member.entry_path, provider, cancellation)?);
+            let member_destination = destination.join(relative_path);
+            if member.kind == NativeFileDragItemKind::Directory {
+                fs::create_dir_all(&member_destination).map_err(io_drag_error)?;
+            } else {
+                total = total.saturating_add(write_file_promise(&member_destination, &member.entry_path, provider, cancellation)?);
+            }
         }
         Ok(total)
     })();
@@ -422,7 +424,13 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn item(path: &str) -> NativeFileDragItem {
-        NativeFileDragItem { entry_path: path.to_string(), display_path: path.to_string(), size: Some(7), modified_unix_seconds: None }
+        NativeFileDragItem {
+            entry_path: path.to_string(),
+            display_path: path.to_string(),
+            kind: NativeFileDragItemKind::File,
+            size: Some(7),
+            modified_unix_seconds: None,
+        }
     }
 
     #[test]
@@ -453,6 +461,7 @@ mod tests {
         let descriptors = NativeDragSessionRegistry::descriptors(&[NativeFileDragItem {
             entry_path: "docs/readme.txt".to_string(),
             display_path: "readme.txt".to_string(),
+            kind: NativeFileDragItemKind::File,
             size: Some(7),
             modified_unix_seconds: None,
         }])
@@ -462,6 +471,20 @@ mod tests {
             descriptors,
             vec![NativeFilePromiseDescriptor { promise_path: "readme.txt".to_string(), promised_name: "readme.txt".to_string(), is_directory: false }]
         );
+    }
+
+    #[test]
+    fn treats_an_explicit_directory_as_a_directory_promise() {
+        let descriptors = NativeDragSessionRegistry::descriptors(&[NativeFileDragItem {
+            entry_path: "docs/empty".to_string(),
+            display_path: "docs/empty".to_string(),
+            kind: NativeFileDragItemKind::Directory,
+            size: None,
+            modified_unix_seconds: None,
+        }])
+        .unwrap();
+
+        assert!(descriptors[0].is_directory);
     }
 
     #[test]

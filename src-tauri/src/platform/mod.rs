@@ -71,9 +71,16 @@ pub struct DefaultHandlerEntry {
     pub error_code: Option<i32>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeFileDragItemKind {
+    File,
+    Directory,
+}
+
 #[derive(Clone, Debug)]
 pub struct NativeFileDragCandidate {
     pub entry_path: String,
+    pub kind: NativeFileDragItemKind,
     pub size: Option<u64>,
     pub modified_unix_seconds: Option<u64>,
 }
@@ -82,6 +89,7 @@ pub struct NativeFileDragCandidate {
 pub struct NativeFileDragItem {
     pub entry_path: String,
     pub display_path: String,
+    pub kind: NativeFileDragItemKind,
     #[allow(dead_code)]
     pub size: Option<u64>,
     #[allow(dead_code)]

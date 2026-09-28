@@ -7,7 +7,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use super::{NativeFileDragCandidate, NativeFileDragError, NativeFileDragItem, NativeFileDragStreamProvider};
+use super::{NativeFileDragCandidate, NativeFileDragError, NativeFileDragItem, NativeFileDragItemKind, NativeFileDragStreamProvider};
 
 pub(super) struct PosixDragPathPolicy {
     pub platform_label: &'static str,
@@ -26,6 +26,9 @@ pub(super) fn prepare_posix_drag_items(
     for candidate in candidates {
         let components = candidate.entry_path.split(['/', '\\']).filter(|component| !component.is_empty()).skip(strip_components).collect::<Vec<_>>();
         if components.is_empty() {
+            if candidate.kind == NativeFileDragItemKind::Directory {
+                continue;
+            }
             return Err(NativeFileDragError::invalid_request(format!("entry path is empty after stripping components: {}", candidate.entry_path)));
         }
 
@@ -42,6 +45,7 @@ pub(super) fn prepare_posix_drag_items(
         items.push(NativeFileDragItem {
             entry_path: candidate.entry_path.clone(),
             display_path,
+            kind: candidate.kind.clone(),
             size: candidate.size,
             modified_unix_seconds: candidate.modified_unix_seconds,
         });
@@ -129,13 +133,25 @@ impl StagedFileDrag {
                 })?;
             }
 
-            let mut output = fs::File::create(&output_path).map_err(|error| {
-                NativeFileDragError::new(
-                    format!("Unable to stage drag-out file: {error}"),
-                    Some("Try extracting normally while the temporary folder is checked."),
-                )
-            })?;
-            stream_provider(&item.entry_path, &mut output)?;
+            match item.kind {
+                NativeFileDragItemKind::Directory => {
+                    fs::create_dir_all(&output_path).map_err(|error| {
+                        NativeFileDragError::new(
+                            format!("Unable to stage drag-out folder: {error}"),
+                            Some("Try extracting normally while the temporary folder is checked."),
+                        )
+                    })?;
+                }
+                NativeFileDragItemKind::File => {
+                    let mut output = fs::File::create(&output_path).map_err(|error| {
+                        NativeFileDragError::new(
+                            format!("Unable to stage drag-out file: {error}"),
+                            Some("Try extracting normally while the temporary folder is checked."),
+                        )
+                    })?;
+                    stream_provider(&item.entry_path, &mut output)?;
+                }
+            }
         }
         Ok(())
     }
@@ -246,10 +262,17 @@ mod tests {
                 NativeFileDragItem {
                     entry_path: "docs/readme.txt".to_string(),
                     display_path: "docs/readme.txt".to_string(),
+                    kind: NativeFileDragItemKind::File,
                     size: Some(12),
                     modified_unix_seconds: None,
                 },
-                NativeFileDragItem { entry_path: "root.txt".to_string(), display_path: "root.txt".to_string(), size: Some(12), modified_unix_seconds: None },
+                NativeFileDragItem {
+                    entry_path: "root.txt".to_string(),
+                    display_path: "root.txt".to_string(),
+                    kind: NativeFileDragItemKind::File,
+                    size: Some(12),
+                    modified_unix_seconds: None,
+                },
             ],
             provider,
         )
@@ -275,6 +298,7 @@ mod tests {
             &[NativeFileDragItem {
                 entry_path: "failure.txt".to_string(),
                 display_path: "failure.txt".to_string(),
+                kind: NativeFileDragItemKind::File,
                 size: Some(1),
                 modified_unix_seconds: None,
             }],
@@ -283,6 +307,42 @@ mod tests {
 
         assert!(result.is_err());
         assert!(!root.exists(), "failed staging leaked its temporary drag root: {root:?}");
+    }
+
+    #[test]
+    fn staged_drag_preserves_empty_directories_without_streaming_them() {
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let provider_calls = Arc::clone(&calls);
+        let provider: NativeFileDragStreamProvider = Arc::new(move |_, writer| {
+            provider_calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            writer.write_all(b"payload").map_err(|error| NativeFileDragError::new(error.to_string(), None::<String>))?;
+            Ok(7)
+        });
+        let staged = StagedFileDrag::create(
+            "test",
+            &[
+                NativeFileDragItem {
+                    entry_path: "docs".to_string(),
+                    display_path: "docs".to_string(),
+                    kind: NativeFileDragItemKind::Directory,
+                    size: None,
+                    modified_unix_seconds: None,
+                },
+                NativeFileDragItem {
+                    entry_path: "docs/empty".to_string(),
+                    display_path: "docs/empty".to_string(),
+                    kind: NativeFileDragItemKind::Directory,
+                    size: None,
+                    modified_unix_seconds: None,
+                },
+            ],
+            provider,
+        )
+        .expect("stage directory entries");
+        let root = staged.root().expect("test staged root").to_path_buf();
+
+        assert!(root.join("docs/empty").is_dir());
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 
     #[test]
@@ -298,7 +358,13 @@ mod tests {
 
         let staged1 = StagedFileDrag::create(
             "test",
-            &[NativeFileDragItem { entry_path: "root.txt".to_string(), display_path: "root.txt".to_string(), size: Some(12), modified_unix_seconds: None }],
+            &[NativeFileDragItem {
+                entry_path: "root.txt".to_string(),
+                display_path: "root.txt".to_string(),
+                kind: NativeFileDragItemKind::File,
+                size: Some(12),
+                modified_unix_seconds: None,
+            }],
             Arc::clone(&provider),
         )
         .expect("stage drag files");
@@ -309,7 +375,13 @@ mod tests {
 
         let staged2 = StagedFileDrag::create(
             "test",
-            &[NativeFileDragItem { entry_path: "root.txt".to_string(), display_path: "root.txt".to_string(), size: Some(12), modified_unix_seconds: None }],
+            &[NativeFileDragItem {
+                entry_path: "root.txt".to_string(),
+                display_path: "root.txt".to_string(),
+                kind: NativeFileDragItemKind::File,
+                size: Some(12),
+                modified_unix_seconds: None,
+            }],
             Arc::clone(&provider),
         )
         .expect("stage drag files");

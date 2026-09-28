@@ -11,6 +11,7 @@ use openssl::hash::MessageDigest;
 use openssl::pkcs12::Pkcs12;
 use openssl::x509::X509;
 use tauri::{AppHandle, State, WebviewWindow, ipc::Channel};
+use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
 
 use crate::archive_selection::{ArchivePathSet, archive_entry_key};
 #[cfg(test)]
@@ -731,6 +732,7 @@ pub fn start_extract(
         &registry,
         recipient_private_key,
         origin.unwrap_or(crate::job_dto::AcceptedJobOriginDto::MainWindow),
+        Some(app),
     )
 }
 
@@ -958,8 +960,9 @@ pub(crate) fn start_extract_internal_with_recipient_key_and_origin(
     registry: &JobRegistry,
     recipient_private_key: Option<zmanager_core::secrets::SecretBytes>,
     origin: crate::job_dto::AcceptedJobOriginDto,
+    app: Option<AppHandle>,
 ) -> Result<StartJobResponseDto, CommandErrorDto> {
-    start_extract_internal_with_origin_and_spawner(request, registry, recipient_private_key, origin, |worker| {
+    start_extract_internal_with_origin_and_spawner(request, registry, recipient_private_key, origin, app, |worker| {
         thread::spawn(worker);
     })
 }
@@ -970,7 +973,7 @@ fn start_extract_internal_with_spawner(
     registry: &JobRegistry,
     spawn_worker: impl FnOnce(Box<dyn FnOnce() + Send + 'static>),
 ) -> Result<StartJobResponseDto, CommandErrorDto> {
-    start_extract_internal_with_origin_and_spawner(request, registry, None, crate::job_dto::AcceptedJobOriginDto::MainWindow, spawn_worker)
+    start_extract_internal_with_origin_and_spawner(request, registry, None, crate::job_dto::AcceptedJobOriginDto::MainWindow, None, spawn_worker)
 }
 
 fn start_extract_internal_with_origin_and_spawner(
@@ -978,6 +981,7 @@ fn start_extract_internal_with_origin_and_spawner(
     registry: &JobRegistry,
     recipient_private_key: Option<zmanager_core::secrets::SecretBytes>,
     origin: crate::job_dto::AcceptedJobOriginDto,
+    app: Option<AppHandle>,
     spawn_worker: impl FnOnce(Box<dyn FnOnce() + Send + 'static>),
 ) -> Result<StartJobResponseDto, CommandErrorDto> {
     let archive_path = ensure_non_empty_path(request.archive_path, "archivePath")?;
@@ -1043,6 +1047,7 @@ fn start_extract_internal_with_origin_and_spawner(
         .map_err(subscription_error)?;
     let registry_for_thread = registry.clone();
     let job_id = response.job_id.clone();
+    let app_for_thread = app;
     let policy = extraction_policy(request.overwrite, request.strip_components, request.ignore_symlinks, &excluded_entry_paths);
     let tzap_restore_options = TzapRestoreOptions {
         policy: map_tzap_restore_policy(request.tzap_restore_policy),
@@ -1065,6 +1070,7 @@ fn start_extract_internal_with_origin_and_spawner(
             &token,
             &mut sink,
             kind,
+            app_for_thread,
         );
 
         match result {
@@ -1099,6 +1105,7 @@ fn run_extract_job(
     token: &CancellationToken,
     sink: &mut JobEventCollector,
     kind: JobKindDto,
+    app: Option<AppHandle>,
 ) -> Result<JobTerminalSummaryDto, CommandErrorDto> {
     let started_kind = match kind {
         JobKindDto::ZipExtract => zmanager_core::jobs::JobKind::ZipExtract,
@@ -1119,6 +1126,7 @@ fn run_extract_job(
             );
             match open_res {
                 Ok(mut handle) => {
+                    let mut overwrite_resolver = app.map(InteractiveOverwriteResolver::new);
                     // Listing up front lets both branches know real sizes
                     // (and, for the selected branch, real EntryIds) before
                     // Started fires, so the job carries a real total_bytes
@@ -1168,6 +1176,7 @@ fn run_extract_job(
                             tzap_restore_options: Some(tzap_restore_options),
                             cancellation: Some(token.clone()),
                             event_sink: Some(sink),
+                            overwrite_resolver: overwrite_resolver.as_mut().map(|resolver| resolver as &mut dyn zmanager_core::safety::OverwriteResolver),
                             ..Default::default()
                         };
                         handle
@@ -1223,7 +1232,9 @@ fn run_extract_job(
                                         tzap_restore_options: Some(tzap_restore_options),
                                         cancellation: Some(token.clone()),
                                         event_sink: Some(sink),
-                                        overwrite_resolver: None,
+                                        overwrite_resolver: overwrite_resolver
+                                            .as_mut()
+                                            .map(|resolver| resolver as &mut dyn zmanager_core::safety::OverwriteResolver),
                                     };
                                     handle
                                         .extract_selected_many(&entry_ids, &mut options)
@@ -1460,7 +1471,12 @@ pub async fn start_native_file_drag(
         });
     }
     let total_entries = drag_items.len();
-    let total_bytes = drag_items.iter().map(|item| item.size).try_fold(0_u64, |total, size| size.map(|value| total.saturating_add(value)));
+    let streamable_entry_count = drag_items.iter().filter(|item| item.kind == crate::platform::NativeFileDragItemKind::File).count();
+    let total_bytes = drag_items
+        .iter()
+        .filter(|item| item.kind == crate::platform::NativeFileDragItemKind::File)
+        .map(|item| item.size)
+        .try_fold(0_u64, |total, size| size.map(|value| total.saturating_add(value)));
     let _ = diagnostics.record(
         "nativeDrag",
         "prepared",
@@ -1608,12 +1624,12 @@ pub async fn start_native_file_drag(
         crate::platform::NativeFileDragStart::Pending { session_id } => (NativeFileDragOutcomeDto::Pending, Some(session_id)),
         crate::platform::NativeFileDragStart::Settled { outcome } => (map_native_file_drag_outcome(outcome), None),
     };
-    if matches!(outcome, NativeFileDragOutcomeDto::Dropped) && streamed_entry_count < drag_items.len() {
+    if matches!(outcome, NativeFileDragOutcomeDto::Dropped) && streamed_entry_count < streamable_entry_count {
         if streamed_entry_count == 0 {
             outcome = NativeFileDragOutcomeDto::NoDrop;
         } else {
             let error =
-                CommandErrorDto::operation_failed(format!("The drop target materialized {streamed_entry_count} of {} dragged files.", drag_items.len()));
+                CommandErrorDto::operation_failed(format!("The drop target materialized {streamed_entry_count} of {streamable_entry_count} dragged files."));
             return Err(fail_native_drag_job(&registry, &job_id, native_drag_job_kind(&archive_path), error));
         }
     }
@@ -1633,7 +1649,7 @@ pub async fn start_native_file_drag(
                 &job_id,
                 native_drag_job_kind(&archive_path),
                 JobTerminalSummaryDto {
-                    written_entries: streamed_entry_count,
+                    written_entries: total_entries,
                     skipped_entries: None,
                     written_bytes: streamed_bytes.load(AtomicOrdering::Relaxed),
                     warnings: Vec::new(),
@@ -2131,6 +2147,10 @@ fn native_drag_items_from_cached_entries(
         .iter()
         .map(|entry| crate::platform::NativeFileDragCandidate {
             entry_path: entry.path.clone(),
+            kind: match entry.kind {
+                ArchiveEntryKindDto::Directory => crate::platform::NativeFileDragItemKind::Directory,
+                _ => crate::platform::NativeFileDragItemKind::File,
+            },
             size: entry.size,
             modified_unix_seconds: entry.modified.as_deref().and_then(|modified| modified.parse::<u64>().ok()),
         })
@@ -2147,34 +2167,39 @@ fn native_drag_items_from_listing(
 ) -> Result<Vec<crate::platform::NativeFileDragItem>, CommandErrorDto> {
     use zmanager_core::archive_browser::BrowserEntryKind;
 
-    let is_file = |entry: &&zmanager_core::archive_browser::BrowserEntry| entry.kind == BrowserEntryKind::File;
+    let is_dragged_entry = |entry: &&zmanager_core::archive_browser::BrowserEntry| matches!(entry.kind, BrowserEntryKind::File | BrowserEntryKind::Directory);
     let selected_entries = if select_all {
         let excluded = ArchivePathSet::new(excluded_entry_paths);
-        entries.iter().filter(is_file).filter(|entry| !excluded.covers(&entry.path)).collect::<Vec<_>>()
+        entries.iter().filter(is_dragged_entry).filter(|entry| !excluded.covers(&entry.path)).collect::<Vec<_>>()
     } else {
         let requested = ArchivePathSet::new(entry_paths);
         let selected = requested.select(entries, |entry| entry.path.as_str()).map_err(|missing| {
             CommandErrorDto::not_found(format!("archive entry not found: {missing}"), Some("Open the archive again or choose a visible entry.".to_string()))
         })?;
-        // Only regular files become virtual files; a folder contributes the
-        // files beneath it, but a directly selected link or special entry is
+        // Regular files are streamed as payloads and directories are carried
+        // structurally so drag-out matches selected extraction, including
+        // empty directories. A directly selected link or special entry is
         // refused rather than silently dropped.
         if let Some(entry) =
             selected.iter().find(|entry| !matches!(entry.kind, BrowserEntryKind::File | BrowserEntryKind::Directory) && requested.contains(&entry.path))
         {
             return Err(CommandErrorDto::unsupported_format(format!("entry cannot be dragged out as a virtual file: {}", entry.path)));
         }
-        let files = selected.into_iter().filter(is_file).collect::<Vec<_>>();
-        if files.is_empty() {
-            return Err(CommandErrorDto::unsupported_format(format!("selection has no regular file entries to drag out: {}", entry_paths.join(", "))));
+        let files_and_directories = selected.into_iter().filter(is_dragged_entry).collect::<Vec<_>>();
+        if files_and_directories.is_empty() {
+            return Err(CommandErrorDto::unsupported_format(format!("selection has no draggable entries: {}", entry_paths.join(", "))));
         }
-        files
+        files_and_directories
     };
 
     let mut candidates = Vec::with_capacity(selected_entries.len());
     for entry in selected_entries {
         candidates.push(crate::platform::NativeFileDragCandidate {
             entry_path: entry.path.clone(),
+            kind: match entry.kind {
+                BrowserEntryKind::Directory => crate::platform::NativeFileDragItemKind::Directory,
+                _ => crate::platform::NativeFileDragItemKind::File,
+            },
             size: entry.size,
             modified_unix_seconds: entry.modified.as_deref().and_then(|modified| modified.parse::<u64>().ok()),
         });
@@ -2715,6 +2740,26 @@ mod tests {
         assert_eq!(
             items.iter().map(|item| item.display_path.as_str()).collect::<Vec<_>>(),
             vec!["a.txt".to_string(), format!("nested{}b.txt", std::path::MAIN_SEPARATOR)]
+        );
+    }
+
+    #[test]
+    fn native_drag_items_keep_selected_directories_for_structural_drag_out() {
+        let entries = vec![
+            browser_entry("docs", zmanager_core::archive_browser::BrowserEntryKind::Directory),
+            browser_entry("docs/empty", zmanager_core::archive_browser::BrowserEntryKind::Directory),
+            browser_entry("docs/a.txt", zmanager_core::archive_browser::BrowserEntryKind::File),
+        ];
+
+        let items = native_drag_items_from_listing(&entries, &["docs".to_string()], 0, false, &[]).unwrap();
+
+        assert_eq!(
+            items.iter().map(|item| (item.display_path.as_str(), item.kind)).collect::<Vec<_>>(),
+            vec![
+                ("docs", crate::platform::NativeFileDragItemKind::Directory),
+                ("docs/empty", crate::platform::NativeFileDragItemKind::Directory),
+                ("docs/a.txt", crate::platform::NativeFileDragItemKind::File),
+            ],
         );
     }
 

@@ -834,7 +834,7 @@ mod tests {
     use super::*;
 
     fn candidate(path: &str) -> NativeFileDragCandidate {
-        NativeFileDragCandidate { entry_path: path.to_string(), size: Some(1), modified_unix_seconds: None }
+        NativeFileDragCandidate { entry_path: path.to_string(), kind: NativeFileDragItemKind::File, size: Some(1), modified_unix_seconds: None }
     }
 
     #[test]

@@ -406,12 +406,13 @@ impl ArchiveIndexRegistry {
         let selected = ArchivePathSet::new(entry_paths).select(index.entries.values(), |entry| entry.path.as_str()).map_err(|missing| {
             CommandErrorDto::not_found(format!("archive entry not found: {missing}"), Some("Open the archive again or choose a visible entry.".to_string()))
         })?;
-        let mut files = selected.into_iter().filter(|entry| entry.kind == ArchiveEntryKindDto::File).cloned().collect::<Vec<_>>();
-        if files.is_empty() {
-            return Err(CommandErrorDto::unsupported_format(format!("selection has no regular file entries to drag out: {}", entry_paths.join(", "))));
+        let mut entries =
+            selected.into_iter().filter(|entry| matches!(entry.kind, ArchiveEntryKindDto::File | ArchiveEntryKindDto::Directory)).cloned().collect::<Vec<_>>();
+        if entries.is_empty() {
+            return Err(CommandErrorDto::unsupported_format(format!("selection has no draggable entries: {}", entry_paths.join(", "))));
         }
-        files.sort_by(|left, right| left.path.cmp(&right.path));
-        Ok(Some(files))
+        entries.sort_by(|left, right| left.path.cmp(&right.path));
+        Ok(Some(entries))
     }
 
     pub fn drag_all_entries(&self, archive_path: &str, excluded_entry_paths: &[String]) -> Result<Option<Vec<ArchiveEntryDto>>, CommandErrorDto> {
@@ -441,8 +442,12 @@ impl ArchiveIndexRegistry {
 
         let index = record.index.lock().unwrap_or_else(|error| error.into_inner());
         let excluded = ArchivePathSet::new(excluded_entry_paths);
-        let mut entries =
-            index.entries.values().filter(|entry| entry.kind == ArchiveEntryKindDto::File && !excluded.covers(&entry.path)).cloned().collect::<Vec<_>>();
+        let mut entries = index
+            .entries
+            .values()
+            .filter(|entry| matches!(entry.kind, ArchiveEntryKindDto::File | ArchiveEntryKindDto::Directory) && !excluded.covers(&entry.path))
+            .cloned()
+            .collect::<Vec<_>>();
         entries.sort_by(|left, right| left.path.cmp(&right.path));
         Ok(Some(entries))
     }
@@ -1289,13 +1294,13 @@ mod tests {
             .drag_entries("C:/archives/demo.zip", &["docs".to_string(), "other.txt".to_string()])
             .expect("cached drag selection")
             .expect("ready session should answer");
-        assert_eq!(files.iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>(), ["docs/a.txt", "docs/nested/b.txt", "other.txt"]);
+        assert_eq!(files.iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>(), ["docs", "docs/a.txt", "docs/nested", "docs/nested/b.txt", "other.txt"]);
 
         let all_files = registry
             .drag_all_entries("C:/archives/demo.zip", &["docs/nested".to_string()])
             .expect("cached archive-wide drag selection")
             .expect("ready session should answer archive-wide selection");
-        assert_eq!(all_files.iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>(), ["docs/a.txt", "other.txt"]);
+        assert_eq!(all_files.iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>(), ["docs", "docs/a.txt", "other.txt"]);
     }
 
     #[test]

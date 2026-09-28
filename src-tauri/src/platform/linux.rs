@@ -313,10 +313,17 @@ mod tests {
                 NativeFileDragItem {
                     entry_path: "docs/readme.txt".to_string(),
                     display_path: "docs\\readme.txt".to_string(),
+                    kind: NativeFileDragItemKind::File,
                     size: Some(12),
                     modified_unix_seconds: None,
                 },
-                NativeFileDragItem { entry_path: "root.txt".to_string(), display_path: "root.txt".to_string(), size: Some(12), modified_unix_seconds: None },
+                NativeFileDragItem {
+                    entry_path: "root.txt".to_string(),
+                    display_path: "root.txt".to_string(),
+                    kind: NativeFileDragItemKind::File,
+                    size: Some(12),
+                    modified_unix_seconds: None,
+                },
             ],
             provider,
         )
@@ -353,6 +360,6 @@ mod tests {
     }
 
     fn candidate(path: &str) -> NativeFileDragCandidate {
-        NativeFileDragCandidate { entry_path: path.to_string(), size: Some(1), modified_unix_seconds: None }
+        NativeFileDragCandidate { entry_path: path.to_string(), kind: NativeFileDragItemKind::File, size: Some(1), modified_unix_seconds: None }
     }
 }

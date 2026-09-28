@@ -55,6 +55,7 @@ fn fixture_items() -> Vec<NativeFileDragItem> {
         .map(|(entry_path, display_path, bytes)| NativeFileDragItem {
             entry_path: (*entry_path).to_owned(),
             display_path: (*display_path).to_owned(),
+            kind: NativeFileDragItemKind::File,
             size: Some(bytes.len() as u64),
             modified_unix_seconds: None,
         })

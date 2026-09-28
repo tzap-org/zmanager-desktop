@@ -17,6 +17,7 @@ pub(super) fn prepare_windows_drag_items(
         items.push(NativeFileDragItem {
             entry_path: candidate.entry_path.clone(),
             display_path,
+            kind: candidate.kind.clone(),
             size: candidate.size,
             modified_unix_seconds: candidate.modified_unix_seconds,
         });
@@ -78,7 +79,7 @@ mod tests {
     use super::*;
 
     fn candidate(path: &str) -> NativeFileDragCandidate {
-        NativeFileDragCandidate { entry_path: path.to_string(), size: Some(1), modified_unix_seconds: None }
+        NativeFileDragCandidate { entry_path: path.to_string(), kind: NativeFileDragItemKind::File, size: Some(1), modified_unix_seconds: None }
     }
 
     #[test]
@@ -146,6 +147,7 @@ mod tests {
     fn preserves_candidate_metadata_and_original_archive_path() {
         let candidate = NativeFileDragCandidate {
             entry_path: "root/folder/report.txt".to_string(),
+            kind: NativeFileDragItemKind::File,
             size: Some(u64::from(u32::MAX) + 42),
             modified_unix_seconds: Some(1_700_000_000),
         };
