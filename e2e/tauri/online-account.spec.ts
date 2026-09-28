@@ -20,6 +20,26 @@ const username = process.env.TZAP_E2E_USERNAME;
 const password = process.env.TZAP_E2E_PASSWORD;
 const boundaryResults: Record<string, { status: "passed" | "failed"; detail?: string }> = {};
 
+// The OS opening a real browser and navigating it is slower on a loaded
+// hosted runner than the default 30s budget assumes; give it headroom before
+// falling back to the chained-dialog path.
+const BROWSER_NAVIGATION_TIMEOUT_SECONDS = 45;
+
+// jasmineOpts.defaultTimeoutInterval (wdio.conf.ts) is 60s, sized for
+// ordinary UI-only specs. These two tests drive a real browser against the
+// live staging service and, in the second test, wait out real archive jobs
+// through runJobInTaskWindow's own 120s budget — each already exceeds the
+// global default on its own, so (as archive-task-failures.spec.ts does for
+// its own job waits) they need an explicit per-test timeout sized to what
+// they actually await, not the UI-only default.
+//
+// Test 1 budget: BROWSER_NAVIGATION_TIMEOUT_SECONDS (45s) + browser launch
+// and login-page round trip (~45s) + waitForSignedIn (60s).
+const BROWSER_HANDOFF_TEST_TIMEOUT_MS = 150_000;
+// Test 2 budget: two sequential runJobInTaskWindow calls (120s each) plus
+// certificate enrollment and two online/offline verification round trips.
+const ENROLL_AND_VERIFY_TEST_TIMEOUT_MS = 300_000;
+
 function recordBoundary(name: string, status: "passed" | "failed", detail?: string): void {
   boundaryResults[name] = detail ? { status, detail } : { status };
 }
@@ -48,7 +68,7 @@ async function clickHostedSignInFromUi(): Promise<void> {
 }
 
 async function clickHostedSignInAndObserveBrowser(): Promise<string> {
-  const observation = observeDefaultBrowserNavigation("https://staging.tzap.org");
+  const observation = observeDefaultBrowserNavigation("https://staging.tzap.org", BROWSER_NAVIGATION_TIMEOUT_SECONDS);
   await clickHostedSignInFromUi();
   const observed = await observation;
   assert.equal(observed.origin, "https://staging.tzap.org");
@@ -251,7 +271,7 @@ describe("Online TZAP account lifecycle", () => {
     await new Promise((resolve) => setTimeout(resolve, 750));
     assert.equal((await invoke<AccountSnapshotDto>("account_snapshot")).authStatus, "signedIn", "secret-bearing callbacks must be ignored without changing session state");
     recordBoundary("callbackSecurity", "passed");
-  });
+  }, BROWSER_HANDOFF_TEST_TIMEOUT_MS);
 
   it("enrolls, signs, and verifies the staging flow", async () => {
     const result = await invoke<AccountLifecycleResultDto>("account_enroll_certificate");
@@ -282,6 +302,6 @@ describe("Online TZAP account lifecycle", () => {
     assert.equal(online.statusCheck, "fresh_valid", JSON.stringify(online));
     assert.equal(online.verificationState, "verified_with_caveat", JSON.stringify(online));
     writeArchiveEvidence({ artifactDir: runArtifactDir, archivePath, sourceManifest, signerCertificateSha256: hosted.certificateSha256, runId: process.env.TZAP_E2E_RUN_ID ?? "unknown" });
-  });
+  }, ENROLL_AND_VERIFY_TEST_TIMEOUT_MS);
 
 });
