@@ -130,7 +130,10 @@ jobs:
         run: .\scripts\ensure-sibling-repos.ps1
 
       - name: Run staging Windows standalone E2E
-        if: matrix.flavor == 'windows' && steps.staging_credentials.outputs.configured == 'true'
+        # The ARM64 hosted runner does not provide the browser/default-browser
+        # integration required by the account handoff test. The ARM package is
+        # still built and validated by the native/package jobs below.
+        if: matrix.flavor == 'windows' && matrix.arch == 'x64' && steps.staging_credentials.outputs.configured == 'true'
         shell: pwsh
         env:
           TZAP_DESKTOP_STAGING_CLIENT_ID: ${{ secrets.TZAP_DESKTOP_STAGING_CLIENT_ID }}
@@ -142,7 +145,7 @@ jobs:
         run: .\scripts\test-windows-standalone-staging.ps1 -Architecture ${{ matrix.arch }}
 
       - name: Upload staging standalone E2E evidence
-        if: failure() && matrix.flavor == 'windows' && steps.staging_credentials.outputs.configured == 'true'
+        if: failure() && matrix.flavor == 'windows' && matrix.arch == 'x64' && steps.staging_credentials.outputs.configured == 'true'
         uses: actions/upload-artifact@v6
         with:
           name: zmanager-standalone-e2e-${{ matrix.arch }}
@@ -150,7 +153,7 @@ jobs:
           path: ${{ runner.temp }}\zmanager-standalone-e2e-${{ github.run_id }}-${{ matrix.arch }}-*
 
       - name: Run staging Windows release-artifact smoke
-        if: matrix.flavor == 'windows' && steps.staging_credentials.outputs.configured == 'true'
+        if: matrix.flavor == 'windows' && matrix.arch == 'x64' && steps.staging_credentials.outputs.configured == 'true'
         shell: pwsh
         env:
           TZAP_DESKTOP_STAGING_CLIENT_ID: ${{ secrets.TZAP_DESKTOP_STAGING_CLIENT_ID }}
@@ -161,7 +164,7 @@ jobs:
         run: .\scripts\test-windows-standalone-staging.ps1 -Architecture ${{ matrix.arch }} -ReleaseArtifact
 
       - name: Upload staging release-artifact E2E evidence
-        if: failure() && matrix.flavor == 'windows' && steps.staging_credentials.outputs.configured == 'true'
+        if: failure() && matrix.flavor == 'windows' && matrix.arch == 'x64' && steps.staging_credentials.outputs.configured == 'true'
         uses: actions/upload-artifact@v6
         with:
           name: zmanager-standalone-release-e2e-${{ matrix.arch }}

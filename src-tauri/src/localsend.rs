@@ -703,6 +703,7 @@ fn build_auto_extract_request(config: &ReceiveConfig, received_path: &Path) -> O
         tzap_allow_degraded: true,
         tzap_allow_absolute_symlinks: false,
         ignore_symlinks: false,
+        locale: None,
     })
 }
 

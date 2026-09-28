@@ -1040,6 +1040,7 @@ fn start_extract_internal_with_origin_and_spawner(
                 tzap_allow_degraded: request.tzap_allow_degraded,
                 tzap_allow_absolute_symlinks: request.tzap_allow_absolute_symlinks,
                 ignore_symlinks: request.ignore_symlinks,
+                locale: request.locale.clone(),
             }),
             vec![JobOutputArtifactDto { artifact_id: "output".into(), kind: JobArtifactKindDto::Directory, path: destination_path.clone() }],
             vec![JobAvailableActionDto { action_id: "open-output".into(), kind: JobActionKindDto::Open, artifact_id: "output".into() }],
@@ -1048,6 +1049,7 @@ fn start_extract_internal_with_origin_and_spawner(
     let registry_for_thread = registry.clone();
     let job_id = response.job_id.clone();
     let app_for_thread = app;
+    let request_locale = request.locale.clone();
     let policy = extraction_policy(request.overwrite, request.strip_components, request.ignore_symlinks, &excluded_entry_paths);
     let tzap_restore_options = TzapRestoreOptions {
         policy: map_tzap_restore_policy(request.tzap_restore_policy),
@@ -1071,6 +1073,7 @@ fn start_extract_internal_with_origin_and_spawner(
             &mut sink,
             kind,
             app_for_thread,
+            request_locale,
         );
 
         match result {
@@ -1094,38 +1097,232 @@ fn start_extract_internal_with_origin_and_spawner(
 /// caller.
 struct InteractiveOverwriteResolver {
     app: AppHandle,
+    mode: InteractiveOverwriteMode,
+    cancellation: CancellationToken,
+    locale: InteractiveOverwriteLocale,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum InteractiveOverwriteMode {
+    Ask,
+    ReplaceAll,
+    SkipAll,
+    RenameAll,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum OverwritePromptDecision {
+    Replace,
+    ReplaceAll,
+    MoreOptions,
+    Skip,
+    SkipAll,
+    RenameAll,
+    Quit,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum InteractiveOverwriteLocale {
+    English,
+    SimplifiedChinese,
+}
+
+impl InteractiveOverwriteLocale {
+    fn from_request(locale: Option<&str>) -> Self {
+        if locale.is_some_and(|value| value.eq_ignore_ascii_case("zh-CN")) { Self::SimplifiedChinese } else { Self::English }
+    }
 }
 
 impl InteractiveOverwriteResolver {
-    fn new(app: AppHandle) -> Self {
-        Self { app }
+    fn new(app: AppHandle, cancellation: CancellationToken, locale: Option<&str>) -> Self {
+        Self { app, mode: InteractiveOverwriteMode::Ask, cancellation, locale: InteractiveOverwriteLocale::from_request(locale) }
+    }
+
+    fn show_prompt(&self, title: &str, message: String, buttons: MessageDialogButtons) -> MessageDialogResult {
+        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+        self.app.dialog().message(message).title(title).kind(MessageDialogKind::Warning).buttons(buttons).show_with_result(move |result| {
+            let _ = sender.send(result);
+        });
+        receive_dialog_result(&receiver, &self.cancellation)
+    }
+
+    fn prompt_decision(&self, conflict: &zmanager_core::safety::OverwriteConflict) -> OverwritePromptDecision {
+        let (title, message, replace_this, replace_all, more_options) = match self.locale {
+            InteractiveOverwriteLocale::English => (
+                "Confirm file replacement",
+                format!(
+                    "The destination already contains an item.\n\nExisting item:\n{}\n\nArchive item:\n{}\n\nChoose how to continue.",
+                    conflict.destination_path.display(),
+                    conflict.archive_path,
+                ),
+                "Replace this",
+                "Replace all",
+                "More options",
+            ),
+            InteractiveOverwriteLocale::SimplifiedChinese => (
+                "确认替换文件",
+                format!(
+                    "目标位置已经存在项目。\n\n现有项目：\n{}\n\n归档项目：\n{}\n\n请选择继续方式。",
+                    conflict.destination_path.display(),
+                    conflict.archive_path,
+                ),
+                "替换此项",
+                "全部替换",
+                "更多选项",
+            ),
+        };
+        match primary_prompt_decision(
+            self.show_prompt(title, message, MessageDialogButtons::YesNoCancelCustom(replace_this.into(), replace_all.into(), more_options.into())),
+            replace_this,
+            replace_all,
+            more_options,
+        ) {
+            Some(OverwritePromptDecision::MoreOptions) => self.prompt_more_options(),
+            Some(decision) => decision,
+            None => OverwritePromptDecision::Quit,
+        }
+    }
+
+    fn prompt_more_options(&self) -> OverwritePromptDecision {
+        let (title, message, skip_this, skip_all, rename_all) = match self.locale {
+            InteractiveOverwriteLocale::English => {
+                ("Extraction conflict", "Choose what should happen to this and later conflicts.", "Skip this", "Skip all", "Rename all")
+            }
+            InteractiveOverwriteLocale::SimplifiedChinese => ("提取冲突", "请选择此冲突及后续冲突的处理方式。", "跳过此项", "全部跳过", "全部重命名"),
+        };
+        match options_prompt_decision(
+            self.show_prompt(title, message.into(), MessageDialogButtons::YesNoCancelCustom(skip_this.into(), skip_all.into(), rename_all.into())),
+            skip_this,
+            skip_all,
+            rename_all,
+        ) {
+            Some(decision) => decision,
+            None => OverwritePromptDecision::Quit,
+        }
+    }
+}
+
+fn primary_prompt_decision(result: MessageDialogResult, replace_this: &str, replace_all: &str, more_options: &str) -> Option<OverwritePromptDecision> {
+    match result {
+        MessageDialogResult::Custom(choice) if choice == replace_this => Some(OverwritePromptDecision::Replace),
+        MessageDialogResult::Custom(choice) if choice == replace_all => Some(OverwritePromptDecision::ReplaceAll),
+        MessageDialogResult::Custom(choice) if choice == more_options => Some(OverwritePromptDecision::MoreOptions),
+        _ => None,
+    }
+}
+
+fn options_prompt_decision(result: MessageDialogResult, skip_this: &str, skip_all: &str, rename_all: &str) -> Option<OverwritePromptDecision> {
+    match result {
+        MessageDialogResult::Custom(choice) if choice == skip_this => Some(OverwritePromptDecision::Skip),
+        MessageDialogResult::Custom(choice) if choice == skip_all => Some(OverwritePromptDecision::SkipAll),
+        MessageDialogResult::Custom(choice) if choice == rename_all => Some(OverwritePromptDecision::RenameAll),
+        _ => None,
+    }
+}
+
+fn receive_dialog_result(receiver: &std::sync::mpsc::Receiver<MessageDialogResult>, cancellation: &CancellationToken) -> MessageDialogResult {
+    loop {
+        if cancellation.is_cancelled() {
+            return MessageDialogResult::Cancel;
+        }
+        match receiver.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(result) => return result,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return MessageDialogResult::Cancel,
+        }
+    }
+}
+
+fn apply_prompt_decision(mode: &mut InteractiveOverwriteMode, decision: OverwritePromptDecision) -> zmanager_core::safety::OverwriteDecision {
+    match decision {
+        OverwritePromptDecision::Replace => zmanager_core::safety::OverwriteDecision::Replace,
+        OverwritePromptDecision::ReplaceAll => {
+            *mode = InteractiveOverwriteMode::ReplaceAll;
+            zmanager_core::safety::OverwriteDecision::Replace
+        }
+        OverwritePromptDecision::Skip => zmanager_core::safety::OverwriteDecision::Skip,
+        OverwritePromptDecision::SkipAll => {
+            *mode = InteractiveOverwriteMode::SkipAll;
+            zmanager_core::safety::OverwriteDecision::Skip
+        }
+        OverwritePromptDecision::RenameAll => {
+            *mode = InteractiveOverwriteMode::RenameAll;
+            zmanager_core::safety::OverwriteDecision::Rename
+        }
+        OverwritePromptDecision::MoreOptions => zmanager_core::safety::OverwriteDecision::Quit,
+        OverwritePromptDecision::Quit => zmanager_core::safety::OverwriteDecision::Quit,
     }
 }
 
 impl zmanager_core::safety::OverwriteResolver for InteractiveOverwriteResolver {
     fn decide(&mut self, conflict: &zmanager_core::safety::OverwriteConflict) -> zmanager_core::safety::OverwriteDecision {
-        let (sender, receiver) = std::sync::mpsc::sync_channel(1);
-        let message = format!(
-            "An item already exists at:\n{}\n\nArchive item:\n{}\n\nChoose how to continue.",
-            conflict.destination_path.display(),
-            conflict.archive_path,
-        );
-
-        self.app
-            .dialog()
-            .message(message)
-            .title("Extraction conflict")
-            .kind(MessageDialogKind::Warning)
-            .buttons(MessageDialogButtons::YesNoCancelCustom("Replace".into(), "Skip".into(), "Cancel".into()))
-            .show_with_result(move |result| {
-                let _ = sender.send(result);
-            });
-
-        match receiver.recv() {
-            Ok(MessageDialogResult::Yes) => zmanager_core::safety::OverwriteDecision::Replace,
-            Ok(MessageDialogResult::No) => zmanager_core::safety::OverwriteDecision::Skip,
-            _ => zmanager_core::safety::OverwriteDecision::Quit,
+        match self.mode {
+            InteractiveOverwriteMode::ReplaceAll => return zmanager_core::safety::OverwriteDecision::Replace,
+            InteractiveOverwriteMode::SkipAll => return zmanager_core::safety::OverwriteDecision::Skip,
+            InteractiveOverwriteMode::RenameAll => return zmanager_core::safety::OverwriteDecision::Rename,
+            InteractiveOverwriteMode::Ask => {}
         }
+
+        let decision = self.prompt_decision(conflict);
+        if decision == OverwritePromptDecision::Quit {
+            self.cancellation.cancel();
+        }
+        apply_prompt_decision(&mut self.mode, decision)
+    }
+}
+
+#[cfg(test)]
+mod interactive_overwrite_resolver_tests {
+    use super::*;
+
+    #[test]
+    fn custom_dialog_results_map_to_the_expected_actions() {
+        assert_eq!(
+            primary_prompt_decision(MessageDialogResult::Custom("Replace this".into()), "Replace this", "Replace all", "More options"),
+            Some(OverwritePromptDecision::Replace)
+        );
+        assert_eq!(
+            primary_prompt_decision(MessageDialogResult::Custom("Replace all".into()), "Replace this", "Replace all", "More options"),
+            Some(OverwritePromptDecision::ReplaceAll)
+        );
+        assert_eq!(
+            primary_prompt_decision(MessageDialogResult::Custom("More options".into()), "Replace this", "Replace all", "More options"),
+            Some(OverwritePromptDecision::MoreOptions)
+        );
+        assert_eq!(
+            options_prompt_decision(MessageDialogResult::Custom("Rename all".into()), "Skip this", "Skip all", "Rename all"),
+            Some(OverwritePromptDecision::RenameAll)
+        );
+        assert_eq!(options_prompt_decision(MessageDialogResult::Cancel, "Skip this", "Skip all", "Rename all"), None);
+    }
+
+    #[test]
+    fn overwrite_modes_apply_to_this_and_later_conflicts() {
+        let mut mode = InteractiveOverwriteMode::Ask;
+        assert_eq!(apply_prompt_decision(&mut mode, OverwritePromptDecision::Replace), zmanager_core::safety::OverwriteDecision::Replace);
+        assert_eq!(mode, InteractiveOverwriteMode::Ask);
+
+        assert_eq!(apply_prompt_decision(&mut mode, OverwritePromptDecision::ReplaceAll), zmanager_core::safety::OverwriteDecision::Replace);
+        assert_eq!(mode, InteractiveOverwriteMode::ReplaceAll);
+        assert_eq!(apply_prompt_decision(&mut mode, OverwritePromptDecision::Replace), zmanager_core::safety::OverwriteDecision::Replace);
+
+        mode = InteractiveOverwriteMode::Ask;
+        assert_eq!(apply_prompt_decision(&mut mode, OverwritePromptDecision::SkipAll), zmanager_core::safety::OverwriteDecision::Skip);
+        assert_eq!(mode, InteractiveOverwriteMode::SkipAll);
+        assert_eq!(apply_prompt_decision(&mut mode, OverwritePromptDecision::Skip), zmanager_core::safety::OverwriteDecision::Skip);
+
+        mode = InteractiveOverwriteMode::Ask;
+        assert_eq!(apply_prompt_decision(&mut mode, OverwritePromptDecision::RenameAll), zmanager_core::safety::OverwriteDecision::Rename);
+        assert_eq!(mode, InteractiveOverwriteMode::RenameAll);
+        assert_eq!(apply_prompt_decision(&mut mode, OverwritePromptDecision::RenameAll), zmanager_core::safety::OverwriteDecision::Rename);
+    }
+
+    #[test]
+    fn cancellation_wakes_a_waiting_dialog_result() {
+        let token = CancellationToken::new();
+        token.cancel();
+        let (_sender, receiver) = std::sync::mpsc::sync_channel(1);
+        assert_eq!(receive_dialog_result(&receiver, &token), MessageDialogResult::Cancel);
     }
 }
 
@@ -1143,6 +1340,7 @@ fn run_extract_job(
     sink: &mut JobEventCollector,
     kind: JobKindDto,
     app: Option<AppHandle>,
+    locale: Option<String>,
 ) -> Result<JobTerminalSummaryDto, CommandErrorDto> {
     let started_kind = match kind {
         JobKindDto::ZipExtract => zmanager_core::jobs::JobKind::ZipExtract,
@@ -1163,7 +1361,7 @@ fn run_extract_job(
             );
             match open_res {
                 Ok(mut handle) => {
-                    let mut overwrite_resolver = app.map(InteractiveOverwriteResolver::new);
+                    let mut overwrite_resolver = app.map(|app| InteractiveOverwriteResolver::new(app, token.clone(), locale.as_deref()));
                     // Listing up front lets both branches know real sizes
                     // (and, for the selected branch, real EntryIds) before
                     // Started fires, so the job carries a real total_bytes
@@ -1216,15 +1414,21 @@ fn run_extract_job(
                             overwrite_resolver: overwrite_resolver.as_mut().map(|resolver| resolver as &mut dyn zmanager_core::safety::OverwriteResolver),
                             ..Default::default()
                         };
-                        handle
-                            .extract(&mut options)
+                        let result = handle.extract(&mut options);
+                        result
                             .map(|report| JobTerminalSummaryDto {
                                 written_entries: usize::try_from(report.written_entries).unwrap_or(usize::MAX),
                                 skipped_entries: Some(usize::try_from(report.skipped_entries).unwrap_or(usize::MAX)),
                                 written_bytes: report.written_bytes,
                                 warnings: report.warnings,
                             })
-                            .map_err(crate::platform::archive_error::map_engine_error)
+                            .map_err(|error| {
+                                if token.is_cancelled() {
+                                    CommandErrorDto::cancelled("Extraction cancelled.")
+                                } else {
+                                    crate::platform::archive_error::map_engine_error(error)
+                                }
+                            })
                     } else {
                         match listing {
                             Some(listing) => {
@@ -1273,15 +1477,21 @@ fn run_extract_job(
                                             .as_mut()
                                             .map(|resolver| resolver as &mut dyn zmanager_core::safety::OverwriteResolver),
                                     };
-                                    handle
-                                        .extract_selected_many(&entry_ids, &mut options)
+                                    let result = handle.extract_selected_many(&entry_ids, &mut options);
+                                    result
                                         .map(|report| JobTerminalSummaryDto {
                                             written_entries: usize::try_from(report.written_entries).unwrap_or(usize::MAX),
                                             skipped_entries: Some(usize::try_from(report.skipped_entries).unwrap_or(usize::MAX)),
                                             written_bytes: report.written_bytes,
                                             warnings: report.warnings,
                                         })
-                                        .map_err(crate::platform::archive_error::map_engine_error)
+                                        .map_err(|error| {
+                                            if token.is_cancelled() {
+                                                CommandErrorDto::cancelled("Extraction cancelled.")
+                                            } else {
+                                                crate::platform::archive_error::map_engine_error(error)
+                                            }
+                                        })
                                 }
                             }
                             None => {
@@ -3199,6 +3409,7 @@ mod tests {
                 tzap_allow_degraded: false,
                 tzap_allow_absolute_symlinks: false,
                 ignore_symlinks: false,
+                locale: None,
             },
             &registry,
         )
@@ -3273,6 +3484,7 @@ mod tests {
                 tzap_allow_degraded: false,
                 tzap_allow_absolute_symlinks: false,
                 ignore_symlinks: false,
+                locale: None,
             },
             &registry,
             |_worker| {},
@@ -3354,6 +3566,7 @@ mod tests {
                 tzap_allow_degraded: false,
                 tzap_allow_absolute_symlinks: false,
                 ignore_symlinks: false,
+                locale: None,
             },
             &registry,
         )
@@ -3381,6 +3594,7 @@ mod tests {
                 tzap_allow_degraded: false,
                 tzap_allow_absolute_symlinks: false,
                 ignore_symlinks: false,
+                locale: None,
             },
             &registry,
         )
@@ -3414,6 +3628,7 @@ mod tests {
                 tzap_allow_degraded: false,
                 tzap_allow_absolute_symlinks: false,
                 ignore_symlinks: false,
+                locale: None,
             },
             &registry,
         )
@@ -4137,6 +4352,7 @@ mod tests {
             tzap_allow_degraded: false,
             tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
+            locale: None,
         };
         let extract_job = start_extract_internal(extract_request, &registry).expect("extract command should start a job");
         let (extract_poll, mut extract_events) = wait_for_job_terminal(&registry, &extract_job.job_id);
@@ -4212,6 +4428,7 @@ mod tests {
             tzap_allow_degraded: false,
             tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
+            locale: None,
         };
         let extract_job = start_extract_internal(extract_request, &registry).expect("selected extract should start a job");
         let (extract_poll, mut extract_events) = wait_for_job_terminal(&registry, &extract_job.job_id);
@@ -4315,6 +4532,7 @@ mod tests {
             tzap_allow_degraded: false,
             tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
+            locale: None,
         };
         let extract_job = start_extract_internal(extract_request, &registry).expect("extract command should start a job");
         let (extract_poll, mut extract_events) = wait_for_job_terminal(&registry, &extract_job.job_id);
@@ -4421,6 +4639,7 @@ mod tests {
             tzap_allow_degraded: false,
             tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
+            locale: None,
         };
         let extract_job = start_extract_internal(extract_request, &registry).expect("extract command should start a job");
         let (extract_poll, mut extract_events) = wait_for_job_terminal(&registry, &extract_job.job_id);
@@ -4506,6 +4725,7 @@ mod tests {
             tzap_allow_degraded: false,
             tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
+            locale: None,
         };
         let extract_job = start_extract_internal(extract_request, &registry).expect("extract command should start a renamed-destination job");
         let (extract_poll, _) = wait_for_job_terminal(&registry, &extract_job.job_id);
@@ -4588,6 +4808,7 @@ mod tests {
             tzap_allow_degraded: false,
             tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
+            locale: None,
         };
 
         let extract_job = start_extract_internal(extract_request, &registry).expect("quick extract command should start");
@@ -4680,6 +4901,7 @@ mod tests {
             tzap_allow_degraded: false,
             tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
+            locale: None,
         };
 
         let extract_job = start_extract_internal(extract_request, &registry).expect("folder tree extract should start");
@@ -4809,6 +5031,7 @@ mod tests {
             tzap_allow_degraded: false,
             tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
+            locale: None,
         };
         let e_job = start_extract_internal(extract_req, &registry).expect("extract should start");
         let (e_poll, _) = wait_for_job_terminal(&registry, &e_job.job_id);
@@ -5192,6 +5415,7 @@ mod tests {
             tzap_allow_degraded: false,
             tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
+            locale: None,
         };
         let e_job = start_extract_internal(e_req, &registry).expect("e_job");
         let (e_poll, _) = wait_for_job_terminal(&registry, &e_job.job_id);
@@ -5260,6 +5484,7 @@ mod tests {
             tzap_allow_degraded: false,
             tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
+            locale: None,
         };
         let extract_job = start_extract_internal(extract_request, &registry).expect("extract command should start a job");
         let (extract_poll, mut extract_events) = wait_for_job_terminal(&registry, &extract_job.job_id);
@@ -5334,6 +5559,7 @@ mod tests {
             tzap_allow_degraded: false,
             tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
+            locale: None,
         };
         let extract_job = start_extract_internal(extract_request, &registry).expect("selected extract command should start a job");
         let (extract_poll, mut extract_events) = wait_for_job_terminal(&registry, &extract_job.job_id);
@@ -5476,6 +5702,7 @@ mod tests {
             &token,
             &mut sink,
             JobKindDto::ZipExtract,
+            None,
             None,
         )
         .expect_err("missing archive should fail to open");
@@ -5840,6 +6067,7 @@ mod tests {
             tzap_allow_degraded: false,
             tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
+            locale: None,
         };
         let extract_job = start_extract_internal(extract_request, &registry).expect("extract command should start");
         let (extract_poll, _) = wait_for_job_terminal(&registry, &extract_job.job_id);

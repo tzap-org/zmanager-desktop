@@ -50,6 +50,8 @@ pub enum JobRetryDescriptorDto {
         tzap_allow_degraded: bool,
         tzap_allow_absolute_symlinks: bool,
         ignore_symlinks: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        locale: Option<String>,
     },
     TestArchive {
         action_id: String,

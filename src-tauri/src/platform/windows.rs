@@ -246,7 +246,7 @@ unsafe fn draw_hicon_bgra(icon: HICON, icon_size: i32, background_bgr: [u8; 3]) 
     let previous_object = unsafe { SelectObject(memory_dc, bitmap as HGDIOBJ) };
     let pixel_count = icon_size as usize * icon_size as usize;
     let bgra = unsafe { slice::from_raw_parts_mut(bits as *mut u8, pixel_count * BYTES_PER_PIXEL) };
-    for pixel in bgra.chunks_exact_mut(BYTES_PER_PIXEL) {
+    for pixel in bgra.as_chunks_mut::<BYTES_PER_PIXEL>().0 {
         pixel.copy_from_slice(&[background_bgr[0], background_bgr[1], background_bgr[2], u8::MAX]);
     }
 
@@ -274,7 +274,7 @@ fn reconstruct_rgba_from_composites(black: &[u8], white: &[u8]) -> Option<Vec<u8
     }
 
     let mut rgba = Vec::with_capacity(black.len());
-    for (black_pixel, white_pixel) in black.chunks_exact(4).zip(white.chunks_exact(4)) {
+    for (black_pixel, white_pixel) in black.as_chunks::<4>().0.iter().zip(white.as_chunks::<4>().0.iter()) {
         let transparency = (0..3).map(|channel| white_pixel[channel].saturating_sub(black_pixel[channel]) as u16).sum::<u16>().div_ceil(3) as u8;
         let alpha = u8::MAX - transparency;
 

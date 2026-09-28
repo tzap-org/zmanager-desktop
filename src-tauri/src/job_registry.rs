@@ -1908,6 +1908,7 @@ mod tests {
                     tzap_allow_degraded: false,
                     tzap_allow_absolute_symlinks: false,
                     ignore_symlinks: false,
+                    locale: None,
                 }),
                 Vec::new(),
                 Vec::new(),

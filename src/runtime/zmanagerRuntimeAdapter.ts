@@ -1049,7 +1049,7 @@ const extractStartController = createExtractStartController({
   submissionGuard: mainWindowSubmissionGuard,
   hasCurrentArchive: () => Boolean(archiveCurrentPath()),
   joinNativePath,
-  startExtract: runStartExtract,
+  startExtract: (request) => runStartExtract({ ...request, locale: displayContext.resolvedLocale }),
   toCommandError: asCommandError,
   requestPasswordInDialog: requestExtractPasswordInDialog,
   chooseDestinationFirst: () => {
@@ -1135,7 +1135,7 @@ const quickActionController = createQuickActionController({
   message,
   openArchive: openQuickActionArchive,
   runStartCreate,
-  runStartExtract,
+  runStartExtract: (request) => runStartExtract({ ...request, locale: displayContext.resolvedLocale }),
   toCommandError: asCommandError,
   isPasswordCommandError,
   promptForNewArchivePassword: jobPasswordPrompts.promptForNewArchivePassword,

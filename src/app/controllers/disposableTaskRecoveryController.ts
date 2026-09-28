@@ -88,6 +88,7 @@ export function createDisposableTaskRecoveryController(
               tzapAllowDegraded: true,
               tzapAllowAbsoluteSymlinks: descriptor.tzapAllowAbsoluteSymlinks ?? false,
               ignoreSymlinks: descriptor.ignoreSymlinks ?? false,
+              ...(descriptor.locale ? { locale: descriptor.locale } : {}),
               password,
             }, "passwordRetry");
       } catch (error) {

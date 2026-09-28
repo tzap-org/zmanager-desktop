@@ -572,6 +572,7 @@ export type StartExtractRequest = {
   tzapAllowDegraded: boolean;
   tzapAllowAbsoluteSymlinks: boolean;
   ignoreSymlinks: boolean;
+  locale?: "en" | "zh-CN";
 };
 
 export type PreviewEntryRequest = {
@@ -784,6 +785,7 @@ export type JobRetryDescriptorDto =
       tzapAllowDegraded?: boolean;
       tzapAllowAbsoluteSymlinks?: boolean;
       ignoreSymlinks?: boolean;
+      locale?: StartExtractRequest["locale"];
     }
   | {
       retryKind: "testArchive";

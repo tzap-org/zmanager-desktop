@@ -44,6 +44,7 @@ use windows_sys::Win32::{
 };
 
 use super::*;
+use crate::platform::NativeFileDragItemKind;
 use crate::platform::staged_file_drag::cleanup_retained_drag_roots;
 
 const FIXTURE: &[(&str, &str, &[u8])] =

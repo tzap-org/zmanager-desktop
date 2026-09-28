@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 
+#[cfg(test)]
+use super::NativeFileDragItemKind;
 use super::{NativeFileDragCandidate, NativeFileDragError, NativeFileDragItem};
 
 pub(super) fn prepare_windows_drag_items(
@@ -17,7 +19,7 @@ pub(super) fn prepare_windows_drag_items(
         items.push(NativeFileDragItem {
             entry_path: candidate.entry_path.clone(),
             display_path,
-            kind: candidate.kind.clone(),
+            kind: candidate.kind,
             size: candidate.size,
             modified_unix_seconds: candidate.modified_unix_seconds,
         });

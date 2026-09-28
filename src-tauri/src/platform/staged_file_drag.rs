@@ -45,7 +45,7 @@ pub(super) fn prepare_posix_drag_items(
         items.push(NativeFileDragItem {
             entry_path: candidate.entry_path.clone(),
             display_path,
-            kind: candidate.kind.clone(),
+            kind: candidate.kind,
             size: candidate.size,
             modified_unix_seconds: candidate.modified_unix_seconds,
         });
