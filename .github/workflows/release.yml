@@ -267,7 +267,9 @@ jobs:
           }
 
       - name: Smoke-test staging release artifact on Windows
-        if: steps.staging_credentials.outputs.configured == 'true'
+        # The ARM64 hosted runner does not provide the browser/default-browser
+        # integration required by the hosted-account handoff test.
+        if: matrix.arch == 'x64' && steps.staging_credentials.outputs.configured == 'true'
         shell: pwsh
         env:
           TZAP_DESKTOP_STAGING_CLIENT_ID: ${{ secrets.TZAP_DESKTOP_STAGING_CLIENT_ID }}
@@ -279,7 +281,7 @@ jobs:
         run: .\scripts\test-windows-standalone-staging.ps1 -Architecture ${{ matrix.arch }} -ReleaseArtifact
 
       - name: Upload staging standalone E2E evidence
-        if: failure() && steps.staging_credentials.outputs.configured == 'true'
+        if: failure() && matrix.arch == 'x64' && steps.staging_credentials.outputs.configured == 'true'
         uses: actions/upload-artifact@v6
         with:
           name: zmanager-standalone-e2e-${{ matrix.arch }}
