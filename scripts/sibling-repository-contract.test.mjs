@@ -26,8 +26,6 @@ const siblingDirectories = [
   ["ZMANAGER_LOCALSEND", "localsend-rs"],
   ["ZMANAGER_FORENSIC_VFS_ENGINE", "forensic-vfs-engine"],
   ["ZMANAGER_ISO9660_FORENSIC", "iso9660-forensic"],
-  ["ZMANAGER_NTFS_FORENSIC", "ntfs-forensic"],
-  ["ZMANAGER_UDF_FORENSIC", "udf-forensic"],
 ];
 
 function git(cwd, args) {
@@ -102,6 +100,16 @@ test("published DPP does not require a sibling checkout", () => {
   ]) {
     assert.doesNotMatch(content, /ZMANAGER_DPP|ensure[_-]sibling[_-]repo[^\n]*dpp|Ensure-SiblingRepo[^\n]*dpp/i,
       `${name} bootstrap must not provision a DPP sibling repository`);
+  }
+});
+
+test("published NTFS and UDF adapters do not require sibling checkouts", () => {
+  for (const [name, content] of [
+    ["shell", shellBootstrap],
+    ["PowerShell", powershellBootstrap],
+  ]) {
+    assert.doesNotMatch(content, /ntfs-forensic|udf-forensic/i,
+      `${name} bootstrap must use the published NTFS and UDF adapters`);
   }
 });
 
