@@ -420,12 +420,36 @@ export async function openTaskWindowForJob(started: StartedTaskJob): Promise<str
       async () => (await browser.tauri.listWindows()).includes(label),
       { timeout: 10_000, timeoutMsg: `task window ${label} was not created` },
     );
-    await browser.tauri.switchWindow(label);
-    await $("[data-task-content]").waitForExist({ timeout: 10_000 });
+    await switchToWindowAndWaitForContent(label);
     return label;
   } catch (error) {
     await closeTaskWindow(label);
     throw error;
+  }
+}
+
+/**
+ * Observed in CI: `switchWindow` can select this window and then the very
+ * next command fails with "no such window", even though `listWindows` still
+ * lists the label afterward — a transient WebDriver/OS window-handle race,
+ * not the window actually closing. Re-selecting and retrying the content
+ * query recovers from that instead of failing the whole test on it; if the
+ * window is truly gone (label no longer listed), this still fails fast.
+ */
+async function switchToWindowAndWaitForContent(label: string): Promise<void> {
+  const attempts = 3;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    await browser.tauri.switchWindow(label);
+    try {
+      await $("[data-task-content]").waitForExist({ timeout: 10_000 });
+      return;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const isStaleWindowHandle = message.includes("no such window") || message.includes("No window could be found");
+      if (!isStaleWindowHandle || attempt === attempts || !(await browser.tauri.listWindows()).includes(label)) {
+        throw error;
+      }
+    }
   }
 }
 
