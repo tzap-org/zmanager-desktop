@@ -37,6 +37,14 @@ unsafe extern "C" {
         release: Option<extern "C" fn(*mut c_void)>,
         context: *mut c_void,
     ) -> i32;
+    pub fn zmanager_macos_show_overwrite_prompt(
+        window: *mut c_void,
+        bytes: *const u8,
+        length: usize,
+        is_cancelled: Option<extern "C" fn(*mut c_void) -> i32>,
+        context: *mut c_void,
+        choice: *mut i32,
+    ) -> i32;
 }
 
 

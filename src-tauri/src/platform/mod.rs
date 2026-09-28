@@ -22,6 +22,17 @@ mod windows_drag_path;
 #[cfg(target_os = "windows")]
 mod windows_overwrite_prompt;
 
+#[cfg(target_os = "macos")]
+mod macos_overwrite_prompt;
+
+#[cfg(target_os = "linux")]
+mod linux_overwrite_prompt;
+
+mod overwrite_prompt_labels;
+
+#[cfg(unix)]
+mod unix_local_time;
+
 #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
 compile_error!("ZManager Desktop requires a NativePlatform adapter for this operating system");
 
@@ -316,7 +327,8 @@ pub fn start_native_file_drag(
     ActivePlatform::start_native_file_drag(window, items, stream_provider, context)
 }
 
-/// Localized text for the extraction overwrite prompt.
+/// Localized text for the extraction overwrite prompt. Button labels carry
+/// Windows-style `&` mnemonics; other platforms convert them.
 pub(crate) struct OverwritePrompt<'a> {
     pub title: &'a str,
     pub instruction: &'a str,
@@ -326,10 +338,10 @@ pub(crate) struct OverwritePrompt<'a> {
     pub skip: &'a str,
     pub skip_all: &'a str,
     pub rename_all: &'a str,
+    pub cancel: &'a str,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) enum OverwritePromptChoice {
     Replace,
     ReplaceAll,
@@ -339,24 +351,45 @@ pub(crate) enum OverwritePromptChoice {
     Cancel,
 }
 
-/// Shows every overwrite choice in one native dialog, blocking until the user
-/// answers or `cancellation` fires. Returns `None` when this platform has no
-/// such dialog (or it could not be shown), so the caller falls back to chained
-/// three-button prompts.
+/// Shows every overwrite choice in one native dialog, blocking the calling
+/// worker thread until the user answers or `cancellation` fires (which closes
+/// the dialog as `Cancel`). The dialog is attached to `owner` only while that
+/// window is visible and not minimized. Returns `None` when the dialog could
+/// not be shown, so the caller falls back to chained three-button prompts.
 pub(crate) fn show_overwrite_prompt(
     prompt: &OverwritePrompt<'_>,
+    app: &tauri::AppHandle,
     owner: Option<&tauri::WebviewWindow>,
     cancellation: &zmanager_core::jobs::CancellationToken,
 ) -> Option<OverwritePromptChoice> {
     #[cfg(target_os = "windows")]
     {
+        let _ = app;
         windows_overwrite_prompt::show(prompt, owner, cancellation)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(target_os = "macos")]
     {
-        let _ = (prompt, owner, cancellation);
-        None
+        macos_overwrite_prompt::show(prompt, app, owner, cancellation)
     }
+    #[cfg(target_os = "linux")]
+    {
+        linux_overwrite_prompt::show(prompt, app, owner, cancellation)
+    }
+}
+
+/// Runs `show` on the main thread, where AppKit and GTK UI must live, and
+/// blocks the calling worker thread until it returns. `show` owns
+/// cancellation: it polls the job's token and closes its dialog as `Cancel`.
+#[cfg(not(target_os = "windows"))]
+fn run_prompt_on_main_thread(app: &tauri::AppHandle, show: impl FnOnce() -> Option<OverwritePromptChoice> + Send + 'static) -> Option<OverwritePromptChoice> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    app.run_on_main_thread(move || {
+        let _ = sender.send(show());
+    })
+    .ok()?;
+    // A closure dropped unrun (the event loop is shutting down) disconnects
+    // the channel, which reads as "could not be shown".
+    receiver.recv().ok().flatten()
 }
 
 /// `time` in the user's local time zone (`YYYY-MM-DD HH:MM:SS`), when the
@@ -366,10 +399,9 @@ pub(crate) fn format_local_time(time: std::time::SystemTime) -> Option<String> {
     {
         windows_overwrite_prompt::format_local_time(time)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(unix)]
     {
-        let _ = time;
-        None
+        unix_local_time::format_local_time(time)
     }
 }
 

@@ -1217,6 +1217,7 @@ impl InteractiveOverwriteResolver {
                 skip: "&Skip",
                 skip_all: "Skip a&ll",
                 rename_all: "Re&name all",
+                cancel: "Cancel",
             },
             InteractiveOverwriteLocale::SimplifiedChinese => crate::platform::OverwritePrompt {
                 title: "确认替换文件",
@@ -1227,10 +1228,11 @@ impl InteractiveOverwriteResolver {
                 skip: "跳过(&S)",
                 skip_all: "全部跳过(&L)",
                 rename_all: "全部重命名(&N)",
+                cancel: "取消",
             },
         };
         let owner = self.task_window();
-        if let Some(choice) = crate::platform::show_overwrite_prompt(&prompt, owner.as_ref(), &self.cancellation) {
+        if let Some(choice) = crate::platform::show_overwrite_prompt(&prompt, &self.app, owner.as_ref(), &self.cancellation) {
             return single_prompt_decision(choice);
         }
         self.prompt_chained_decision(conflict)

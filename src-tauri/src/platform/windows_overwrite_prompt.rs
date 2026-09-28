@@ -9,8 +9,8 @@ use windows_sys::Win32::{
     System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime},
     UI::{
         Controls::{
-            TASKDIALOG_BUTTON, TASKDIALOGCONFIG, TD_WARNING_ICON, TDCBF_CANCEL_BUTTON, TDF_ALLOW_DIALOG_CANCELLATION, TDF_CALLBACK_TIMER,
-            TDF_POSITION_RELATIVE_TO_WINDOW, TDM_CLICK_BUTTON, TDN_TIMER, TaskDialogIndirect,
+            TASKDIALOG_BUTTON, TASKDIALOGCONFIG, TD_WARNING_ICON, TDF_ALLOW_DIALOG_CANCELLATION, TDF_CALLBACK_TIMER, TDF_POSITION_RELATIVE_TO_WINDOW,
+            TDM_CLICK_BUTTON, TDN_TIMER, TaskDialogIndirect,
         },
         WindowsAndMessaging::{IDCANCEL, IsIconic, IsWindowVisible, SendMessageW},
     },
@@ -35,6 +35,9 @@ pub(super) fn show(prompt: &OverwritePrompt<'_>, owner: Option<&tauri::WebviewWi
         (SKIP_ID, wide(prompt.skip)),
         (SKIP_ALL_ID, wide(prompt.skip_all)),
         (RENAME_ALL_ID, wide(prompt.rename_all)),
+        // A custom IDCANCEL button, rather than the common one, so its label
+        // follows the app's language instead of the system's.
+        (IDCANCEL, wide(prompt.cancel)),
     ];
     let buttons: Vec<TASKDIALOG_BUTTON> = labels.iter().map(|(id, label)| TASKDIALOG_BUTTON { nButtonID: *id, pszButtonText: label.as_ptr() }).collect();
     let owner = owner_hwnd(owner);
@@ -45,7 +48,6 @@ pub(super) fn show(prompt: &OverwritePrompt<'_>, owner: Option<&tauri::WebviewWi
     config.cbSize = size_of::<TASKDIALOGCONFIG>() as u32;
     config.hwndParent = owner;
     config.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_CALLBACK_TIMER | if owner.is_null() { 0 } else { TDF_POSITION_RELATIVE_TO_WINDOW };
-    config.dwCommonButtons = TDCBF_CANCEL_BUTTON;
     config.pszWindowTitle = title.as_ptr();
     config.Anonymous1.pszMainIcon = TD_WARNING_ICON;
     config.pszMainInstruction = instruction.as_ptr();

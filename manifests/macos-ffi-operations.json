@@ -38,6 +38,10 @@
     {
       "name": "zmanager_macos_start_promise_drag",
       "type": "async-drag"
+    },
+    {
+      "name": "zmanager_macos_show_overwrite_prompt",
+      "type": "sync-prompt"
     }
   ]
 }
