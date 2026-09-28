@@ -54,25 +54,26 @@ const CREATE_DEFAULTS = {
  * `followSymlinks` left unset (the request default).
  *
  * `"preserved"` writes it back as a symlink. `"dropped"` omits the entry
- * entirely — silent data loss from a user's point of view, so it is asserted
- * explicitly rather than avoided.
+ * entirely. `"materialized"` writes the link target's contents as a regular
+ * file. Each behavior is asserted explicitly rather than avoided.
  *
  * Every round trip puts a real symlink in its source tree and adjusts the
  * expectation to match. Omitting the symlink from the source instead — the
  * easier option — would mean a writer that changed its handling, in either
  * direction, would go unnoticed.
  */
-type SymlinkHandling = "preserved" | "dropped";
+type SymlinkHandling = "preserved" | "dropped" | "materialized";
 
 /**
  * Formats that both write and read the shared payload tree, and what each does
- * with the symlink.
+ * with the symlink. TZAP materializes the source symlink as a regular file,
+ * matching the committed TZAP fixture contract.
  *
  * These values record measured behaviour, not intent. Notably the committed
  * `basic.7z` and `basic.tzap` fixtures carry the link as a regular *file*,
- * because the CLI that generated them followed it; the application's create
- * path drops it instead. Deliberately covering `followSymlinks: true` belongs
- * with the rest of the create-option matrix.
+ * because the CLI that generated them followed it. The application create
+ * path drops the 7z link but materializes the TZAP link. Deliberately covering
+ * `followSymlinks: true` belongs with the rest of the create-option matrix.
  *
  * `appleArchive` is macOS-only and is added below at runtime rather than being
  * gated with a skip, so the list stays honest about what actually ran.
@@ -90,7 +91,7 @@ const ROUND_TRIP_FORMATS: ReadonlyArray<RoundTripFormat> = [
     symlinks: "preserved",
   },
   { format: "sevenZ", extension: "7z", symlinks: "dropped" },
-  { format: "tzap", extension: "tzap", symlinks: "dropped" },
+  { format: "tzap", extension: "tzap", symlinks: "materialized" },
   { format: "tarGz", extension: "tar.gz", symlinks: "preserved" },
   { format: "tarZst", extension: "tar.zst", symlinks: "preserved" },
 ];
@@ -134,12 +135,36 @@ function withSymlinksDropped(tree: Map<string, DiskEntry>): Map<string, DiskEntr
   return adjusted;
 }
 
+/** Adjusts an expected tree for a writer that materializes symlinks. */
+function withSymlinksMaterialized(tree: Map<string, DiskEntry>): Map<string, DiskEntry> {
+  const adjusted = new Map(tree);
+  let materialized = 0;
+  for (const [entryPath, entry] of tree) {
+    if (entry.kind !== "symlink") continue;
+
+    assert.ok(entry.target, `symlink ${entryPath} should have a target`);
+    const targetPath = path.posix.normalize(path.posix.join(path.posix.dirname(entryPath), entry.target));
+    const target = tree.get(targetPath);
+    assert.ok(target?.kind === "file", `symlink target ${targetPath} should be a regular file in the source tree`);
+    adjusted.set(entryPath, { path: entryPath, kind: "file", contents: target.contents });
+    materialized += 1;
+  }
+  if (tree.size > 0 && symlinkFixturesSupported()) {
+    assert.ok(materialized > 0, "expected the source tree to contain a symlink to materialize");
+  }
+  return adjusted;
+}
+
 /** Builds the expected extracted tree for a format's symlink handling. */
 function expectedTreeFor(sourceTree: Map<string, DiskEntry>, format: Pick<RoundTripFormat, "symlinks">): Map<string, DiskEntry> {
-  if (format.symlinks === "dropped") {
-    return withSymlinksDropped(sourceTree);
+  switch (format.symlinks) {
+    case "dropped":
+      return withSymlinksDropped(sourceTree);
+    case "materialized":
+      return withSymlinksMaterialized(sourceTree);
+    case "preserved":
+      return sourceTree;
   }
-  return sourceTree;
 }
 
 function diffRoundTrip(expected: Map<string, DiskEntry>, extracted: Map<string, DiskEntry>): string[] {
