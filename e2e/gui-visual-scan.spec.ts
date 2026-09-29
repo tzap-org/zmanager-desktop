@@ -623,7 +623,10 @@ test("secondary GUI surfaces have visible, bounded controls", async ({ page }) =
   expect(copiedDiagnostics).not.toContain("customOutputFolderPath");
   expect(copiedDiagnostics).not.toContain("password");
   expect(copiedDiagnostics).not.toContain("C:/Users/");
-  await expect(page.locator("#copy-diagnostics")).toHaveText("Copy Diagnostics", { timeout: 2000 });
+  // The button's own revert timer is 1400ms (DialogRoot.tsx); a contended CI
+  // runner can delay that setTimeout firing well past its nominal duration,
+  // so give this real margin rather than the production timer's own value.
+  await expect(page.locator("#copy-diagnostics")).toHaveText("Copy Diagnostics", { timeout: 8_000 });
   await captureAndScan(page, "11-about-dialog");
   await closeDevSurface(page);
 
