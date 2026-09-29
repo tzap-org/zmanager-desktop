@@ -517,7 +517,9 @@ export async function runJobInTaskWindow(
       if ((await browser.tauri.listWindows()).includes(label)) {
         throw error;
       }
-      snapshot = await waitForTaskJob(started.jobId, Math.max(deadline - Date.now(), 20_000));
+      // The main window's capability does not grant subscribe_job (only task
+      // windows do), so poll get_job_snapshot instead.
+      snapshot = await pollJobSnapshotFromMain(started.jobId, Math.max(deadline - Date.now(), 20_000));
       if (snapshot.status !== "completed") {
         throw error;
       }
@@ -539,6 +541,20 @@ export async function runJobInTaskWindow(
     // Closing through the task UI exercises its own close/destroy path and
     // leaves no test-created window behind for the next spec.
     await closeTaskWindow(label);
+  }
+}
+
+async function pollJobSnapshotFromMain(jobId: string, timeoutMs: number): Promise<TaskJobSnapshot> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const snapshot = await invokeOk<TaskJobSnapshot>("get_job_snapshot", { request: { jobId } });
+    if (["completed", "failed", "cancelled"].includes(snapshot.status)) {
+      return snapshot;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`job ${jobId} did not finish within ${timeoutMs}ms`);
+    }
+    await browser.pause(500);
   }
 }
 
