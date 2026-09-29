@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-TAG="${1:-v2.1.0}"
+TAG="${1:-v2.1.7}"
 REPO="${2:-https://github.com/tzap-org/zmanager}"
 CARGO_FILE="${3:-src-tauri/Cargo.toml}"
 

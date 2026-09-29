@@ -1,5 +1,5 @@
 param(
-    [string]$Tag = "v2.1.0",
+    [string]$Tag = "v2.1.7",
     [string]$Repo = "https://github.com/tzap-org/zmanager",
     [string]$CargoFile = "src-tauri/Cargo.toml"
 )
