@@ -189,12 +189,18 @@ function Ensure-SiblingRepo {
 $zmanagerDesktopDir = if ($env:ZMANAGER_DESKTOP_DIR) { $env:ZMANAGER_DESKTOP_DIR } else { Join-Path $parentDir "zmanager-desktop" }
 
 if (Test-GitWorktree -Directory $repoRoot) {
+    & $git -C $repoRoot symbolic-ref -q HEAD *> $null
+    if ($LASTEXITCODE -ne 0) {
+        # Release/tag builds check out a detached HEAD; build exactly that commit.
+        Write-Host "zmanager-desktop is on a detached HEAD at ${repoRoot}; skipping self-update."
+    } else {
     Write-Host "Updating zmanager-desktop repository at: $repoRoot"
-        try {
-            Invoke-Native -FilePath $git -Arguments @("-C", $repoRoot, "pull", "--rebase", "--autostash")
-            Assert-NoUnmergedConflicts -Directory $repoRoot -Name "zmanager-desktop"
+    try {
+        Invoke-Native -FilePath $git -Arguments @("-C", $repoRoot, "pull", "--rebase", "--autostash")
+        Assert-NoUnmergedConflicts -Directory $repoRoot -Name "zmanager-desktop"
     } catch {
         throw "Unable to update zmanager-desktop at ${repoRoot}; refusing to build. $_"
+    }
     }
 }
 

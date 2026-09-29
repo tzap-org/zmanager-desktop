@@ -141,7 +141,12 @@ ensure_no_unmerged_conflicts() {
 
 zmanager_desktop_dir="${ZMANAGER_DESKTOP_DIR:-$parent_dir/zmanager-desktop}"
 
-if git -C "$repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+if ! git -C "$repo_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  :
+elif ! git -C "$repo_root" symbolic-ref -q HEAD >/dev/null; then
+  # Release/tag builds check out a detached HEAD; build exactly that commit.
+  echo "zmanager-desktop is on a detached HEAD at $repo_root; skipping self-update."
+else
   echo "Updating zmanager-desktop repository at: $repo_root"
   if ! git -C "$repo_root" pull --rebase --autostash ||
     ! ensure_no_unmerged_conflicts "$repo_root" "zmanager-desktop"; then

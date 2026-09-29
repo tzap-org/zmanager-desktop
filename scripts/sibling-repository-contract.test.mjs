@@ -197,3 +197,20 @@ test("shell updater stops on an autostash conflict", () => {
     rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+
+test("shell updater builds a detached-HEAD checkout without self-updating", () => {
+  const fixture = createSiblingUpdateFixture();
+  try {
+    git(fixture.workspace, ["init", "--initial-branch=main"]);
+    configureGitUser(fixture.workspace);
+    git(fixture.workspace, ["add", "."]);
+    git(fixture.workspace, ["commit", "-m", "tagged release"]);
+    git(fixture.workspace, ["checkout", "--detach"]);
+
+    const output = runUpdater(fixture);
+
+    assert.match(output, /detached HEAD[\s\S]*skipping self-update/);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
