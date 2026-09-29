@@ -497,9 +497,31 @@ export async function runJobInTaskWindow(
   timeoutMs = 120_000,
 ): Promise<TaskJobOutcome> {
   const started = await invokeOk<StartedTaskJob>(command, { request });
-  const label = await openTaskWindowForJob(started);
+  const label = `task-${started.jobId.replace(/[^a-zA-Z0-9-]/g, "-")}`;
+  const deadline = Date.now() + timeoutMs;
   try {
-    const snapshot = await waitForTaskJob(started.jobId, timeoutMs);
+    let snapshot: TaskJobSnapshot;
+    try {
+      await openTaskWindowForJob(started);
+      snapshot = await waitForTaskJob(started.jobId, timeoutMs);
+    } catch (error) {
+      // A successful task window auto-closes shortly after completion
+      // (AUTO_CLOSE_SUCCESS_MS in DisposableTaskRuntimeApp). A fast job can
+      // finish and destroy its window while we are still switching to or
+      // querying it; WebView2 never answers a command on a destroyed webview,
+      // so that surfaces as a ~30s "Script execution timed out" followed by
+      // "No window could be found". That is the product behavior, not a
+      // failure: if the window is gone, read the job's terminal state from
+      // the main window and only rethrow when the job did not succeed.
+      await browser.tauri.switchWindow("main").catch(() => undefined);
+      if ((await browser.tauri.listWindows()).includes(label)) {
+        throw error;
+      }
+      snapshot = await waitForTaskJob(started.jobId, Math.max(deadline - Date.now(), 20_000));
+      if (snapshot.status !== "completed") {
+        throw error;
+      }
+    }
     if (snapshot.status === "failed") {
       await $("[role='alert']").waitForExist({ timeout: 5_000 });
       const taskText = await $("[data-task-content]").getText();
