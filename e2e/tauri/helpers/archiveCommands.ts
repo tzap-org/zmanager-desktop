@@ -520,12 +520,45 @@ export async function runJobInTaskWindow(
   }
 }
 
-export async function waitForTaskJob(jobId: string, timeoutMs: number): Promise<{
+type TaskJobSnapshot = {
   status: string;
   latestFailure?: { code?: string; message?: string; hint?: string | null } | null;
   boundedNotices?: Array<{ eventType?: string; code?: string | null }>;
-}> {
-  const snapshot = (await browser.tauri.execute(
+};
+
+/**
+ * browser.tauri.execute is backed by @wdio/tauri-service's DirectEvalClient,
+ * which enforces its own fixed ~30s ceiling per call with no option exposed
+ * to raise it (confirmed by reading its source: `new DirectEvalClient(port)`
+ * always takes the class's 30_000 default, and the public `execute()` never
+ * passes a `timeoutMs`). A single call that blocks in-page for a job's full
+ * `timeoutMs` (up to 120s) therefore always loses to that ceiling once a job
+ * legitimately runs longer than it - which is exactly what surfaced this: a
+ * real TZAP-signed extract is slower than every job archive-task-failures.ts
+ * waits on. Chunk the wait into repeated short subscribe/unsubscribe cycles,
+ * each safely under that ceiling, and track the real elapsed time ourselves
+ * across chunks instead of relying on a single in-page timer. A late
+ * resubscribe still sees the job's current snapshot immediately (it is not
+ * subscribing to a stream of only-future changes), so no chunk boundary can
+ * miss a terminal status.
+ */
+export async function waitForTaskJob(jobId: string, timeoutMs: number): Promise<TaskJobSnapshot> {
+  const chunkMs = 20_000;
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) {
+      throw new Error(`job ${jobId} did not finish within ${timeoutMs}ms`);
+    }
+    const snapshot = await waitForTaskJobChunk(jobId, Math.min(chunkMs, remaining));
+    if (snapshot) {
+      return snapshot;
+    }
+  }
+}
+
+async function waitForTaskJobChunk(jobId: string, chunkBudgetMs: number): Promise<TaskJobSnapshot | null> {
+  const result = (await browser.tauri.execute(
     `async function (tauri, targetJobId, budgetMs) {
       var core = tauri.core;
       var channel = new globalThis.__TAURI__.core.Channel();
@@ -538,7 +571,7 @@ export async function waitForTaskJob(jobId: string, timeoutMs: number): Promise<
         }).catch(function () {});
         if (envelope.payload && envelope.payload.jobId === targetJobId &&
             ["completed", "failed", "cancelled"].includes(envelope.payload.status)) {
-          settle(envelope.payload);
+          settle({ snapshot: envelope.payload });
         }
       };
       var subscriptionId = null;
@@ -547,7 +580,7 @@ export async function waitForTaskJob(jobId: string, timeoutMs: number): Promise<
           request: { jobId: targetJobId }, onSnapshot: channel
         });
         var timer = setTimeout(function () {
-          settle({ error: "job " + targetJobId + " did not finish within " + budgetMs + "ms" });
+          settle({ timedOut: true });
         }, budgetMs);
         var outcome = await result;
         clearTimeout(timer);
@@ -562,10 +595,11 @@ export async function waitForTaskJob(jobId: string, timeoutMs: number): Promise<
       }
     }`,
     jobId,
-    timeoutMs,
-  )) as { status: string; latestFailure?: { code?: string; message?: string; hint?: string | null } | null; boundedNotices?: Array<{ eventType?: string; code?: string | null }> } | { error: string };
-  if ("error" in snapshot) throw new Error(snapshot.error);
-  return snapshot;
+    chunkBudgetMs,
+  )) as { snapshot: TaskJobSnapshot } | { timedOut: true } | { error: string };
+  if ("error" in result) throw new Error(result.error);
+  if ("timedOut" in result) return null;
+  return result.snapshot;
 }
 
 /**

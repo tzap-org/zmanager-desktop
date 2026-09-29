@@ -90,17 +90,6 @@ const tauriCapabilities: TauriCapabilities = {
   "tauri:options": {
     application: appBinaryPath,
   },
-  // Unset, this falls back to the driver's default async-script timeout
-  // (observed as 30s in CI), which silently truncates waitForTaskJob's
-  // in-page wait well before the timeoutMs it is actually given (up to
-  // 120s for a real archive job). Set it above the largest timeoutMs any
-  // spec passes to runJobInTaskWindow/waitForTaskJob so that budget is the
-  // one that actually governs how long a job wait can run.
-  timeouts: {
-    implicit: 0,
-    pageLoad: 300_000,
-    script: 150_000,
-  },
 };
 
 export const config: WebdriverIO.Config = {
