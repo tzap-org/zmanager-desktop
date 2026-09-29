@@ -717,7 +717,9 @@ fn start_create_internal_with_resolver(
     Ok(response)
 }
 
-#[tauri::command]
+// Runs off the main thread: recipient-key resolution reads the account catalog
+// and secure store before the worker is spawned.
+#[tauri::command(async)]
 pub fn start_extract(
     request: StartExtractRequest,
     app: AppHandle,
