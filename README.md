@@ -15,7 +15,7 @@ If someone sends you an archive and you are not sure which tool to use, start
 with ZManager. It can open a very broad range of existing files, while keeping
 new archive creation focused on formats that are fast, compatible, or secure.
 
-## Latest release: 1.2.4
+## Latest release: 1.2.5
 
 The latest release packages the cross-platform desktop app for macOS arm64 and
 x86_64, Windows x64 and ARM64, and Linux x64 and ARM64. Release assets include
@@ -23,7 +23,7 @@ macOS DMG and ZIP packages, Windows installer and portable binaries, Linux DEB
 and RPM packages, a generated third-party license bundle, and SHA256 checksums
 for verification.
 
-See the [full release notes](https://github.com/frankmanzhu/zmanager-desktop/releases/tag/v1.2.4)
+See the [full release notes](https://github.com/frankmanzhu/zmanager-desktop/releases/tag/v1.2.5)
 and download the installers from [GitHub Releases](https://github.com/frankmanzhu/zmanager-desktop/releases/latest).
 
 ## What can I do with it?
