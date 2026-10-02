@@ -882,7 +882,7 @@ pub fn verify_tzap_certificate(request: crate::dto::VerifyTzapCertificateRequest
         return Err(CommandErrorDto::invalid_request("certificate verification is available only for TZAP archives"));
     }
 
-    if request.check_current_status {
+    if request.check_current_status && cfg!(feature = "hosted-online") {
         let trust = zmanager_core::engine::tzap::TzapX509TrustOptions {
             trusted_ca_certificates: request.trusted_ca_certificate_paths.iter().map(PathBuf::from).collect(),
             trusted_system_roots: request.trusted_system_roots,

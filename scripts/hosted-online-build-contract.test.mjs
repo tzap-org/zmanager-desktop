@@ -5,11 +5,12 @@ import { test } from "node:test";
 
 const repositoryRoot = resolve(import.meta.dirname, "..");
 
-test("the product build enables hosted online account sign-in by default", () => {
+test("the product defaults to the local profile and exposes online explicitly", () => {
   const manifest = readFileSync(resolve(repositoryRoot, "src-tauri/Cargo.toml"), "utf8");
   const features = manifest.match(/\[features\]([\s\S]*?)(?:\n\[|$)/)?.[1] ?? "";
 
-  assert.match(features, /default\s*=\s*\[[^\]]*"hosted-online"/, "the default Cargo feature set must enable hosted-online");
+  assert.match(features, /default\s*=\s*\[\s*\]/, "the default Cargo feature set must be local");
+  assert.match(features, /online-profile\s*=\s*\[\s*"hosted-online"\s*\]/, "the online profile must enable hosted-online");
 });
 
 test("the opener capability includes a scoped default URL permission", () => {
@@ -36,7 +37,10 @@ test("Windows build entry points keep local E2E on staging and production explic
   const uiaDriver = readFileSync(resolve(repositoryRoot, "scripts/windows-uia-account-action.ps1"), "utf8");
 
   assert.match(batch, /if not defined BUILD_ENV set "BUILD_ENV=staging"/u);
-  assert.match(batch, /-Environment "%BUILD_ENV%"/u);
+  assert.match(batch, /if not defined PROFILE set "PROFILE=local"/u);
+  assert.match(batch, /-Environment "%BUILD_ENV%" -Profile "%PROFILE%"/u);
+  assert.match(staticBuild, /ValidateSet\("local", "online"\)[\s\S]*?Profile = "local"/u);
+  assert.match(staticBuild, /--no-default-features --features online-profile/u);
   assert.match(staticBuild, /ValidateSet\("staging", "prod"\)[\s\S]*?Environment = "staging"/u);
   assert.match(staticBuild, /VITE_TZAP_BUILD_ENV = \$Environment/u);
   assert.match(staticBuild, /ZMANAGER_TZAP_SERVER_BASE_URL = "https:\/\/staging\.tzap\.org"/u);

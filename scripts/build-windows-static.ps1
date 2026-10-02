@@ -1,6 +1,8 @@
 param(
     [ValidateSet("staging", "prod")]
     [string]$Environment = "staging",
+    [ValidateSet("local", "online")]
+    [string]$Profile = "local",
     [string]$VcpkgRoot = "C:\vcpkg",
     [string]$PerlBin = "C:\Strawberry\perl\bin",
     [ValidateSet("Auto", "x64", "arm64")]
@@ -9,6 +11,10 @@ param(
     [string]$NodePath = "",
     [switch]$InstallClang,
     [switch]$Install,
+    [switch]$BuildStoreMsix,
+    [string]$StorePackageName = "",
+    [string]$StorePublisher = "",
+    [string]$StorePublisherDisplayName = "",
     [string]$InstallDir = "",
     [ValidateRange(30, 3600)]
     [int]$InstallerTimeoutSeconds = 300,
@@ -27,11 +33,14 @@ Set-Location $repoRoot
 # a different environment after compilation.
 $env:ZMANAGER_TZAP_BUILD_ENV = $Environment
 $env:VITE_TZAP_BUILD_ENV = $Environment
+$env:VITE_ZMANAGER_PROFILE = $Profile
+$env:VITE_ENABLE_HOSTED_CAPABILITIES = if ($Profile -eq "online") { "true" } else { "false" }
 if ($Environment -eq "staging") {
     $env:ZMANAGER_TZAP_SERVER_BASE_URL = "https://staging.tzap.org"
 } else {
     Remove-Item Env:ZMANAGER_TZAP_SERVER_BASE_URL -ErrorAction SilentlyContinue
 }
+Write-Host "Build profile: $Profile"
 Write-Host "Hosted account build environment: $Environment"
 
 # Respect CARGO_TARGET_DIR so build artifacts land in a short path
@@ -298,7 +307,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 if ($npmCommand) {
-    $runCommand = "& '$resolvedNodePath' '$tauriCli' build --target $targetTriple"
+    $runCommand = if ($Profile -eq "online") {
+        "& '$resolvedNodePath' '$tauriCli' build --target $targetTriple -- --no-default-features --features online-profile"
+    } else {
+        "& '$resolvedNodePath' '$tauriCli' build --target $targetTriple -- --no-default-features"
+    }
 } else {
     $shimDir = Join-Path $env:TEMP "zmanager-desktop-build-shims"
     New-Item -ItemType Directory -Force -Path $shimDir | Out-Null
@@ -328,7 +341,11 @@ exit /b 1
 
     $env:PATH = "$shimDir;" + $env:PATH
     Write-Host "npm was not found; using local Node and a temporary npm run build shim."
-    $runCommand = "& '$resolvedNodePath' '$tauriCli' build --target $targetTriple"
+    $runCommand = if ($Profile -eq "online") {
+        "& '$resolvedNodePath' '$tauriCli' build --target $targetTriple -- --no-default-features --features online-profile"
+    } else {
+        "& '$resolvedNodePath' '$tauriCli' build --target $targetTriple -- --no-default-features"
+    }
 }
 
 & (Join-Path $PSScriptRoot "setup-windows-static-env.ps1") `
@@ -342,6 +359,25 @@ exit /b 1
 $buildExitCode = $LASTEXITCODE
 if ($buildExitCode -ne 0) {
     exit $buildExitCode
+}
+
+if ($BuildStoreMsix) {
+    if ([string]::IsNullOrWhiteSpace($StorePackageName) -or
+        [string]::IsNullOrWhiteSpace($StorePublisher) -or
+        [string]::IsNullOrWhiteSpace($StorePublisherDisplayName)) {
+        throw "-BuildStoreMsix requires -StorePackageName, -StorePublisher, and -StorePublisherDisplayName from Partner Center."
+    }
+
+    $msixScript = Join-Path $PSScriptRoot "package-windows-msix.ps1"
+    & $msixScript `
+        -CargoTargetDir $cargoTargetDir `
+        -Architecture $resolvedArch `
+        -PackageName $StorePackageName `
+        -Publisher $StorePublisher `
+        -PublisherDisplayName $StorePublisherDisplayName
+    if ($LASTEXITCODE -ne 0) {
+        throw "Microsoft Store MSIX packaging failed with exit code $LASTEXITCODE."
+    }
 }
 
 if ($Install) {

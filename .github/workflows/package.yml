@@ -367,6 +367,7 @@ jobs:
         run: |
           .\scripts\prepare-windows-static-build.ps1 `
             -Environment prod `
+            -Profile online `
             -Architecture ${{ matrix.arch }} `
             -InstallMissing `
             -InstallNodeModules `

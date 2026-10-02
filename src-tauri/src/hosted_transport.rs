@@ -1,8 +1,11 @@
+#[cfg(feature = "hosted-online")]
 use reqwest::blocking::Client;
+#[cfg(feature = "hosted-online")]
 use std::time::Duration;
 use url::Url;
 use zmanager_tzap_hosted::auth_client::{TzapAuthError, TzapAuthHttpMethod, TzapAuthHttpRequest, TzapAuthHttpResponse, TzapAuthHttpTransport};
 
+#[cfg(feature = "hosted-online")]
 const DESKTOP_USER_AGENT: &str = concat!("ZManager-Desktop/", env!("CARGO_PKG_VERSION"));
 
 pub fn ensure_hosted_request_url(base_url: &str) -> Result<(), String> {
@@ -18,68 +21,96 @@ pub fn ensure_hosted_request_url(base_url: &str) -> Result<(), String> {
 }
 
 pub struct HostedHttpTransport {
+    #[cfg(feature = "hosted-online")]
     client: Client,
 }
 
 impl HostedHttpTransport {
     pub fn new() -> Result<Self, String> {
-        // The desktop crate uses reqwest/rustls for both hosted HTTPS and
-        // LocalSend. Install the explicit provider before any client is built;
-        // the reqwest `rustls-no-provider` feature intentionally leaves this
-        // application-level choice to the caller.
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let client = Client::builder()
-            .user_agent(DESKTOP_USER_AGENT)
-            .timeout(Duration::from_secs(3))
-            .connect_timeout(Duration::from_secs(2))
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+        #[cfg(feature = "hosted-online")]
+        {
+            // The desktop crate uses reqwest/rustls for both hosted HTTPS and
+            // LocalSend. Install the explicit provider before any client is built;
+            // the reqwest `rustls-no-provider` feature intentionally leaves this
+            // application-level choice to the caller.
+            let _ = rustls::crypto::ring::default_provider().install_default();
+            let client = Client::builder()
+                .user_agent(DESKTOP_USER_AGENT)
+                .timeout(Duration::from_secs(3))
+                .connect_timeout(Duration::from_secs(2))
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
 
-        Ok(Self { client })
+            Ok(Self { client })
+        }
+
+        #[cfg(not(feature = "hosted-online"))]
+        {
+            Err("Hosted online transport is unavailable in the local profile".to_owned())
+        }
     }
 }
 
 impl TzapAuthHttpTransport for HostedHttpTransport {
     fn send(&self, request: &TzapAuthHttpRequest) -> Result<TzapAuthHttpResponse, TzapAuthError> {
-        ensure_hosted_request_url(&request.url).map_err(|message| TzapAuthError::Transport { message })?;
-        let method = match request.method {
-            TzapAuthHttpMethod::Get => reqwest::Method::GET,
-            TzapAuthHttpMethod::Post => reqwest::Method::POST,
-            TzapAuthHttpMethod::Put => reqwest::Method::PUT,
-            TzapAuthHttpMethod::Delete => reqwest::Method::DELETE,
-        };
+        #[cfg(feature = "hosted-online")]
+        {
+            ensure_hosted_request_url(&request.url).map_err(|message| TzapAuthError::Transport { message })?;
+            let method = match request.method {
+                TzapAuthHttpMethod::Get => reqwest::Method::GET,
+                TzapAuthHttpMethod::Post => reqwest::Method::POST,
+                TzapAuthHttpMethod::Put => reqwest::Method::PUT,
+                TzapAuthHttpMethod::Delete => reqwest::Method::DELETE,
+            };
 
-        let mut req = self.client.request(method, &request.url);
+            let mut req = self.client.request(method, &request.url);
 
-        for (name, value) in &request.headers {
-            req = req.header(name, value);
-        }
-
-        if let Some(token) = &request.bearer_token {
-            req = req.bearer_auth(token.expose());
-        }
-
-        if let Some(body) = &request.body {
-            req = req.json(body);
-        }
-
-        let response = req.send().map_err(|e| TzapAuthError::Transport { message: format!("HTTP request failed: {}", e) })?;
-
-        let status_code = response.status().as_u16();
-        let mut headers = Vec::new();
-        for (name, value) in response.headers() {
-            if let Ok(value_str) = value.to_str() {
-                headers.push((name.as_str().to_owned(), value_str.to_owned()));
+            for (name, value) in &request.headers {
+                req = req.header(name, value);
             }
-        }
-        let body = response.bytes().map_err(|e| TzapAuthError::Transport { message: format!("Failed to read HTTP response body: {}", e) })?.to_vec();
 
-        Ok(TzapAuthHttpResponse { status_code, headers, body })
+            if let Some(token) = &request.bearer_token {
+                req = req.bearer_auth(token.expose());
+            }
+
+            if let Some(body) = &request.body {
+                req = req.json(body);
+            }
+
+            let response = req.send().map_err(|e| TzapAuthError::Transport { message: format!("HTTP request failed: {}", e) })?;
+
+            let status_code = response.status().as_u16();
+            let mut headers = Vec::new();
+            for (name, value) in response.headers() {
+                if let Ok(value_str) = value.to_str() {
+                    headers.push((name.as_str().to_owned(), value_str.to_owned()));
+                }
+            }
+            let body = response.bytes().map_err(|e| TzapAuthError::Transport { message: format!("Failed to read HTTP response body: {}", e) })?.to_vec();
+
+            Ok(TzapAuthHttpResponse { status_code, headers, body })
+        }
+
+        #[cfg(not(feature = "hosted-online"))]
+        {
+            let _ = request;
+            Err(TzapAuthError::Transport { message: "Hosted online transport is unavailable in the local profile".to_owned() })
+        }
     }
 }
 
-#[cfg(test)]
+/// Transport used by the certificate-chain resolver when it may consult only
+/// the local intermediate cache.
+pub struct OfflineIntermediateTransport;
+
+impl TzapAuthHttpTransport for OfflineIntermediateTransport {
+    fn send(&self, _request: &TzapAuthHttpRequest) -> Result<TzapAuthHttpResponse, TzapAuthError> {
+        Err(TzapAuthError::Transport { message: "Network access is disabled for local intermediate resolution".to_owned() })
+    }
+}
+
+#[cfg(all(test, feature = "hosted-online"))]
 mod tests {
     use super::*;
     use std::io::{Read, Write};

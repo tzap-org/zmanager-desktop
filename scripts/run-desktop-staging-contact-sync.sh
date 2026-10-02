@@ -11,5 +11,5 @@ GUI_TEST_STATE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/zmanager-desktop-gui-test.XXXXX
 trap 'rm -rf "$GUI_TEST_STATE_DIR"' EXIT
 export ZMANAGER_GUI_TEST_STATE_DIR="$GUI_TEST_STATE_DIR"
 
-npm run tauri build -- --debug --no-bundle --features hosted-online --config src-tauri/tauri.gui.conf.json
+VITE_ZMANAGER_PROFILE=online VITE_ENABLE_HOSTED_CAPABILITIES=true npm run tauri build -- --debug --no-bundle --features online-profile --config src-tauri/tauri.gui.conf.json -- --no-default-features
 ZMANAGER_GUI_APP_PATH="$(pwd)/src-tauri/target/debug/zmanager-desktop" npm run test:gui:run -- --spec e2e/tauri/staging-contact-sync.spec.ts

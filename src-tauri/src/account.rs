@@ -32,6 +32,7 @@ use zmanager_tzap_hosted::certificate_lifecycle::{
 use zmanager_tzap_hosted::enrollment_client::{TzapEnrollmentCertificateValidator, TzapEnrollmentClient, TzapEnrollmentError, TzapEnrollmentRequest};
 use zmanager_tzap_hosted::intermediate_client::TzapOnlineIntermediateResolver;
 use zmanager_tzap_hosted::local_identity_store::{TzapLocalIdentityStore, TzapSignDeviceRouting};
+#[cfg(feature = "hosted-online")]
 use zmanager_tzap_hosted::reqwest_transport::exchange_handoff_code_for_audience;
 use zmanager_tzap_hosted::status_client::{TzapBulkStatusLookup, TzapStatusClient, TzapStatusResponse, classify_contact_status};
 use zmanager_tzap_hosted::trust::{self, TzapCertificateProfileOptions};
@@ -45,6 +46,19 @@ const REDIRECT_URI: &str = "tzap://auth/callback";
 const DESKTOP_DEVICE_NAME: &str = "ZManager Desktop";
 const REGISTERED_DESKTOP_CLIENT_ID: &str = "zmanager_desktop";
 static GUI_TEST_ACCOUNT_STATE_INITIALIZED: OnceLock<()> = OnceLock::new();
+
+#[cfg(not(feature = "hosted-online"))]
+fn exchange_handoff_code_for_audience(
+    _auth_base_url: &str,
+    _client_id: &str,
+    _redirect_uri: &str,
+    _state: &str,
+    _pkce_verifier: &str,
+    _handoff_code: &str,
+    _required_audience: &str,
+) -> Result<Vec<u8>, String> {
+    Err("Hosted online authentication is unavailable in the local profile".to_owned())
+}
 
 fn hosted_device_name() -> String {
     let Some(run_id) = std::env::var_os("TZAP_E2E_RUN_ID") else {
@@ -1299,7 +1313,7 @@ pub fn account_remove_contact(request: AccountIdRequest, app: AppHandle, runtime
 pub fn account_inspect_contact_card(request: AccountContactCardRequest, app: AppHandle) -> Result<AccountContactCardPreviewDto, CommandErrorDto> {
     let root = account_state_dir(&app)?;
     let intermediate_cache = zmanager_core::trust::TzapIntermediateCache::new(root.join("intermediates"));
-    let intermediate_resolver = TzapOnlineIntermediateResolver::with_reqwest(intermediate_cache, None);
+    let intermediate_resolver = TzapOnlineIntermediateResolver::new(intermediate_cache, None, crate::hosted_transport::OfflineIntermediateTransport);
     let verified = verify_contact_card_with_resolver(&request.contact_card, Some(&intermediate_resolver))
         .map_err(|error| account_error("account_contact_card_invalid", error))?;
     Ok(contact_card_preview(&verified))
@@ -1313,7 +1327,7 @@ pub fn account_accept_contact_card(
 ) -> Result<AccountSnapshotDto, CommandErrorDto> {
     let root = account_state_dir(&app)?;
     let intermediate_cache = zmanager_core::trust::TzapIntermediateCache::new(root.join("intermediates"));
-    let intermediate_resolver = TzapOnlineIntermediateResolver::with_reqwest(intermediate_cache, None);
+    let intermediate_resolver = TzapOnlineIntermediateResolver::new(intermediate_cache, None, crate::hosted_transport::OfflineIntermediateTransport);
     let verified = verify_contact_card_with_resolver(&request.contact_card, Some(&intermediate_resolver))
         .map_err(|error| account_error("account_contact_card_invalid", error))?;
     let recipient_public_key_der = verified
@@ -1633,7 +1647,7 @@ pub fn resolve_tzap_create_inputs(
     let now_unix_seconds = current_unix_seconds();
     let secret_store = runtime.1.lock().expect("account secure-store lock poisoned");
     let intermediate_cache = zmanager_core::trust::TzapIntermediateCache::new(root.join("intermediates"));
-    let intermediate_resolver = TzapOnlineIntermediateResolver::with_reqwest(intermediate_cache, None);
+    let intermediate_resolver = TzapOnlineIntermediateResolver::new(intermediate_cache, None, crate::hosted_transport::OfflineIntermediateTransport);
 
     let has_recipient_selection = options.recipient_selection.as_ref().is_some_and(|selection| {
         !selection.recipient_key_ids.is_empty() || !selection.contact_recipient_ids.is_empty() || !selection.one_time_certificate_paths.is_empty()

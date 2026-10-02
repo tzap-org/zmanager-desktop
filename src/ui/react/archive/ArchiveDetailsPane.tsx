@@ -13,6 +13,7 @@ import {
 import { useEffect, useState, type ReactNode } from "react";
 
 import { getKnownArchiveSuffix } from "../../../app/archiveFileTypes";
+import { HOSTED_CAPABILITIES_ENABLED } from "../../../app/hostedCapabilities";
 import { formatBytes, formatDate } from "../../../app/formatting";
 import type { ArchiveWorkspaceDetailsModel } from "../../../app/workspaces/archiveWorkspace";
 import { Checkbox } from "../../components/ui/checkbox";
@@ -216,7 +217,7 @@ function TzapVerification() {
         </div>
       ) : null}
 
-      <label className="mt-3 flex items-center gap-2 text-[11px]">
+      {HOSTED_CAPABILITIES_ENABLED ? <label className="mt-3 flex items-center gap-2 text-[11px]">
         <Checkbox
           id="tzap-current-status"
           checked={verification.checkCurrentStatus}
@@ -229,7 +230,7 @@ function TzapVerification() {
           }
         />
         <span>{i18n.t("extract.tzapVerification.currentStatus")}</span>
-      </label>
+      </label> : null}
 
       <button
         type="button"
@@ -247,7 +248,7 @@ function TzapVerification() {
       >
         {busy
           ? i18n.t("extract.tzapVerification.checking")
-          : verification.checkCurrentStatus
+          : HOSTED_CAPABILITIES_ENABLED && verification.checkCurrentStatus
             ? i18n.t("extract.tzapVerification.checkCurrentStatus")
             : verification.validateTrust
             ? i18n.t("extract.tzapVerification.validate")

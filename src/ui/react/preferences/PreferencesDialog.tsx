@@ -22,6 +22,7 @@ import {
   type FormatCreateDefaults,
 } from "../../../app/preferences";
 import { FIXED_TZAP_BUILD_ENVIRONMENT } from "../../../app/tzapEnvironment";
+import { HOSTED_CAPABILITIES_ENABLED } from "../../../app/hostedCapabilities";
 import { createFormatCapabilities, supportedCreateFormats } from "../../../app/createFormatCapabilities";
 import {
   formatVolumeSize,
@@ -1734,7 +1735,7 @@ function AdvancedPage({
         Developer settings and experimental features.
       </p>
 
-      <section className="mt-6 space-y-4">
+      {HOSTED_CAPABILITIES_ENABLED ? <section className="mt-6 space-y-4">
         <div className={SETTING_ROW_CLASS}>
           <label>TZAP Server Environment</label>
           <div className={SETTING_CONTROL_CLASS}>
@@ -1768,7 +1769,7 @@ function AdvancedPage({
             )}
           </div>
         </div>
-      </section>
+      </section> : null}
     </div>
   );
 }

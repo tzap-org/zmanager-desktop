@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 
 import { createPlanRowInclusionState } from "../../../app/createFlow";
+import { HOSTED_CAPABILITIES_ENABLED } from "../../../app/hostedCapabilities";
 import {
   toolbarGroupsForWorkspaceMode,
   type CommandBarGroup,
@@ -58,8 +59,8 @@ export function CommandToolbar() {
       <Button
         variant="ghost"
         size="icon"
-        aria-label="TZAP Account"
-        title="TZAP Account"
+        aria-label={HOSTED_CAPABILITIES_ENABLED ? "TZAP Account" : "Local Identity & Keys"}
+        title={HOSTED_CAPABILITIES_ENABLED ? "TZAP Account" : "Local Identity & Keys"}
         onClick={() => actions.handleAccountIntent({ type: "open" })}
       >
         <UserRound className="size-4" />

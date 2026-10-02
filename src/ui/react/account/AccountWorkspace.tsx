@@ -8,6 +8,7 @@ import { CertificatesTab } from "./CertificatesTab";
 import { ContactsTab } from "./ContactsTab";
 import { DeviceTab } from "./DeviceTab";
 import { DesktopDialog } from "../dialogs/DesktopDialog";
+import { HOSTED_CAPABILITIES_ENABLED } from "../../../app/hostedCapabilities";
 
 export type AccountWorkspaceProps = {
   defaultTab?: string;
@@ -17,15 +18,14 @@ export function AccountWorkspace({ defaultTab }: AccountWorkspaceProps = {}) {
   const fullSnapshot = useZManagerSnapshot();
   const snapshot = fullSnapshot.account;
   const actions = useZManagerActions();
-  const hostedEnvironment = fullSnapshot.preferences.tzapEnvironment;
-
   const isSignedIn = snapshot.authStatus === "signedIn";
-  const initialTab = defaultTab ?? (isSignedIn ? "session" : "certificates");
+  const showHostedAccount = HOSTED_CAPABILITIES_ENABLED && isSignedIn;
+  const initialTab = defaultTab ?? (showHostedAccount ? "session" : "certificates");
   const [activeTab, setActiveTab] = useState(initialTab);
 
   if (!snapshot.visible) return null;
 
-  const effectiveTab = (!isSignedIn && (activeTab === "session" || activeTab === "device"))
+  const effectiveTab = (!showHostedAccount && (activeTab === "session" || activeTab === "device"))
     ? "certificates"
     : activeTab;
 
@@ -42,21 +42,23 @@ export function AccountWorkspace({ defaultTab }: AccountWorkspaceProps = {}) {
           </div>
           <div className="min-w-0 flex-1">
             <h2 id="account-title" className="text-base font-semibold tracking-tight">
-              TZAP Account &amp; Identity
+              {HOSTED_CAPABILITIES_ENABLED ? "TZAP Account & Identity" : "Local Identity & Keys"}
             </h2>
             <p id="account-description" className="text-xs text-slate-500 dark:text-slate-400">
-              {isSignedIn
+              {showHostedAccount
                 ? `Authenticated as ${snapshot.displayName || "Signed In Account"}`
                 : "Local offline mode · Encryption & signing identities operational"}
             </p>
-            <span data-account-environment={hostedEnvironment} className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400 dark:text-slate-500">
-              Environment: {hostedEnvironment === "staging" ? "Staging" : "Production"}
-            </span>
+            {HOSTED_CAPABILITIES_ENABLED ? (
+              <span data-account-environment={fullSnapshot.preferences.tzapEnvironment} className="text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400 dark:text-slate-500">
+                Environment: {fullSnapshot.preferences.tzapEnvironment === "staging" ? "Staging" : "Production"}
+              </span>
+            ) : null}
           </div>
 
           {/* Header Authentication Action */}
           <div className="flex items-center gap-2">
-            {isSignedIn ? (
+            {showHostedAccount ? (
               <div className="flex items-center gap-2">
                 <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
                   <CheckCircle2 className="size-3.5" />
@@ -105,7 +107,7 @@ export function AccountWorkspace({ defaultTab }: AccountWorkspaceProps = {}) {
               className="sticky top-0 z-10 border-b border-slate-200/80 bg-white px-6 pt-3 dark:border-slate-800/80 dark:bg-slate-950"
             >
               <TabsList className="h-10 w-fit justify-start gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-900">
-                {isSignedIn ? (
+                {showHostedAccount ? (
                   <TabsTrigger
                     value="session"
                     className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all data-[state=active]:bg-white data-[state=active]:text-slate-900 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-800 dark:data-[state=active]:text-slate-100"
@@ -131,7 +133,7 @@ export function AccountWorkspace({ defaultTab }: AccountWorkspaceProps = {}) {
                   Contacts &amp; Keys
                 </TabsTrigger>
 
-                {isSignedIn ? (
+                {showHostedAccount ? (
                   <TabsTrigger
                     value="device"
                     className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-all data-[state=active]:bg-white data-[state=active]:text-slate-900 data-[state=active]:shadow-sm dark:data-[state=active]:bg-slate-800 dark:data-[state=active]:text-slate-100"
@@ -144,7 +146,7 @@ export function AccountWorkspace({ defaultTab }: AccountWorkspaceProps = {}) {
             </div>
             
             <div className="p-6">
-              {effectiveTab === "session" && isSignedIn ? (
+              {effectiveTab === "session" && showHostedAccount ? (
                 <TabsContent value="session" className="m-0 border-none p-0 outline-none">
                   <SessionStatus />
                 </TabsContent>
@@ -162,7 +164,7 @@ export function AccountWorkspace({ defaultTab }: AccountWorkspaceProps = {}) {
                 </TabsContent>
               ) : null}
               
-              {effectiveTab === "device" && isSignedIn ? (
+              {effectiveTab === "device" && showHostedAccount ? (
                 <TabsContent value="device" className="m-0 border-none p-0 outline-none">
                   <DeviceTab />
                 </TabsContent>

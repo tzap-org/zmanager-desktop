@@ -5,22 +5,36 @@ setlocal enabledelayedexpansion
 :: generate hosted-account traffic against production. Production remains an
 :: explicit choice: build.bat prod. 
 set "BUILD_ENV=%~1"
+set "PROFILE=%~2"
+if /I "%BUILD_ENV%"=="local" (
+    set "BUILD_ENV=staging"
+    set "PROFILE=local"
+)
+if /I "%BUILD_ENV%"=="online" (
+    set "BUILD_ENV=staging"
+    set "PROFILE=online"
+)
 if not defined BUILD_ENV set "BUILD_ENV=staging"
+if not defined PROFILE set "PROFILE=local"
 if /I not "%BUILD_ENV%"=="staging" if /I not "%BUILD_ENV%"=="prod" (
     echo Error: Unsupported build environment "%BUILD_ENV%".
-    echo Usage: build.bat [staging^|prod]
+    echo Usage: build.bat [staging^|prod] [local^|online]
+    echo        build.bat [local^|online]
     exit /b 2
 )
-if not "%~2"=="" (
-    echo Error: Unexpected argument "%~2".
-    echo Usage: build.bat [staging^|prod]
+if /I not "%PROFILE%"=="local" if /I not "%PROFILE%"=="online" (
+    echo Error: Unsupported build profile "%PROFILE%".
+    echo Usage: build.bat [staging^|prod] [local^|online]
+    echo        build.bat [local^|online]
     exit /b 2
 )
 if not "%~3"=="" (
     echo Error: Unexpected argument "%~3".
-    echo Usage: build.bat [staging^|prod]
+    echo Usage: build.bat [staging^|prod] [local^|online]
+    echo        build.bat [local^|online]
     exit /b 2
 )
+echo Build profile: %PROFILE%
 echo Hosted account build environment: %BUILD_ENV%
 
 :: Get the root directory of the repository (parent of the scripts folder)
@@ -72,7 +86,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 echo [4/4] Running static Windows build and installation...
-powershell -ExecutionPolicy Bypass -File "%REPO_ROOT%\scripts\build-windows-static.ps1" -Environment "%BUILD_ENV%" -InstallClang -Install
+powershell -ExecutionPolicy Bypass -File "%REPO_ROOT%\scripts\build-windows-static.ps1" -Environment "%BUILD_ENV%" -Profile "%PROFILE%" -InstallClang -Install
 if %ERRORLEVEL% neq 0 (
     echo Error: Build or installation failed.
     exit /b 1

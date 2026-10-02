@@ -4,6 +4,7 @@ import { Textarea } from "../../components/ui/textarea";
 import { useZManagerActions, useZManagerSnapshot } from "../AppProviders";
 import { useState } from "react";
 import { InventorySection } from "./InventorySection";
+import { HOSTED_CAPABILITIES_ENABLED } from "../../../app/hostedCapabilities";
 
 export function ContactsTab() {
   const fullSnapshot = useZManagerSnapshot();
@@ -53,28 +54,30 @@ export function ContactsTab() {
           </Button>
         </div>
 
-        <div className="grid gap-2 rounded-lg border border-slate-200/80 bg-slate-50/70 p-3 text-[11px] dark:border-slate-800/80 dark:bg-slate-900/30">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="font-medium text-slate-700 dark:text-slate-300">Last successful sync</span>
-            <span className="text-slate-500 dark:text-slate-400">{lastSync}</span>
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <span className="font-medium text-slate-700 dark:text-slate-300">Status refresh</span>
-            <span className={syncCounts?.statusRefreshFailed ? "text-amber-700 dark:text-amber-300" : "text-emerald-700 dark:text-emerald-300"}>{syncStatus}</span>
-          </div>
-          {syncCounts ? (
-            <div className="flex flex-wrap gap-x-3 gap-y-1 text-slate-500 dark:text-slate-400">
-              <span>{syncCounts.imported} imported</span>
-              <span>{syncCounts.updated} updated</span>
-              <span>{syncCounts.removed} removed locally</span>
-              <span>{syncCounts.rejected} rejected</span>
-              {syncCounts.rejectedReasons.length ? <span>({syncCounts.rejectedReasons.join(", ")})</span> : null}
+        {HOSTED_CAPABILITIES_ENABLED ? (
+          <div className="grid gap-2 rounded-lg border border-slate-200/80 bg-slate-50/70 p-3 text-[11px] dark:border-slate-800/80 dark:bg-slate-900/30">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-medium text-slate-700 dark:text-slate-300">Last successful sync</span>
+              <span className="text-slate-500 dark:text-slate-400">{lastSync}</span>
             </div>
-          ) : null}
-          <p className="leading-relaxed text-slate-500 dark:text-slate-400">
-            Removing a contact here only removes this desktop copy. Remove it on the phone to change the source snapshot globally.
-          </p>
-        </div>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span className="font-medium text-slate-700 dark:text-slate-300">Status refresh</span>
+              <span className={syncCounts?.statusRefreshFailed ? "text-amber-700 dark:text-amber-300" : "text-emerald-700 dark:text-emerald-300"}>{syncStatus}</span>
+            </div>
+            {syncCounts ? (
+              <div className="flex flex-wrap gap-x-3 gap-y-1 text-slate-500 dark:text-slate-400">
+                <span>{syncCounts.imported} imported</span>
+                <span>{syncCounts.updated} updated</span>
+                <span>{syncCounts.removed} removed locally</span>
+                <span>{syncCounts.rejected} rejected</span>
+                {syncCounts.rejectedReasons.length ? <span>({syncCounts.rejectedReasons.join(", ")})</span> : null}
+              </div>
+            ) : null}
+            <p className="leading-relaxed text-slate-500 dark:text-slate-400">
+              Removing a contact here only removes this desktop copy. Remove it on the phone to change the source snapshot globally.
+            </p>
+          </div>
+        ) : null}
 
         {/* Active Keys List */}
         <div className="mt-3 space-y-3">
@@ -170,22 +173,26 @@ export function ContactsTab() {
       >
         <div className="flex items-center justify-between gap-3">
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            Contacts synced from your phone or verified via contact card.
+            {HOSTED_CAPABILITIES_ENABLED
+              ? "Contacts synced from your phone or verified via contact card."
+              : "Contacts stored locally and verified via contact card."}
           </p>
-          <Button
-            variant="secondary"
-            size="sm"
-            className="h-8 text-xs shadow-sm"
-            disabled={snapshot.busy || (!isSignedIn && !canLaunchHostedAuth)}
-            onClick={() => actions.handleAccountIntent(
-              isSignedIn
-                ? { type: "syncContacts" }
-                : { type: "beginHostedAuth", environment: hostedEnvironment },
-            )}
-          >
-            <RefreshCw className={`mr-1.5 size-3.5 ${snapshot.busy ? "animate-spin" : ""}`} />
-            {isSignedIn ? "Download from Phone" : canLaunchHostedAuth ? "Sign in to sync contacts" : "Contact sync unavailable"}
-          </Button>
+          {HOSTED_CAPABILITIES_ENABLED ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="h-8 text-xs shadow-sm"
+              disabled={snapshot.busy || (!isSignedIn && !canLaunchHostedAuth)}
+              onClick={() => actions.handleAccountIntent(
+                isSignedIn
+                  ? { type: "syncContacts" }
+                  : { type: "beginHostedAuth", environment: hostedEnvironment },
+              )}
+            >
+              <RefreshCw className={`mr-1.5 size-3.5 ${snapshot.busy ? "animate-spin" : ""}`} />
+              {isSignedIn ? "Download from Phone" : canLaunchHostedAuth ? "Sign in to sync contacts" : "Contact sync unavailable"}
+            </Button>
+          ) : null}
         </div>
 
         <div className="mt-3 space-y-3">

@@ -4,9 +4,8 @@ import { Input } from "../../components/ui/input";
 import { useZManagerActions, useZManagerSnapshot } from "../AppProviders";
 import { useState } from "react";
 import { InventorySection } from "./InventorySection";
+import { HOSTED_CAPABILITIES_ENABLED } from "../../../app/hostedCapabilities";
 
-const SHOW_HOSTED_CERTIFICATE_SECTION = import.meta.env.DEV
-  || import.meta.env.VITE_ENABLE_HOSTED_CERTIFICATE_SECTION === "true";
 
 export function CertificatesTab() {
   const fullSnapshot = useZManagerSnapshot();
@@ -35,7 +34,7 @@ export function CertificatesTab() {
         icon={<ShieldCheck className="size-4 text-blue-600 dark:text-blue-400" />}
         empty="No local signing certificates found."
       >
-        {SHOW_HOSTED_CERTIFICATE_SECTION ? (
+        {HOSTED_CAPABILITIES_ENABLED ? (
           <section className="grid gap-3 rounded-xl border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-900/60 dark:bg-blue-950/30">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="space-y-1">
@@ -261,7 +260,7 @@ export function CertificatesTab() {
                   </div>
                 </div>
 
-                {certificate.identityType === "hosted" && certificate.renewalRecommended ? (
+                {HOSTED_CAPABILITIES_ENABLED && certificate.identityType === "hosted" && certificate.renewalRecommended ? (
                   <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-200 bg-amber-50/80 p-3 text-xs text-amber-950 dark:border-amber-900/60 dark:bg-amber-950/40 dark:text-amber-100">
                     <span className="text-[11px] font-medium">Renewal recommended before this certificate expires.</span>
                     <Button

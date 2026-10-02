@@ -238,13 +238,27 @@ jobs:
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}\zmbuild
           ZMANAGER_BUILD_NUMBER: ${{ env.ZMANAGER_RELEASE_BUILD_NUMBER }}
+          MS_STORE_PACKAGE_NAME: ${{ vars.MS_STORE_PACKAGE_NAME }}
+          MS_STORE_PUBLISHER: ${{ vars.MS_STORE_PUBLISHER }}
+          MS_STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.MS_STORE_PUBLISHER_DISPLAY_NAME }}
         run: |
-          .\scripts\prepare-windows-static-build.ps1 `
-            -Environment prod `
-            -Architecture ${{ matrix.arch }} `
-            -InstallMissing `
-            -InstallNodeModules `
-            -Build
+          $buildArgs = @{
+            Environment = 'prod'
+            Profile = 'online'
+            Architecture = '${{ matrix.arch }}'
+            InstallMissing = $true
+            InstallNodeModules = $true
+            Build = $true
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:MS_STORE_PACKAGE_NAME) -and
+              -not [string]::IsNullOrWhiteSpace($env:MS_STORE_PUBLISHER) -and
+              -not [string]::IsNullOrWhiteSpace($env:MS_STORE_PUBLISHER_DISPLAY_NAME)) {
+            $buildArgs.BuildStoreMsix = $true
+            $buildArgs.StorePackageName = $env:MS_STORE_PACKAGE_NAME
+            $buildArgs.StorePublisher = $env:MS_STORE_PUBLISHER
+            $buildArgs.StorePublisherDisplayName = $env:MS_STORE_PUBLISHER_DISPLAY_NAME
+          }
+          .\scripts\prepare-windows-static-build.ps1 @buildArgs
 
       - name: Check staging E2E credentials
         id: staging_credentials
@@ -304,22 +318,6 @@ jobs:
             --check-npm
           Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $archive -Force
           Write-Host "Generated release license bundle: $archive"
-
-      - name: Build Microsoft Store MSIX package
-        if: vars.MS_STORE_PACKAGE_NAME != '' && vars.MS_STORE_PUBLISHER != '' && vars.MS_STORE_PUBLISHER_DISPLAY_NAME != ''
-        shell: pwsh
-        env:
-          MS_STORE_PACKAGE_NAME: ${{ vars.MS_STORE_PACKAGE_NAME }}
-          MS_STORE_PUBLISHER: ${{ vars.MS_STORE_PUBLISHER }}
-          MS_STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.MS_STORE_PUBLISHER_DISPLAY_NAME }}
-          CARGO_TARGET_DIR: ${{ runner.temp }}\zmbuild
-        run: |
-          .\scripts\package-windows-msix.ps1 `
-            -CargoTargetDir $env:CARGO_TARGET_DIR `
-            -Architecture ${{ matrix.arch }} `
-            -PackageName $env:MS_STORE_PACKAGE_NAME `
-            -Publisher $env:MS_STORE_PUBLISHER `
-            -PublisherDisplayName $env:MS_STORE_PUBLISHER_DISPLAY_NAME
 
       - name: Upload Microsoft Store MSIX package
         if: vars.MS_STORE_PACKAGE_NAME != '' && vars.MS_STORE_PUBLISHER != '' && vars.MS_STORE_PUBLISHER_DISPLAY_NAME != ''

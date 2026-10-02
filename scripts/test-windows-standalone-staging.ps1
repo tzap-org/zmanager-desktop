@@ -68,6 +68,8 @@ foreach ($name in @("TZAP_DESKTOP_STAGING_CLIENT_ID", "TZAP_E2E_USERNAME", "TZAP
 
 $env:ZMANAGER_TZAP_BUILD_ENV = "staging"
 $env:VITE_TZAP_BUILD_ENV = "staging"
+$env:VITE_ZMANAGER_PROFILE = "online"
+$env:VITE_ENABLE_HOSTED_CAPABILITIES = "true"
 $env:VITE_ENABLE_HOSTED_CERTIFICATE_SECTION = "true"
 $env:ZMANAGER_TZAP_SERVER_BASE_URL = "https://staging.tzap.org"
 $env:TZAP_E2E_ENV = "staging"
@@ -209,12 +211,13 @@ try {
     # Tauri always loads tauri.conf.json as the base configuration. Pass only
     # the standalone overlay here so its app section is merged into that base
     # instead of re-supplying the base file as another custom configuration.
-    $buildArgs = @( "build", "--ci", "--no-sign", "--bundles", "nsis" )
+    $buildArgs = @( "build", "--ci", "--no-sign", "--bundles", "nsis", "--features", "online-profile" )
     if (-not $ReleaseArtifact) {
         $buildArgs += @("--config", $standaloneDebugConfigPath)
         $buildArgs += "--debug"
     }
     $buildArgs += @("--target", $targetTriple)
+    $buildArgs += @("--", "--no-default-features")
     Write-Host "Building the staging $configuration product configuration: $targetTriple"
     & $node.Source $tauriCli @buildArgs
     if ($LASTEXITCODE -ne 0) {

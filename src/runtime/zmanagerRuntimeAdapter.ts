@@ -66,6 +66,7 @@ import {
   createStartupController,
 } from "../app/controllers/startupController";
 import { createAccountController } from "../app/controllers/accountController";
+import { HOSTED_CAPABILITIES_ENABLED } from "../app/hostedCapabilities";
 import { initializeDeepLinkAdapter } from "../desktop/deepLinkAdapter";
 import { createDefaultHandlerController } from "../app/controllers/defaultHandlerController";
 import { createLocalSendTrustController } from "../app/controllers/localSendTrustController";
@@ -4516,7 +4517,7 @@ async function verifyCurrentTzapCertificate() {
       trustedCaCertificatePaths: [...verification.trustedCaCertificatePaths],
       trustedSystemRoots: verification.trustedSystemRoots,
       includeOfficialTzapRoot: verification.includeOfficialTzapRoot,
-      checkCurrentStatus: verification.checkCurrentStatus,
+      checkCurrentStatus: HOSTED_CAPABILITIES_ENABLED && verification.checkCurrentStatus,
       environment: appPreferences.tzapEnvironment,
     });
     extractWorkspace.acceptTzapVerification(result);

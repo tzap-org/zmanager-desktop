@@ -127,17 +127,42 @@ The packages are deliberately unsigned because Store submission replaces the
 package signature. Direct-download MSIX distribution would require signing them
 with a trusted certificate.
 
-For a local package build, first build the normal Windows release (including the
-shell extension), then run:
+For a local build that produces both the normal Windows installer and Store
+package (including the shell extension), run:
 
 ```powershell
-scripts/package-windows-msix.ps1 `
-  -CargoTargetDir C:\path\to\cargo-target `
+scripts/prepare-windows-static-build.ps1 `
+  -Environment prod `
+  -Profile local `
   -Architecture x64 `
-  -PackageName "<Partner Center Name>" `
-  -Publisher "<Partner Center Publisher>" `
-  -PublisherDisplayName "<Store publisher display name>"
+  -Build `
+  -BuildStoreMsix `
+  -StorePackageName "<Partner Center Package/Identity/Name>" `
+  -StorePublisher "<Partner Center Package/Identity/Publisher>" `
+  -StorePublisherDisplayName "<Partner Center Package/Properties/PublisherDisplayName>"
 ```
+
+The default build continues to make the existing EXE artifacts. Add
+`-BuildStoreMsix` to target the Store format as well; the release workflow uses
+this same build path when the three `MS_STORE_*` Actions variables are set.
+`-Architecture arm64` produces the ARM64 package instead.
+
+Desktop builds use the local profile by default. It keeps local identity,
+certificate, archive, and verification workflows available while hiding hosted
+account controls and disabling hosted account and status requests. Use
+`-Profile online` to include hosted sign-in, enrollment, renewal, contact sync,
+and online certificate status checks. The command-line entry point supports:
+
+```bat
+scripts\build.bat                 rem staging environment, local profile
+scripts\build.bat online          rem staging environment, online profile
+scripts\build.bat prod online     rem production environment, online profile
+scripts\build.bat prod            rem production environment, local profile
+```
+
+The server environment (`staging` or `prod`) and product profile (`local` or
+`online`) are separate choices. Release workflows select the online profile
+explicitly.
 
 The package manifest declares the app as a full-trust desktop app, registers
 archive file types and the `zmanager:` / `tzap:` protocols, and registers the

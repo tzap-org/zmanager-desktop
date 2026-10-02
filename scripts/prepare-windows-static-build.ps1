@@ -2,6 +2,8 @@
 param(
     [ValidateSet("staging", "prod")]
     [string]$Environment = "staging",
+    [ValidateSet("local", "online")]
+    [string]$Profile = "local",
     [string]$VcpkgRoot = "C:\vcpkg",
     [string]$PerlBin = "C:\Strawberry\perl\bin",
     [ValidateSet("Auto", "x64", "arm64")]
@@ -10,7 +12,11 @@ param(
     [string]$NodePath = "",
     [switch]$InstallMissing,
     [switch]$InstallNodeModules,
-    [switch]$Build
+    [switch]$Build,
+    [switch]$BuildStoreMsix,
+    [string]$StorePackageName = "",
+    [string]$StorePublisher = "",
+    [string]$StorePublisherDisplayName = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -20,11 +26,14 @@ Set-Location $repoRoot
 
 $env:ZMANAGER_TZAP_BUILD_ENV = $Environment
 $env:VITE_TZAP_BUILD_ENV = $Environment
+$env:VITE_ZMANAGER_PROFILE = $Profile
+$env:VITE_ENABLE_HOSTED_CAPABILITIES = if ($Profile -eq "online") { "true" } else { "false" }
 if ($Environment -eq "staging") {
     $env:ZMANAGER_TZAP_SERVER_BASE_URL = "https://staging.tzap.org"
 } else {
     Remove-Item Env:ZMANAGER_TZAP_SERVER_BASE_URL -ErrorAction SilentlyContinue
 }
+Write-Host "Build profile: $Profile"
 Write-Host "Hosted account build environment: $Environment"
 
 $vcpkgPackages = @("zlib", "bzip2", "liblzma", "zstd", "lz4", "openssl")
@@ -493,12 +502,17 @@ if ($Build) {
         $buildScript = Join-Path $PSScriptRoot "build-windows-static.ps1"
         & $buildScript `
             -Environment $Environment `
+            -Profile $Profile `
             -VcpkgRoot $VcpkgRoot `
             -PerlBin $script:resolvedPerlBin `
             -Architecture $resolvedArchitecture `
             -Triplet $resolvedTriplet `
             -NodePath $script:resolvedNodePath `
-            -InstallClang:$InstallMissing
+            -InstallClang:$InstallMissing `
+            -BuildStoreMsix:$BuildStoreMsix `
+            -StorePackageName $StorePackageName `
+            -StorePublisher $StorePublisher `
+            -StorePublisherDisplayName $StorePublisherDisplayName
         if ($LASTEXITCODE -ne 0) {
             throw "Windows artifact build failed with exit code $LASTEXITCODE."
         }
