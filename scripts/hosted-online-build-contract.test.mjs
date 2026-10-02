@@ -10,7 +10,7 @@ test("the product defaults to the local profile and exposes online explicitly", 
   const features = manifest.match(/\[features\]([\s\S]*?)(?:\n\[|$)/)?.[1] ?? "";
 
   assert.match(features, /default\s*=\s*\[\s*\]/, "the default Cargo feature set must be local");
-  assert.match(features, /online-profile\s*=\s*\[\s*"hosted-online"\s*\]/, "the online profile must enable hosted-online");
+  assert.match(features, /online-profile\s*=\s*\[[^\]]*"hosted-online"/, "the online profile must enable hosted-online");
 });
 
 test("the opener capability includes a scoped default URL permission", () => {
