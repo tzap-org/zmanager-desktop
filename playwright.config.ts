@@ -24,6 +24,13 @@ export default defineConfig({
     url: "http://127.0.0.1:5173",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
+    env: {
+      // The GUI and E2E suites exercise hosted account surfaces. Keep the
+      // browser fixture app on the online profile even when the host defaults
+      // to a local-only production build.
+      VITE_ZMANAGER_PROFILE: "online",
+      VITE_ENABLE_HOSTED_CAPABILITIES: "true",
+    },
   },
   projects: [
     {

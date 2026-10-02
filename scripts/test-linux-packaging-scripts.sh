@@ -74,7 +74,7 @@ printf 'npm %s\n' "$*" >>"${ZMANAGER_PACKAGING_TEST_LOG:?}"
 if [[ "${1:-}" == "ls" ]]; then
   exit 1
 fi
-if [[ "$*" == "run tauri -- build --bundles deb" ]]; then
+if [[ "$*" == "run tauri -- build --bundles deb"* ]]; then
   mkdir -p src-tauri/target/release/bundle/deb
   printf 'test deb\n' >src-tauri/target/release/bundle/deb/ZManager_test_amd64.deb
   printf 'stale deb\n' >src-tauri/target/release/bundle/deb/ZManager_0.0.1_amd64.deb

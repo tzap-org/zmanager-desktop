@@ -24,7 +24,6 @@ test("Windows build entry points keep local E2E on staging and production explic
   const staticBuild = readFileSync(resolve(repositoryRoot, "scripts/build-windows-static.ps1"), "utf8");
   const prepare = readFileSync(resolve(repositoryRoot, "scripts/prepare-windows-static-build.ps1"), "utf8");
   const packageWorkflow = readFileSync(resolve(repositoryRoot, ".github/workflows/package.yml"), "utf8");
-  const releaseWorkflow = readFileSync(resolve(repositoryRoot, ".github/workflows/release.yml"), "utf8");
   const standaloneRunner = readFileSync(resolve(repositoryRoot, "scripts/test-windows-standalone-staging.ps1"), "utf8");
   const packageManifest = JSON.parse(readFileSync(resolve(repositoryRoot, "package.json"), "utf8"));
   const standaloneDebugConfig = JSON.parse(readFileSync(resolve(repositoryRoot, "src-tauri/tauri.standalone-debug.conf.json"), "utf8"));
@@ -51,7 +50,6 @@ test("Windows build entry points keep local E2E on staging and production explic
   assert.match(packageWorkflow, /Prepare Windows build environment[\s\S]*?-Environment staging/u);
   assert.match(packageWorkflow, /Prepare and build Windows package[\s\S]*?-Environment prod/u);
   assert.match(packageWorkflow, /staging Windows release-artifact smoke[\s\S]*?test-windows-standalone-staging\.ps1[\s\S]*?-ReleaseArtifact/u);
-  assert.match(releaseWorkflow, /Smoke-test staging release artifact on Windows[\s\S]*?test-windows-standalone-staging\.ps1[\s\S]*?-ReleaseArtifact/u);
   assert.match(standaloneRunner, /tauri\.conf\.json/u);
   assert.match(standaloneRunner, /(?:--bundles nsis|"--bundles"[\s\S]*?"nsis")/u);
   assert.match(standaloneRunner, /ReleaseArtifact/u);

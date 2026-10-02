@@ -10,13 +10,15 @@ export TZAP_E2E_ENV=staging
 export VITE_TZAP_BUILD_ENV=staging
 export ZMANAGER_TZAP_BUILD_ENV=staging
 export ZMANAGER_TZAP_SERVER_BASE_URL=https://staging.tzap.org
+export VITE_ZMANAGER_PROFILE=online
+export VITE_ENABLE_HOSTED_CAPABILITIES=true
 
 target_dir="${CARGO_TARGET_DIR:-src-tauri/target}"
 gui_config="src-tauri/tauri.gui.conf.json"
 gui_binary="$target_dir/debug/zmanager-desktop"
 
 echo "Building macOS GUI test binary..."
-npm run tauri build -- --debug --no-bundle --config "$gui_config"
+npm run tauri build -- --debug --no-bundle --config "$gui_config" -- --no-default-features --features online-profile
 
 if [[ ! -f "$gui_binary" ]]; then
   echo "Error: Debug GUI binary was not created at $gui_binary" >&2
