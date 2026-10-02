@@ -298,7 +298,7 @@ async function observeMacOSHistoryNavigation(
       .map((entry) => path.join(root, entry.name, fileName))
       .filter(existsSync);
   };
-  const databaseCandidates: HistoryDatabase[] = [
+  const discoverDatabases = (): HistoryDatabase[] => [
     { path: path.join(libraryRoot, "Safari", "History.db"), kind: "safari" } satisfies HistoryDatabase,
     ...profileDatabases(path.join(applicationSupportRoot, "Google", "Chrome"), "History").map((database): HistoryDatabase => ({ path: database, kind: "chromium" })),
     ...profileDatabases(path.join(applicationSupportRoot, "Microsoft Edge"), "History").map((database): HistoryDatabase => ({ path: database, kind: "chromium" })),
@@ -311,8 +311,31 @@ async function observeMacOSHistoryNavigation(
     firefox: `SELECT last_visit_date || char(9) || url FROM moz_places WHERE url LIKE '${escapedOrigin}/%' AND last_visit_date IS NOT NULL ORDER BY last_visit_date DESC LIMIT 1;`,
   } as const;
   const snapshotDirectory = mkdtempSync(path.join(tmpdir(), "zmanager-browser-history-"));
+  const startedAtMs = Date.now();
 
-  const readLatest = async (): Promise<{ timestamp: number; url: string } | null> => {
+  // Browser profiles are sometimes created only when the OS launches the
+  // default browser. The observer starts before the app calls openUrl, so a
+  // one-time profile scan can permanently miss the history database that will
+  // record the navigation. Use a wall-clock threshold as well, so discovering
+  // a newly-created profile cannot mistake an older staging visit for this
+  // launch.
+  const visitThreshold = (kind: HistoryDatabaseKind): number => {
+    switch (kind) {
+      case "safari": return startedAtMs / 1000 - 978_307_200;
+      case "chromium": return startedAtMs * 1000 + 11_644_473_600_000_000;
+      case "firefox": return startedAtMs * 1000;
+    }
+  };
+  const visitTimeUnixMs = (timestamp: number, kind: HistoryDatabaseKind): number => {
+    switch (kind) {
+      case "safari": return timestamp * 1000 + 978_307_200_000;
+      case "chromium": return timestamp / 1000 - 11_644_473_600_000;
+      case "firefox": return timestamp / 1000;
+    }
+  };
+
+  const readLatest = async (): Promise<{ timestamp: number; url: string; kind: HistoryDatabaseKind } | null> => {
+    const databaseCandidates = discoverDatabases();
     const databases = databaseCandidates.filter((database) => existsSync(database.path));
     const visits = await Promise.all(databases.map(async (database, index) => {
       const snapshot = path.join(snapshotDirectory, `${index}-${path.basename(database.path)}`);
@@ -335,22 +358,26 @@ async function observeMacOSHistoryNavigation(
         if (separator < 1) return null;
         const timestamp = Number(line.slice(0, separator));
         const url = line.slice(separator + 1);
-        return Number.isFinite(timestamp) ? { timestamp, url } : null;
+        return Number.isFinite(timestamp) ? { timestamp, url, kind: database.kind } : null;
       } catch {
         return null;
       }
     }));
-    return visits.filter((visit): visit is { timestamp: number; url: string } => visit !== null)
-      .sort((left, right) => right.timestamp - left.timestamp)[0] ?? null;
+    return visits
+      .filter((visit): visit is { timestamp: number; url: string; kind: HistoryDatabaseKind } => visit !== null)
+      .filter((visit) => {
+        if (visit.timestamp <= visitThreshold(visit.kind)) return false;
+        try { return new URL(visit.url).origin === expectedOrigin; } catch { return false; }
+      })
+      .sort((left, right) => visitTimeUnixMs(right.timestamp, right.kind) - visitTimeUnixMs(left.timestamp, left.kind))[0] ?? null;
   };
 
   try {
-    const baseline = (await readLatest())?.timestamp ?? 0;
     const deadline = Date.now() + timeoutSeconds * 1000;
     while (Date.now() < deadline) {
       if (signal.aborted) return null;
       const latest = await readLatest();
-      if (latest && latest.timestamp > baseline) {
+      if (latest) {
         try {
           const parsed = new URL(latest.url);
           if (parsed.origin === expectedOrigin) {
