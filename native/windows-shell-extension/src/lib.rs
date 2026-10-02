@@ -246,6 +246,7 @@ impl ZManagerRootExplorerCommand {
     fn load_subcommands(&self, selection: Option<&IShellItemArray>) {
         let actions = match selection {
             Some(selection) => match selected_file_system_paths(selection) {
+                Ok(paths) if self.root == ExplorerRoot::Create => self.classic_actions_for_paths(&paths),
                 Ok(paths) => self.root.actions().iter().copied().filter(|action| action.supports_paths(&paths)).collect(),
                 Err(_) => Vec::new(),
             },

@@ -305,6 +305,30 @@ jobs:
           Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $archive -Force
           Write-Host "Generated release license bundle: $archive"
 
+      - name: Build Microsoft Store MSIX package
+        if: vars.MS_STORE_PACKAGE_NAME != '' && vars.MS_STORE_PUBLISHER != '' && vars.MS_STORE_PUBLISHER_DISPLAY_NAME != ''
+        shell: pwsh
+        env:
+          MS_STORE_PACKAGE_NAME: ${{ vars.MS_STORE_PACKAGE_NAME }}
+          MS_STORE_PUBLISHER: ${{ vars.MS_STORE_PUBLISHER }}
+          MS_STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.MS_STORE_PUBLISHER_DISPLAY_NAME }}
+          CARGO_TARGET_DIR: ${{ runner.temp }}\zmbuild
+        run: |
+          .\scripts\package-windows-msix.ps1 `
+            -CargoTargetDir $env:CARGO_TARGET_DIR `
+            -Architecture ${{ matrix.arch }} `
+            -PackageName $env:MS_STORE_PACKAGE_NAME `
+            -Publisher $env:MS_STORE_PUBLISHER `
+            -PublisherDisplayName $env:MS_STORE_PUBLISHER_DISPLAY_NAME
+
+      - name: Upload Microsoft Store MSIX package
+        if: vars.MS_STORE_PACKAGE_NAME != '' && vars.MS_STORE_PUBLISHER != '' && vars.MS_STORE_PUBLISHER_DISPLAY_NAME != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: zmanager-windows-msix-${{ matrix.arch }}
+          if-no-files-found: error
+          path: target/msix/${{ matrix.arch }}/*.msix
+
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v6
         with:
@@ -459,6 +483,12 @@ jobs:
                   continue
                 fi
                 ;;
+              zmanager-windows-msix-x64)
+                normalized_name="$file_name"
+                ;;
+              zmanager-windows-msix-arm64)
+                normalized_name="$file_name"
+                ;;
               zmanager-linux-x64-deb)
                 normalized_name="zmanager-desktop-${release_version}-linux-x64.deb"
                 ;;
@@ -497,7 +527,7 @@ jobs:
             cp "$src" "release-bundles/$normalized_name"
             seen_names["$normalized_name"]="1"
             artifact_count=$((artifact_count + 1))
-          done < <(find release-artifacts -type f \( -name '*.exe' -o -name '*.deb' -o -name '*.rpm' -o -name '*.zip' -o -name '*.dmg' -o -name '*-inspection.json' -o -name '*-acceptance.json' -o -name '*-SHA256SUMS.txt' \) -print0)
+          done < <(find release-artifacts -type f \( -name '*.exe' -o -name '*.msix' -o -name '*.deb' -o -name '*.rpm' -o -name '*.zip' -o -name '*.dmg' -o -name '*-inspection.json' -o -name '*-acceptance.json' -o -name '*-SHA256SUMS.txt' \) -print0)
 
           if [ "$artifact_count" -eq 0 ]; then
             echo "No packaged artifacts found" >&2
@@ -544,7 +574,7 @@ jobs:
             Automated release of zmanager-desktop from GitHub Actions.
 
             - Built from pinned zmanager dependency tag.
-            - Includes macOS arm64/x86_64 ZIP and DMG artifacts, Windows portable and installer binaries, and Linux DEB/RPM packages.
+            - Includes macOS arm64/x86_64 ZIP and DMG artifacts, Windows portable and installer binaries, optional Store MSIX packages, and Linux DEB/RPM packages.
             - Includes a generated third-party license bundle with Rust, frontend, vendored, and Windows vcpkg notices.
             - macOS artifacts are Developer ID signed and notarized when release credentials are configured; otherwise they are ad-hoc-signed testing artifacts and are not suitable for public Gatekeeper distribution.
             - SHA256SUMS file is included for artifact verification.

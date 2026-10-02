@@ -5,6 +5,9 @@ import { useZManagerActions, useZManagerSnapshot } from "../AppProviders";
 import { useState } from "react";
 import { InventorySection } from "./InventorySection";
 
+const SHOW_HOSTED_CERTIFICATE_SECTION = import.meta.env.DEV
+  || import.meta.env.VITE_ENABLE_HOSTED_CERTIFICATE_SECTION === "true";
+
 export function CertificatesTab() {
   const fullSnapshot = useZManagerSnapshot();
   const snapshot = fullSnapshot.account;
@@ -32,45 +35,47 @@ export function CertificatesTab() {
         icon={<ShieldCheck className="size-4 text-blue-600 dark:text-blue-400" />}
         empty="No local signing certificates found."
       >
-        <section className="grid gap-3 rounded-xl border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-900/60 dark:bg-blue-950/30">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="space-y-1">
-              <strong className="text-xs font-semibold text-blue-950 dark:text-blue-100">
-                Hosted certificate
-              </strong>
-              <p className="text-[11px] leading-relaxed text-blue-900/80 dark:text-blue-200/80">
-                Hosted certificates are account-backed and remain usable offline while their cached certificate is valid. A fresh sign-in is required for enrollment and renewal.
-              </p>
+        {SHOW_HOSTED_CERTIFICATE_SECTION ? (
+          <section className="grid gap-3 rounded-xl border border-blue-200 bg-blue-50/60 p-4 dark:border-blue-900/60 dark:bg-blue-950/30">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="space-y-1">
+                <strong className="text-xs font-semibold text-blue-950 dark:text-blue-100">
+                  Hosted certificate
+                </strong>
+                <p className="text-[11px] leading-relaxed text-blue-900/80 dark:text-blue-200/80">
+                  Hosted certificates are account-backed and remain usable offline while their cached certificate is valid. A fresh sign-in is required for enrollment and renewal.
+                </p>
+              </div>
+              {showHostedAuthAction ? (
+                <Button
+                  className="shrink-0 bg-blue-600 text-xs text-white shadow hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-500"
+                  disabled={snapshot.busy || (!canManageHostedCertificates && !canLaunchHostedAuth)}
+                  onClick={() => canManageHostedCertificates
+                    ? actions.handleAccountIntent({ type: "enrollCertificate" })
+                    : actions.handleAccountIntent({ type: "beginHostedAuth", environment: hostedEnvironment })}
+                >
+                  {canManageHostedCertificates ? <Award className="mr-1.5 size-3.5" /> : <ExternalLink className="mr-1.5 size-3.5" />}
+                  {canManageHostedCertificates ? "Enroll this device" : canLaunchHostedAuth
+                    ? hostedCertificates.length > 0 ? "Sign in to manage" : "Sign in to enroll"
+                    : "Hosted enrollment unavailable"}
+                </Button>
+              ) : null}
             </div>
-            {showHostedAuthAction ? (
-              <Button
-                className="shrink-0 bg-blue-600 text-xs text-white shadow hover:bg-blue-700 dark:bg-blue-600 dark:hover:bg-blue-500"
-                disabled={snapshot.busy || (!canManageHostedCertificates && !canLaunchHostedAuth)}
-                onClick={() => canManageHostedCertificates
-                  ? actions.handleAccountIntent({ type: "enrollCertificate" })
-                  : actions.handleAccountIntent({ type: "beginHostedAuth", environment: hostedEnvironment })}
-              >
-                {canManageHostedCertificates ? <Award className="mr-1.5 size-3.5" /> : <ExternalLink className="mr-1.5 size-3.5" />}
-                {canManageHostedCertificates ? "Enroll this device" : canLaunchHostedAuth
-                  ? hostedCertificates.length > 0 ? "Sign in to manage" : "Sign in to enroll"
-                  : "Hosted enrollment unavailable"}
-              </Button>
+            {hostedCertificates.length === 0 ? (
+              <p className="text-[11px] font-medium text-blue-800 dark:text-blue-200">
+                {canManageHostedCertificates
+                  ? "No active hosted identity is enrolled on this device."
+                  : canLaunchHostedAuth
+                    ? "Enrollment is unavailable until the hosted session is active."
+                    : "Hosted enrollment is unavailable until the hosted-auth security and OAuth registration gates are approved."}
+              </p>
+            ) : !isSignedIn && canLaunchHostedAuth ? (
+              <p className="text-[11px] font-medium text-blue-800 dark:text-blue-200">
+                Sign in to manage or renew the hosted identity on this device.
+              </p>
             ) : null}
-          </div>
-          {hostedCertificates.length === 0 ? (
-            <p className="text-[11px] font-medium text-blue-800 dark:text-blue-200">
-              {canManageHostedCertificates
-                ? "No active hosted identity is enrolled on this device."
-                : canLaunchHostedAuth
-                  ? "Enrollment is unavailable until the hosted session is active."
-                  : "Hosted enrollment is unavailable until the hosted-auth security and OAuth registration gates are approved."}
-            </p>
-          ) : !isSignedIn && canLaunchHostedAuth ? (
-            <p className="text-[11px] font-medium text-blue-800 dark:text-blue-200">
-              Sign in to manage or renew the hosted identity on this device.
-            </p>
-          ) : null}
-        </section>
+          </section>
+        ) : null}
 
         {/* Creation & Import Panel */}
         <div className="grid gap-4 sm:grid-cols-2">

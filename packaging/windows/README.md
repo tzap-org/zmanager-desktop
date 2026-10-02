@@ -106,7 +106,47 @@ after it was installed. The reliable signal is whether the renamed-aside
 `<dll>.old` can be deleted: if it is still locked, some process has the previous
 image mapped, and deleting it after the restart proves the image was released.
 
-Next packaging steps remain code signing, WinGet metadata after public artifacts are
-stable, and a signed package-with-external-location registration if first-tier
-Windows 11 compact-menu placement is required. That packaging enhancement reuses
-the same COM DLL and versioned request boundary.
+## Microsoft Store (MSIX)
+
+The release workflow can also build an unsigned MSIX for Microsoft Store
+submission. Microsoft signs the package after Store certification. This is a
+separate distribution artifact: GitHub's existing NSIS installer and portable
+EXE still need their own signatures for trusted direct downloads.
+
+To enable the MSIX artifact, reserve the app name in Partner Center and add these
+repository Actions variables using the exact values from **Product identity**:
+
+- `MS_STORE_PACKAGE_NAME`
+- `MS_STORE_PUBLISHER`
+- `MS_STORE_PUBLISHER_DISPLAY_NAME`
+
+When those three variables exist, each Windows release build creates an x64 or
+ARM64 `.msix` and attaches it to the GitHub release. Upload those packages to the
+app's Partner Center submission; this workflow does not publish to the Store.
+The packages are deliberately unsigned because Store submission replaces the
+package signature. Direct-download MSIX distribution would require signing them
+with a trusted certificate.
+
+For a local package build, first build the normal Windows release (including the
+shell extension), then run:
+
+```powershell
+scripts/package-windows-msix.ps1 `
+  -CargoTargetDir C:\path\to\cargo-target `
+  -Architecture x64 `
+  -PackageName "<Partner Center Name>" `
+  -Publisher "<Partner Center Publisher>" `
+  -PublisherDisplayName "<Store publisher display name>"
+```
+
+The package manifest declares the app as a full-trust desktop app, registers
+archive file types and the `zmanager:` / `tzap:` protocols, and registers the
+existing shell-extension COM class through package identity. Packaged Explorer
+context-menu integration is declarative and appears in the Windows 11 modern
+menu; on Windows 10 the app remains usable, but this package's Explorer extension
+is not available. File-type defaults remain under user control.
+
+Before submission, install and exercise each architecture package on a clean
+Windows 11 machine, run the Windows App Certification Kit, and confirm the Store
+identity/version in Partner Center. Keep the current NSIS workflow for direct
+downloads and users who need the existing installer behavior.
