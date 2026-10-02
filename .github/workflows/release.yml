@@ -22,18 +22,18 @@ env:
 
 jobs:
   package-macos:
-    name: macOS ${{ matrix.arch }} package
+    name: macOS ${{ matrix.arch }} ${{ matrix.profile }} package
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
+        arch: [arm64, x86_64]
+        profile: [local, online]
         include:
           - arch: arm64
             runner: macos-15
-            artifact-name: zmanager-macos-arm64
           - arch: x86_64
             runner: macos-15-intel
-            artifact-name: zmanager-macos-x86_64
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -58,6 +58,7 @@ jobs:
           scripts/sync-uniffi-swift-bindings.sh
 
       - name: Run release verification tests
+        if: matrix.profile == 'local'
         run: |
           npm run test:frontend
           npm run test:architecture
@@ -152,8 +153,10 @@ jobs:
       - name: Build, sign, notarize, staple, and inspect
         env:
           ZMANAGER_BUILD_NUMBER: ${{ env.ZMANAGER_RELEASE_BUILD_NUMBER }}
-          ZMANAGER_MACOS_STAGE_DIR: /tmp/zmanager-macos-release
+          ZMANAGER_MACOS_STAGE_DIR: /tmp/zmanager-macos-release-${{ matrix.profile }}
+          CARGO_TARGET_DIR: ${{ runner.temp }}/zmbuild-${{ matrix.profile }}
           ZMANAGER_RELEASE_SIGNED: ${{ steps.macos_signing.outputs.configured }}
+          ZMANAGER_TZAP_BUILD_ENV: prod
         run: |
           set -euo pipefail
           if [[ "$ZMANAGER_RELEASE_SIGNED" == "true" ]]; then
@@ -162,32 +165,35 @@ jobs:
             echo "::warning::Building an ad-hoc-signed macOS testing package; it is not suitable for public Gatekeeper distribution."
             export ZMANAGER_CODESIGN_IDENTITY="-"
           fi
-          scripts/build-macos.sh --skip-tests --no-install --arch "${{ matrix.arch }}" --bundle all
+          scripts/build-macos.sh --skip-tests --no-install --arch "${{ matrix.arch }}" --profile "${{ matrix.profile }}" --bundle all
           version=$(node -p 'require("./package.json").version')
-          app="/tmp/zmanager-macos-release/ZManager-${version}-macos-${{ matrix.arch }}.app"
-          zip="/tmp/zmanager-macos-release/ZManager-${version}-macos-${{ matrix.arch }}.zip"
-          dmg="/tmp/zmanager-macos-release/ZManager-${version}-macos-${{ matrix.arch }}.dmg"
-          report="/tmp/zmanager-macos-release/ZManager-${version}-macos-${{ matrix.arch }}-inspection.json"
+          product="ZManager"
+          if [[ "${{ matrix.profile }}" == "online" ]]; then product="ZManager-full"; fi
+          stage="/tmp/zmanager-macos-release-${{ matrix.profile }}"
+          app="$stage/${product}-${version}-macos-${{ matrix.arch }}.app"
+          zip="$stage/${product}-${version}-macos-${{ matrix.arch }}.zip"
+          dmg="$stage/${product}-${version}-macos-${{ matrix.arch }}.dmg"
+          report="$stage/${product}-${version}-macos-${{ matrix.arch }}-inspection.json"
           gate_args=("$app" --expected-arch "${{ matrix.arch }}" --zip "$zip" --dmg "$dmg" --report "$report")
           if [[ "$ZMANAGER_RELEASE_SIGNED" == "true" ]]; then
             gate_args+=(--require-developer-id --require-notarization)
           fi
           scripts/release-gate-macos.sh "${gate_args[@]}"
-          cd /tmp/zmanager-macos-release
-          shasum -a 256 "ZManager-${version}-macos-${{ matrix.arch }}.zip" \
-            "ZManager-${version}-macos-${{ matrix.arch }}.dmg" \
-            > "ZManager-${version}-macos-${{ matrix.arch }}-SHA256SUMS.txt"
+          cd "$stage"
+          shasum -a 256 "${product}-${version}-macos-${{ matrix.arch }}.zip" \
+            "${product}-${version}-macos-${{ matrix.arch }}.dmg" \
+            > "${product}-${version}-macos-${{ matrix.arch }}-SHA256SUMS.txt"
 
       - name: Upload macOS release artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ matrix.artifact-name }}
+          name: zmanager-macos-${{ matrix.arch }}-${{ matrix.profile == 'online' && 'full' || 'local' }}
           if-no-files-found: error
           path: |
-            /tmp/zmanager-macos-release/*.zip
-            /tmp/zmanager-macos-release/*.dmg
-            /tmp/zmanager-macos-release/*-inspection.json
-            /tmp/zmanager-macos-release/*-SHA256SUMS.txt
+            /tmp/zmanager-macos-release-${{ matrix.profile }}/*.zip
+            /tmp/zmanager-macos-release-${{ matrix.profile }}/*.dmg
+            /tmp/zmanager-macos-release-${{ matrix.profile }}/*-inspection.json
+            /tmp/zmanager-macos-release-${{ matrix.profile }}/*-SHA256SUMS.txt
 
       - name: Remove release credentials
         if: always()
@@ -196,18 +202,18 @@ jobs:
           find "$RUNNER_TEMP" -maxdepth 1 -type f \( -name '*.p12' -o -name 'AuthKey_*.p8' -o -name '*.provisionprofile' \) -delete
 
   package-windows:
-    name: Windows ${{ matrix.arch }} package
+    name: Windows ${{ matrix.arch }} ${{ matrix.profile }} package
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
+        arch: [x64, arm64]
+        profile: [local, online]
         include:
           - arch: x64
             runner: windows-2022
-            artifact-name: zmanager-windows-x64
           - arch: arm64
             runner: windows-11-arm
-            artifact-name: zmanager-windows-arm64
 
     steps:
       - name: Checkout
@@ -236,7 +242,7 @@ jobs:
         # (avoids MAX_PATH issues with deeply nested target paths); the upload paths
         # below must mirror this location.
         env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}\zmbuild
+          CARGO_TARGET_DIR: ${{ runner.temp }}\zmbuild-${{ matrix.profile }}
           ZMANAGER_BUILD_NUMBER: ${{ env.ZMANAGER_RELEASE_BUILD_NUMBER }}
           MS_STORE_PACKAGE_NAME: ${{ vars.MS_STORE_PACKAGE_NAME }}
           MS_STORE_PUBLISHER: ${{ vars.MS_STORE_PUBLISHER }}
@@ -244,13 +250,14 @@ jobs:
         run: |
           $buildArgs = @{
             Environment = 'prod'
-            Profile = 'online'
+            Profile = '${{ matrix.profile }}'
             Architecture = '${{ matrix.arch }}'
             InstallMissing = $true
             InstallNodeModules = $true
             Build = $true
           }
-          if (-not [string]::IsNullOrWhiteSpace($env:MS_STORE_PACKAGE_NAME) -and
+          if ('${{ matrix.profile }}' -eq 'local' -and
+              -not [string]::IsNullOrWhiteSpace($env:MS_STORE_PACKAGE_NAME) -and
               -not [string]::IsNullOrWhiteSpace($env:MS_STORE_PUBLISHER) -and
               -not [string]::IsNullOrWhiteSpace($env:MS_STORE_PUBLISHER_DISPLAY_NAME)) {
             $buildArgs.BuildStoreMsix = $true
@@ -280,10 +287,10 @@ jobs:
             Write-Warning "Skipping staging Windows E2E; missing repository secrets: $($missing -join ', ')."
           }
 
-      - name: Smoke-test staging release artifact on Windows
+      - name: Smoke-test online profile on staging (CI only)
         # The ARM64 hosted runner does not provide the browser/default-browser
         # integration required by the hosted-account handoff test.
-        if: matrix.arch == 'x64' && steps.staging_credentials.outputs.configured == 'true'
+        if: matrix.arch == 'x64' && matrix.profile == 'online' && steps.staging_credentials.outputs.configured == 'true'
         shell: pwsh
         env:
           TZAP_DESKTOP_STAGING_CLIENT_ID: ${{ secrets.TZAP_DESKTOP_STAGING_CLIENT_ID }}
@@ -295,7 +302,7 @@ jobs:
         run: .\scripts\test-windows-standalone-staging.ps1 -Architecture ${{ matrix.arch }} -ReleaseArtifact
 
       - name: Upload staging standalone E2E evidence
-        if: failure() && matrix.arch == 'x64' && steps.staging_credentials.outputs.configured == 'true'
+        if: failure() && matrix.arch == 'x64' && matrix.profile == 'online' && steps.staging_credentials.outputs.configured == 'true'
         uses: actions/upload-artifact@v6
         with:
           name: zmanager-standalone-e2e-${{ matrix.arch }}
@@ -303,7 +310,7 @@ jobs:
           path: ${{ runner.temp }}\zmanager-standalone-e2e-${{ github.run_id }}-${{ matrix.arch }}-*
 
       - name: Generate release third-party license bundle
-        if: matrix.arch == 'x64'
+        if: matrix.arch == 'x64' && matrix.profile == 'local'
         shell: pwsh
         run: |
           $version = node -p "require('./package.json').version"
@@ -320,7 +327,7 @@ jobs:
           Write-Host "Generated release license bundle: $archive"
 
       - name: Upload Microsoft Store MSIX package
-        if: vars.MS_STORE_PACKAGE_NAME != '' && vars.MS_STORE_PUBLISHER != '' && vars.MS_STORE_PUBLISHER_DISPLAY_NAME != ''
+        if: matrix.profile == 'local' && vars.MS_STORE_PACKAGE_NAME != '' && vars.MS_STORE_PUBLISHER != '' && vars.MS_STORE_PUBLISHER_DISPLAY_NAME != ''
         uses: actions/upload-artifact@v6
         with:
           name: zmanager-windows-msix-${{ matrix.arch }}
@@ -330,26 +337,26 @@ jobs:
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ matrix.artifact-name }}
+          name: zmanager-windows-${{ matrix.arch }}-${{ matrix.profile == 'online' && 'full' || 'local' }}
           if-no-files-found: error
           path: |
-            ${{ runner.temp }}\zmbuild\*\release\zmanager-desktop.exe
-            ${{ runner.temp }}\zmbuild\*\release\bundle\nsis\*.exe
+            ${{ runner.temp }}\zmbuild-${{ matrix.profile }}\*\release\zmanager-desktop.exe
+            ${{ runner.temp }}\zmbuild-${{ matrix.profile }}\*\release\bundle\nsis\*.exe
             ${{ runner.temp }}\zmanager-desktop-*-third-party-licenses.zip
 
   package-deb:
-    name: Linux DEB ${{ matrix.arch }} package
+    name: Linux DEB ${{ matrix.arch }} ${{ matrix.profile }} package
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
+        arch: [x64, arm64]
+        profile: [local, online]
         include:
           - arch: x64
             runner: ubuntu-22.04
-            artifact-name: zmanager-linux-x64-deb
           - arch: arm64
             runner: ubuntu-22.04-arm
-            artifact-name: zmanager-linux-arm64-deb
 
     steps:
       - name: Checkout
@@ -369,31 +376,37 @@ jobs:
         shell: bash
         env:
           ZMANAGER_BUILD_NUMBER: ${{ env.ZMANAGER_RELEASE_BUILD_NUMBER }}
-        run: scripts/build-linux-ubuntu-deb.sh --install-deps --no-install
+          ZMANAGER_TZAP_BUILD_ENV: prod
+          CARGO_TARGET_DIR: ${{ runner.temp }}/zmbuild-${{ matrix.profile }}
+          ZMANAGER_DEB_STAGE_DIR: /tmp/zmanager-desktop-deb-${{ matrix.profile }}
+        run: |
+          args=(--install-deps --no-install --profile "${{ matrix.profile }}")
+          if [[ "${{ matrix.profile }}" == online ]]; then args+=(--skip-tests); fi
+          scripts/build-linux-ubuntu-deb.sh "${args[@]}"
 
       - name: Upload Debian artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ matrix.artifact-name }}
+          name: zmanager-linux-${{ matrix.arch }}-deb-${{ matrix.profile == 'online' && 'full' || 'local' }}
           if-no-files-found: error
           path: |
-            /tmp/zmanager-desktop-deb/*.deb
+            /tmp/zmanager-desktop-deb-${{ matrix.profile }}/*.deb
 
   package-rpm:
-    name: Linux RPM ${{ matrix.arch }} package
+    name: Linux RPM ${{ matrix.arch }} ${{ matrix.profile }} package
     runs-on: ${{ matrix.runner }}
     container:
       image: fedora:latest
     strategy:
       fail-fast: false
       matrix:
+        arch: [x64, arm64]
+        profile: [local, online]
         include:
           - arch: x64
             runner: ubuntu-22.04
-            artifact-name: zmanager-linux-x64-rpm
           - arch: arm64
             runner: ubuntu-22.04-arm
-            artifact-name: zmanager-linux-arm64-rpm
 
     steps:
       - name: Checkout
@@ -413,15 +426,21 @@ jobs:
         shell: bash
         env:
           ZMANAGER_BUILD_NUMBER: ${{ env.ZMANAGER_RELEASE_BUILD_NUMBER }}
-        run: scripts/build-linux-fedora-rpm.sh --install-deps --no-install
+          ZMANAGER_TZAP_BUILD_ENV: prod
+          CARGO_TARGET_DIR: /tmp/zmbuild-${{ matrix.profile }}
+          ZMANAGER_RPM_STAGE_DIR: /tmp/zmanager-desktop-rpm-${{ matrix.profile }}
+        run: |
+          args=(--install-deps --no-install --profile "${{ matrix.profile }}")
+          if [[ "${{ matrix.profile }}" == online ]]; then args+=(--skip-tests); fi
+          scripts/build-linux-fedora-rpm.sh "${args[@]}"
 
       - name: Upload RPM artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: ${{ matrix.artifact-name }}
+          name: zmanager-linux-${{ matrix.arch }}-rpm-${{ matrix.profile == 'online' && 'full' || 'local' }}
           if-no-files-found: error
           path: |
-            /tmp/zmanager-desktop-rpm/*.rpm
+            /tmp/zmanager-desktop-rpm-${{ matrix.profile }}/*.rpm
 
 
   publish:
@@ -457,25 +476,29 @@ jobs:
             normalized_name=""
 
             case "$artifact_dir" in
-              zmanager-windows-x64)
+              zmanager-windows-x64-local|zmanager-windows-x64-full)
                 arch="x64"
+                variant=""
+                if [[ "$artifact_dir" == *-full ]]; then variant="full-"; fi
                 if [[ "$file_name" == "zmanager-desktop-${release_version}-third-party-licenses.zip" ]]; then
                   normalized_name="$file_name"
                 elif [[ "$src" == *"/bundle/nsis/"* ]] || [[ "$file_name" == *setup*.exe ]]; then
-                  normalized_name="zmanager-desktop-${release_version}-windows-${arch}-installer.exe"
+                  normalized_name="zmanager-desktop-${variant}${release_version}-windows-${arch}-installer.exe"
                 elif [[ "$file_name" == "zmanager-desktop.exe" ]]; then
-                  normalized_name="zmanager-desktop-${release_version}-windows-${arch}-portable.exe"
+                  normalized_name="zmanager-desktop-${variant}${release_version}-windows-${arch}-portable.exe"
                 else
                   echo "Skipping unknown windows artifact: $file_name" >&2
                   continue
                 fi
                 ;;
-              zmanager-windows-arm64)
+              zmanager-windows-arm64-local|zmanager-windows-arm64-full)
                 arch="arm64"
+                variant=""
+                if [[ "$artifact_dir" == *-full ]]; then variant="full-"; fi
                 if [[ "$src" == *"/bundle/nsis/"* ]] || [[ "$file_name" == *setup*.exe ]]; then
-                  normalized_name="zmanager-desktop-${release_version}-windows-${arch}-installer.exe"
+                  normalized_name="zmanager-desktop-${variant}${release_version}-windows-${arch}-installer.exe"
                 elif [[ "$file_name" == "zmanager-desktop.exe" ]]; then
-                  normalized_name="zmanager-desktop-${release_version}-windows-${arch}-portable.exe"
+                  normalized_name="zmanager-desktop-${variant}${release_version}-windows-${arch}-portable.exe"
                 else
                   echo "Skipping unknown windows artifact: $file_name" >&2
                   continue
@@ -487,21 +510,32 @@ jobs:
               zmanager-windows-msix-arm64)
                 normalized_name="$file_name"
                 ;;
-              zmanager-linux-x64-deb)
-                normalized_name="zmanager-desktop-${release_version}-linux-x64.deb"
+              zmanager-linux-x64-deb-local|zmanager-linux-x64-deb-full)
+                variant=""
+                if [[ "$artifact_dir" == *-full ]]; then variant="full-"; fi
+                normalized_name="zmanager-desktop-${variant}${release_version}-linux-x64.deb"
                 ;;
-              zmanager-linux-arm64-deb)
-                normalized_name="zmanager-desktop-${release_version}-linux-arm64.deb"
+              zmanager-linux-arm64-deb-local|zmanager-linux-arm64-deb-full)
+                variant=""
+                if [[ "$artifact_dir" == *-full ]]; then variant="full-"; fi
+                normalized_name="zmanager-desktop-${variant}${release_version}-linux-arm64.deb"
                 ;;
-              zmanager-linux-x64-rpm)
-                normalized_name="zmanager-desktop-${release_version}-linux-x64.rpm"
+              zmanager-linux-x64-rpm-local|zmanager-linux-x64-rpm-full)
+                variant=""
+                if [[ "$artifact_dir" == *-full ]]; then variant="full-"; fi
+                normalized_name="zmanager-desktop-${variant}${release_version}-linux-x64.rpm"
                 ;;
-              zmanager-linux-arm64-rpm)
-                normalized_name="zmanager-desktop-${release_version}-linux-arm64.rpm"
+              zmanager-linux-arm64-rpm-local|zmanager-linux-arm64-rpm-full)
+                variant=""
+                if [[ "$artifact_dir" == *-full ]]; then variant="full-"; fi
+                normalized_name="zmanager-desktop-${variant}${release_version}-linux-arm64.rpm"
                 ;;
-              zmanager-macos-arm64|zmanager-macos-x86_64)
+              zmanager-macos-arm64-local|zmanager-macos-arm64-full|zmanager-macos-x86_64-local|zmanager-macos-x86_64-full)
                 case "$file_name" in
                   ZManager-${release_version}-macos-*.zip|ZManager-${release_version}-macos-*.dmg|ZManager-${release_version}-macos-*-inspection.json|ZManager-${release_version}-macos-*-SHA256SUMS.txt)
+                    normalized_name="$file_name"
+                    ;;
+                  ZManager-full-${release_version}-macos-*.zip|ZManager-full-${release_version}-macos-*.dmg|ZManager-full-${release_version}-macos-*-inspection.json|ZManager-full-${release_version}-macos-*-SHA256SUMS.txt)
                     normalized_name="$file_name"
                     ;;
                   *)
@@ -541,6 +575,14 @@ jobs:
             "ZManager-${release_version}-macos-x86_64.dmg"
             "ZManager-${release_version}-macos-x86_64-inspection.json"
             "ZManager-${release_version}-macos-x86_64-SHA256SUMS.txt"
+            "ZManager-full-${release_version}-macos-arm64.zip"
+            "ZManager-full-${release_version}-macos-arm64.dmg"
+            "ZManager-full-${release_version}-macos-arm64-inspection.json"
+            "ZManager-full-${release_version}-macos-arm64-SHA256SUMS.txt"
+            "ZManager-full-${release_version}-macos-x86_64.zip"
+            "ZManager-full-${release_version}-macos-x86_64.dmg"
+            "ZManager-full-${release_version}-macos-x86_64-inspection.json"
+            "ZManager-full-${release_version}-macos-x86_64-SHA256SUMS.txt"
           )
           for required in "${required_macos_artifacts[@]}"; do
             if [[ ! -f "release-bundles/$required" ]]; then
@@ -554,6 +596,31 @@ jobs:
             echo "Required third-party license bundle is missing: $license_bundle" >&2
             exit 1
           fi
+
+          required_platform_artifacts=(
+            "zmanager-desktop-${release_version}-windows-x64-installer.exe"
+            "zmanager-desktop-${release_version}-windows-x64-portable.exe"
+            "zmanager-desktop-full-${release_version}-windows-x64-installer.exe"
+            "zmanager-desktop-full-${release_version}-windows-x64-portable.exe"
+            "zmanager-desktop-${release_version}-windows-arm64-installer.exe"
+            "zmanager-desktop-${release_version}-windows-arm64-portable.exe"
+            "zmanager-desktop-full-${release_version}-windows-arm64-installer.exe"
+            "zmanager-desktop-full-${release_version}-windows-arm64-portable.exe"
+            "zmanager-desktop-${release_version}-linux-x64.deb"
+            "zmanager-desktop-full-${release_version}-linux-x64.deb"
+            "zmanager-desktop-${release_version}-linux-arm64.deb"
+            "zmanager-desktop-full-${release_version}-linux-arm64.deb"
+            "zmanager-desktop-${release_version}-linux-x64.rpm"
+            "zmanager-desktop-full-${release_version}-linux-x64.rpm"
+            "zmanager-desktop-${release_version}-linux-arm64.rpm"
+            "zmanager-desktop-full-${release_version}-linux-arm64.rpm"
+          )
+          for required in "${required_platform_artifacts[@]}"; do
+            if [[ ! -f "release-bundles/$required" ]]; then
+              echo "Required release artifact is missing: $required" >&2
+              exit 1
+            fi
+          done
 
           sha256_file="release-bundles/zmanager-desktop-${release_version}-SHA256SUMS.txt"
           tmp_sha256="$(mktemp)"
@@ -572,7 +639,8 @@ jobs:
             Automated release of zmanager-desktop from GitHub Actions.
 
             - Built from pinned zmanager dependency tag.
-            - Includes macOS arm64/x86_64 ZIP and DMG artifacts, Windows portable and installer binaries, optional Store MSIX packages, and Linux DEB/RPM packages.
+            - Default artifacts use the local/offline profile. The Microsoft Store MSIX uses this profile; separate `full` artifacts include online features.
+            - Includes macOS arm64/x86_64 ZIP and DMG artifacts, Windows portable and installer binaries, optional local-profile Store MSIX packages, and Linux DEB/RPM packages.
             - Includes a generated third-party license bundle with Rust, frontend, vendored, and Windows vcpkg notices.
             - macOS artifacts are Developer ID signed and notarized when release credentials are configured; otherwise they are ad-hoc-signed testing artifacts and are not suitable for public Gatekeeper distribution.
             - SHA256SUMS file is included for artifact verification.

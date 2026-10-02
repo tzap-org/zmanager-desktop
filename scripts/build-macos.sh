@@ -8,6 +8,7 @@ install_deps=0
 skip_tests=0
 install_application=1
 bundle_kind="all"
+build_profile="local"
 install_dir="${ZMANAGER_MACOS_INSTALL_DIR:-/Applications}"
 lsregister="${ZMANAGER_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}"
 architecture="$(uname -m)"
@@ -16,10 +17,11 @@ local_development_codesign_identity="8014C7D557DE28E3C52971362BA18A3CCC28A723"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/build-macos.sh [--install-deps] [--skip-tests] [--no-install] [--install-dir PATH] [--bundle app|dmg|all] [--arch arm64|x86_64]
+Usage: scripts/build-macos.sh [--install-deps] [--skip-tests] [--no-install] [--install-dir PATH] [--bundle app|dmg|all] [--arch arm64|x86_64] [--profile local|online]
 
 Builds and stages the unified macOS Tauri Release Bundle under
-/tmp/zmanager-desktop-macos (override with ZMANAGER_MACOS_STAGE_DIR).
+/tmp/zmanager-desktop-macos-local or /tmp/zmanager-desktop-macos-online
+(override with ZMANAGER_MACOS_STAGE_DIR).
 
 By default the script builds the host architecture and produces both a .app
 bundle and a .dmg, then installs ZManager.app into /Applications. Local builds
@@ -46,6 +48,7 @@ Options:
                   set with ZMANAGER_MACOS_INSTALL_DIR.
   --bundle VALUE  Build app, dmg, or all bundles. Default: all.
   --arch VALUE    Build a separate arm64 or x86_64 artifact. Default: host architecture.
+  --profile VALUE Build the local (offline) or online profile. Default: local.
   -h, --help      Show this help.
 EOF
 }
@@ -86,6 +89,14 @@ while (($#)); do
       architecture="$2"
       shift
       ;;
+    --profile)
+      if (($# < 2)); then
+        echo "--profile requires local or online." >&2
+        exit 2
+      fi
+      build_profile="$2"
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -104,6 +115,15 @@ case "$bundle_kind" in
     ;;
   *)
     echo "Unsupported bundle value: $bundle_kind (expected app, dmg, or all)." >&2
+    exit 2
+    ;;
+esac
+
+case "$build_profile" in
+  local|online)
+    ;;
+  *)
+    echo "Unsupported profile: $build_profile (expected local or online)." >&2
     exit 2
     ;;
 esac
@@ -322,12 +342,21 @@ rm -rf "$bundle_root/macos"
 
 build_number="${ZMANAGER_BUILD_NUMBER:-$(git rev-list --count HEAD)}"
 os_label="MacOS"
-build_id="${os_label}-${architecture}-${build_number}"
+build_id="${os_label}-${architecture}-${build_profile}-${build_number}"
 export ZMANAGER_BUILD_NUMBER="$build_number"
 export ZMANAGER_BUILD_ID="$build_id"
+export ZMANAGER_TZAP_BUILD_ENV="${ZMANAGER_TZAP_BUILD_ENV:-prod}"
+export VITE_TZAP_BUILD_ENV="$ZMANAGER_TZAP_BUILD_ENV"
+export VITE_ZMANAGER_PROFILE="$build_profile"
+export VITE_ENABLE_HOSTED_CAPABILITIES="$( [[ "$build_profile" == online ]] && echo true || echo false )"
 echo "Build: ${build_id}"
 
 tauri_args=(build --bundles app --no-sign --target "$rust_triple")
+if [[ "$build_profile" == online ]]; then
+  tauri_args+=(-- --no-default-features --features online-profile)
+else
+  tauri_args+=(-- --no-default-features)
+fi
 npm run tauri -- "${tauri_args[@]}"
 
 applications=()
@@ -341,8 +370,12 @@ fi
 application="${applications[0]}"
 
 version=$(node -p 'require("./package.json").version')
-artifact_base="ZManager-${version}-macos-${architecture}"
-stage_dir="${ZMANAGER_MACOS_STAGE_DIR:-/tmp/zmanager-desktop-macos}"
+artifact_product="ZManager"
+if [[ "$build_profile" == online ]]; then
+  artifact_product="ZManager-full"
+fi
+artifact_base="${artifact_product}-${version}-macos-${architecture}"
+stage_dir="${ZMANAGER_MACOS_STAGE_DIR:-/tmp/zmanager-desktop-macos-${build_profile}}"
 install -d -m 0755 "$stage_dir"
 staged_app="$stage_dir/$artifact_base.app"
 zip_artifact="$stage_dir/$artifact_base.zip"

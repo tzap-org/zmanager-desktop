@@ -9,10 +9,11 @@ skip_tests=0
 allow_non_baseline=0
 install_package=1
 deps_only=0
+build_profile="local"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/build-linux-ubuntu-deb.sh [--install-deps] [--skip-tests] [--allow-non-baseline] [--no-install] [--deps-only]
+Usage: scripts/build-linux-ubuntu-deb.sh [--install-deps] [--skip-tests] [--allow-non-baseline] [--no-install] [--deps-only] [--profile local|online]
 
 Builds the Ubuntu/Debian .deb distribution package with Tauri, stages it under
 /tmp/zmanager-desktop-deb, and reinstalls the staged package through apt.
@@ -36,6 +37,7 @@ Options:
   --no-install    Build and stage the .deb without reinstalling it.
   --deps-only     Install prerequisites and sync sibling repos, then exit
                    before running tests or building the package.
+  --profile VALUE Build the local (offline) or online profile. Default: local.
   -h, --help      Show this help.
 EOF
 }
@@ -57,6 +59,14 @@ while (($#)); do
     --deps-only)
       deps_only=1
       ;;
+    --profile)
+      if (($# < 2)); then
+        echo "--profile requires local or online." >&2
+        exit 2
+      fi
+      build_profile="$2"
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -69,6 +79,15 @@ while (($#)); do
   esac
   shift
 done
+
+case "$build_profile" in
+  local|online)
+    ;;
+  *)
+    echo "Unsupported profile: $build_profile (expected local or online)." >&2
+    exit 2
+    ;;
+esac
 
 check_release_baseline() {
   local os_id="" version_codename="" pretty_name=""
@@ -319,12 +338,22 @@ rm -rf "$cargo_target_dir/release/bundle/deb"
 build_number="${ZMANAGER_BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 architecture="$(uname -m)"
 os_label="Linux"
-build_id="${os_label}-${architecture}-${build_number}"
+build_id="${os_label}-${architecture}-${build_profile}-${build_number}"
 export ZMANAGER_BUILD_NUMBER="$build_number"
 export ZMANAGER_BUILD_ID="$build_id"
+export ZMANAGER_TZAP_BUILD_ENV="${ZMANAGER_TZAP_BUILD_ENV:-prod}"
+export VITE_TZAP_BUILD_ENV="$ZMANAGER_TZAP_BUILD_ENV"
+export VITE_ZMANAGER_PROFILE="$build_profile"
+if [[ "$build_profile" == online ]]; then
+  export VITE_ENABLE_HOSTED_CAPABILITIES=true
+  tauri_profile_args=(-- --no-default-features --features online-profile)
+else
+  export VITE_ENABLE_HOSTED_CAPABILITIES=false
+  tauri_profile_args=(-- --no-default-features)
+fi
 echo "Build: ${build_id}"
 
-npm run tauri -- build --bundles deb
+npm run tauri -- build --bundles deb "${tauri_profile_args[@]}"
 
 product_version=$(node -p 'require("./package.json").version')
 apt_stage_dir="${ZMANAGER_DEB_STAGE_DIR:-/tmp/zmanager-desktop-deb}"

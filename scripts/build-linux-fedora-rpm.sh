@@ -8,10 +8,11 @@ install_deps=0
 skip_tests=0
 allow_non_baseline=0
 install_package=1
+build_profile="local"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/build-linux-fedora-rpm.sh [--install-deps] [--skip-tests] [--allow-non-baseline] [--no-install]
+Usage: scripts/build-linux-fedora-rpm.sh [--install-deps] [--skip-tests] [--allow-non-baseline] [--no-install] [--profile local|online]
 
 Builds the Fedora .rpm distribution package with Tauri, stages it under
 /tmp/zmanager-desktop-rpm, and installs or reinstalls the staged package through
@@ -33,6 +34,7 @@ Options:
   --allow-non-baseline
                   Allow local/test builds outside Fedora (retained for compatibility).
   --no-install    Build and stage the .rpm without reinstalling it.
+  --profile VALUE Build the local (offline) or online profile. Default: local.
   -h, --help      Show this help.
 EOF
 }
@@ -51,6 +53,14 @@ while (($#)); do
     --no-install)
       install_package=0
       ;;
+    --profile)
+      if (($# < 2)); then
+        echo "--profile requires local or online." >&2
+        exit 2
+      fi
+      build_profile="$2"
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -63,6 +73,15 @@ while (($#)); do
   esac
   shift
 done
+
+case "$build_profile" in
+  local|online)
+    ;;
+  *)
+    echo "Unsupported profile: $build_profile (expected local or online)." >&2
+    exit 2
+    ;;
+esac
 
 check_release_baseline() {
   local os_id="" pretty_name=""
@@ -345,15 +364,26 @@ rm -rf "$cargo_target_dir/release/bundle/rpm"
 build_number="${ZMANAGER_BUILD_NUMBER:-$(git rev-list --count HEAD 2>/dev/null || echo 1)}"
 architecture="$(uname -m)"
 os_label="Linux"
-build_id="${os_label}-${architecture}-${build_number}"
+build_id="${os_label}-${architecture}-${build_profile}-${build_number}"
 export ZMANAGER_BUILD_NUMBER="$build_number"
 export ZMANAGER_BUILD_ID="$build_id"
+export ZMANAGER_TZAP_BUILD_ENV="${ZMANAGER_TZAP_BUILD_ENV:-prod}"
+export VITE_TZAP_BUILD_ENV="$ZMANAGER_TZAP_BUILD_ENV"
+export VITE_ZMANAGER_PROFILE="$build_profile"
+if [[ "$build_profile" == online ]]; then
+  export VITE_ENABLE_HOSTED_CAPABILITIES=true
+  tauri_profile_args=(-- --no-default-features --features online-profile)
+else
+  export VITE_ENABLE_HOSTED_CAPABILITIES=false
+  tauri_profile_args=(-- --no-default-features)
+fi
 echo "Build: ${build_id}"
 
 # Use Vite's runner config loader for Fedora packaging so a root-owned
 # node_modules/.vite-temp cache from a previous sudo build does not break Tauri's
 # beforeBuildCommand.
-npm run tauri -- build --bundles rpm --config '{"build":{"beforeBuildCommand":"npm run build -- --configLoader runner"}}'
+tauri_args=(build --bundles rpm --config '{"build":{"beforeBuildCommand":"npm run build -- --configLoader runner"}}')
+npm run tauri -- "${tauri_args[@]}" "${tauri_profile_args[@]}"
 
 product_version=$(node -p 'require("./package.json").version')
 dnf_stage_dir="${ZMANAGER_RPM_STAGE_DIR:-/tmp/zmanager-desktop-rpm}"

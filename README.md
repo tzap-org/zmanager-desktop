@@ -141,7 +141,7 @@ list, test, and extract through a prompt or standard input.
 ## Get started in 60 seconds
 
 1. Open [GitHub Releases](https://github.com/frankmanzhu/zmanager-desktop/releases/latest).
-2. Download the latest installer for your OS:
+2. Download the default package for your OS. These packages use the local/offline profile. To enable hosted account features, choose the matching filename containing `full`:
    - **Windows:** `zmanager-desktop-<version>-windows-x64-installer.exe` or `...-windows-arm64-installer.exe`
    - **Linux:** `zmanager-desktop-<version>-linux-x64` or `...-linux-arm64` (`.deb` / `.rpm`)
    - **macOS:** `ZManager-<version>-macos-arm64.dmg` or `...-macos-x86_64.dmg`
@@ -151,14 +151,16 @@ list, test, and extract through a prompt or standard input.
 
 ### Package quick lookup
 
-| Platform | Recommended package | Alt package |
+| Platform | Local/offline default | Full/online |
 |---|---|---|
-| Windows x64 | `zmanager-desktop-<version>-windows-x64-installer.exe` | `zmanager-desktop-<version>-windows-x64-portable.exe` |
-| Windows ARM64 | `zmanager-desktop-<version>-windows-arm64-installer.exe` | `zmanager-desktop-<version>-windows-arm64-portable.exe` |
-| Linux x64 | `zmanager-desktop-<version>-linux-x64.deb` or `.rpm` | - |
-| Linux ARM64 | `zmanager-desktop-<version>-linux-arm64.deb` or `.rpm` | - |
-| macOS ARM64 | `ZManager-<version>-macos-arm64.dmg` | `.zip` |
-| macOS x86_64 | `ZManager-<version>-macos-x86_64.dmg` | `.zip` |
+| Windows x64 | `zmanager-desktop-<version>-windows-x64-installer.exe` or `...-portable.exe` | `zmanager-desktop-full-<version>-windows-x64-installer.exe` or `...-portable.exe` |
+| Windows ARM64 | `zmanager-desktop-<version>-windows-arm64-installer.exe` or `...-portable.exe` | `zmanager-desktop-full-<version>-windows-arm64-installer.exe` or `...-portable.exe` |
+| Linux x64 | `zmanager-desktop-<version>-linux-x64.deb` or `.rpm` | `zmanager-desktop-full-<version>-linux-x64.deb` or `.rpm` |
+| Linux ARM64 | `zmanager-desktop-<version>-linux-arm64.deb` or `.rpm` | `zmanager-desktop-full-<version>-linux-arm64.deb` or `.rpm` |
+| macOS ARM64 | `ZManager-<version>-macos-arm64.dmg` or `.zip` | `ZManager-full-<version>-macos-arm64.dmg` or `.zip` |
+| macOS x86_64 | `ZManager-<version>-macos-x86_64.dmg` or `.zip` | `ZManager-full-<version>-macos-x86_64.dmg` or `.zip` |
+
+The Microsoft Store MSIX is built from the local/offline profile.
 
 ## Platform integration
 

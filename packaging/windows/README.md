@@ -126,6 +126,10 @@ app's Partner Center submission; this workflow does not publish to the Store.
 The packages are deliberately unsigned because Store submission replaces the
 package signature. Direct-download MSIX distribution would require signing them
 with a trusted certificate.
+Windows releases include two EXE sets: the plain product names use the local
+profile, and names containing `full` use the online profile. The Store MSIX is
+built only from the local profile. The online-profile staging smoke test uses
+the online build and does not replace the release artifact.
 
 For a local build that produces both the normal Windows installer and Store
 package (including the shell extension), run:

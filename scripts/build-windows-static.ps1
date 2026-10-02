@@ -70,7 +70,7 @@ if ($env:ZMANAGER_BUILD_NUMBER) {
     }
 }
 $osLabel = "Windows"
-$buildId = "${osLabel}-${resolvedArch}-${buildNumber}"
+$buildId = "${osLabel}-${resolvedArch}-${Profile}-${buildNumber}"
 $env:ZMANAGER_BUILD_NUMBER = $buildNumber
 $env:ZMANAGER_BUILD_ID = $buildId
 Write-Host "Build: ${buildId}"
