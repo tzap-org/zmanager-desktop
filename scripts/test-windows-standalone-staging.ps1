@@ -68,6 +68,7 @@ foreach ($name in @("TZAP_DESKTOP_STAGING_CLIENT_ID", "TZAP_E2E_USERNAME", "TZAP
 
 $env:ZMANAGER_TZAP_BUILD_ENV = "staging"
 $env:VITE_TZAP_BUILD_ENV = "staging"
+$env:VITE_ENABLE_HOSTED_CERTIFICATE_SECTION = "true"
 $env:ZMANAGER_TZAP_SERVER_BASE_URL = "https://staging.tzap.org"
 $env:TZAP_E2E_ENV = "staging"
 $env:TZAP_E2E_STAGING_CALLBACK_ADAPTER = "1"

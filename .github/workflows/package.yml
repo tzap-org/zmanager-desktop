@@ -109,6 +109,7 @@ jobs:
           TZAP_E2E_PASSWORD: ${{ secrets.TZAP_E2E_PASSWORD }}
           TZAP_E2E_ENV: staging
           TZAP_E2E_STAGING_CALLBACK_ADAPTER: '1'
+          TZAP_E2E_SKIP_ONLINE_ACCOUNT: ${{ matrix.arch == 'x86_64' && '1' || '0' }}
         run: npm run test:gui:macos
 
       # ---- Windows ----
