@@ -2992,17 +2992,20 @@ mod tests {
     #[test]
     fn hosted_status_base_url_is_allow_listed_by_environment() {
         match option_env!("ZMANAGER_TZAP_BUILD_ENV") {
-            Some("staging") => assert_eq!(hosted_status_base_url(None).unwrap(), crate::constants::TZAP_SERVER_BASE_URL),
-            _ => assert_eq!(hosted_status_base_url(None).unwrap(), SIGN_TZAP_BASE_URL),
-        }
-        assert_eq!(hosted_status_base_url(Some("staging")).unwrap(), crate::constants::TZAP_SERVER_BASE_URL);
-        match option_env!("ZMANAGER_TZAP_BUILD_ENV") {
-            Some("staging") => assert!(hosted_status_base_url(Some("local")).is_err()),
+            Some("staging") => {
+                assert_eq!(hosted_status_base_url(None).unwrap(), crate::constants::TZAP_SERVER_BASE_URL);
+                assert!(hosted_status_base_url(Some("local")).is_err());
+            }
             Some("prod") => {
+                assert_eq!(hosted_status_base_url(None).unwrap(), SIGN_TZAP_BASE_URL);
                 assert!(hosted_status_base_url(Some("local")).is_err());
                 assert!(hosted_status_base_url(Some("staging")).is_err());
             }
-            _ => assert_eq!(hosted_status_base_url(Some("local")).unwrap(), "http://localhost:8787"),
+            _ => assert_eq!(hosted_status_base_url(None).unwrap(), SIGN_TZAP_BASE_URL),
+        }
+        if option_env!("ZMANAGER_TZAP_BUILD_ENV").is_none() {
+            assert_eq!(hosted_status_base_url(Some("staging")).unwrap(), crate::constants::TZAP_SERVER_BASE_URL);
+            assert_eq!(hosted_status_base_url(Some("local")).unwrap(), "http://localhost:8787");
         }
         assert!(hosted_status_base_url(Some("unknown")).is_err());
     }

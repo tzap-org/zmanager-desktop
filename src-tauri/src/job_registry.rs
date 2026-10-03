@@ -1241,7 +1241,7 @@ fn next_revision(current: u64) -> Result<u64, &'static str> {
 
 fn allocate_terminal_sequence() -> Result<u64, &'static str> {
     NEXT_TERMINAL_SEQUENCE
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| current.checked_add(1))
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |current| current.checked_add(1))
         .map(|previous| previous + 1)
         .map_err(|_| "terminal_sequence_exhausted")
 }

@@ -2218,18 +2218,19 @@ mod tests {
 
     #[test]
     fn hosted_environment_is_allow_listed_without_falling_back_to_production() {
-        assert_eq!(hosted_environment("staging").unwrap(), TzapHostedAuthEnvironment::Staging);
         match option_env!("ZMANAGER_TZAP_BUILD_ENV") {
             Some("staging") => {
+                assert_eq!(hosted_environment("staging").unwrap(), TzapHostedAuthEnvironment::Staging);
                 assert!(hosted_environment("local").is_err());
                 assert!(hosted_environment("prod").is_err());
             }
             Some("prod") => {
-                assert!(hosted_environment("local").is_err());
                 assert!(hosted_environment("staging").is_err());
+                assert!(hosted_environment("local").is_err());
                 assert_eq!(hosted_environment("prod").unwrap(), TzapHostedAuthEnvironment::Prod);
             }
             _ => {
+                assert_eq!(hosted_environment("staging").unwrap(), TzapHostedAuthEnvironment::Staging);
                 assert_eq!(hosted_environment("local").unwrap(), TzapHostedAuthEnvironment::Local);
                 assert_eq!(hosted_environment("prod").unwrap(), TzapHostedAuthEnvironment::Prod);
             }
