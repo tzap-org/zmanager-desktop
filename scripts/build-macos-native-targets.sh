@@ -7,7 +7,9 @@ if [[ $# -lt 1 || $# -gt 2 ]]; then
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export MACOSX_DEPLOYMENT_TARGET=14.0
+# Do not export MACOSX_DEPLOYMENT_TARGET here: cargo applies it to host proc-macro
+# dylibs too, and the Xcode 27 linker then emits dylibs macOS 27 refuses to dlopen
+# (mis-aligned LINKEDIT string pool). Swift/clang steps pin 14.0 explicitly below.
 export LZMA_API_STATIC=1
 # The extensions consume the UniFFI zmanager-ffi crate from the sibling
 # zmanager checkout, using the same released TZAP dependencies as the main
