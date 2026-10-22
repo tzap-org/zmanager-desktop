@@ -5,9 +5,10 @@ desktop templates for quick-action routes.
 
 Packaged materials:
 
-- `zmanager.desktop.hbs`: launcher/Open With desktop entry plus desktop actions.
-- `zmanager-desktop.desktop`: visible GNOME launcher whose desktop id matches
-  Tauri's Wayland app id for dock/taskbar icon matching.
+- `zmanager.desktop.hbs`: the visible launcher/Open With entry plus desktop
+  actions. Tauri renders it as `zmanager-desktop.desktop`, matching the Wayland
+  app id for dock/taskbar icon matching. Tauri also owns the application icon
+  payloads; custom package files add only MIME icons and shell integrations.
 - `xdg-mime.xml`: MIME definitions for ZManager-owned `.tzst`, `.tar.zst`, and `.tzap`
   extensions, including explicit XDG MIME icon definitions (`application-x-zmanager-tzap`, `application-x-zmanager-tzst`) and fallback generic archive icons.
 - `src-tauri/icons/icon-256.png`, `icon-512.png`, and `icon.png`: installed as

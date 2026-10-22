@@ -68,14 +68,10 @@ function expectAction(entry: string, expected: ExpectedAction): void {
 
 describe("Linux context menu packaging", () => {
   it("keeps desktop actions aligned with the Windows cascaded menu order", () => {
-    for (const file of [
-      readWorkspaceFile("packaging", "linux", "zmanager-desktop.desktop"),
-      readWorkspaceFile("packaging", "linux", "zmanager.desktop.hbs"),
-    ]) {
-      expect(listedActions(file)).toEqual(windowsOrderedActions.map((action) => action.action));
-      for (const action of windowsOrderedActions) {
-        expectAction(file, action);
-      }
+    const file = readWorkspaceFile("packaging", "linux", "zmanager.desktop.hbs");
+    expect(listedActions(file)).toEqual(windowsOrderedActions.map((action) => action.action));
+    for (const action of windowsOrderedActions) {
+      expectAction(file, action);
     }
   });
 
@@ -159,7 +155,7 @@ describe("Linux context menu packaging", () => {
   });
 
   it("does not include macOS-only compressAppleArchive action", () => {
-    const file = readWorkspaceFile("packaging", "linux", "zmanager-desktop.desktop");
+    const file = readWorkspaceFile("packaging", "linux", "zmanager.desktop.hbs");
     expect(listedActions(file)).not.toContain("AddToAar");
     expect(file).not.toContain("compressAppleArchive");
     expect(file).not.toContain("compress-aar");

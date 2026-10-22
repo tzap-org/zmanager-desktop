@@ -49,7 +49,9 @@
     "icon": [
       "icons/icon.png",
       "icons/icon.ico",
-      "icons/icon.icns"
+      "icons/icon.icns",
+      "icons/icon-256.png",
+      "icons/icon-512.png"
     ],
     "fileAssociations": [
       {
@@ -172,16 +174,12 @@
         "postInstallScript": "../packaging/linux/postinstall.sh",
         "postRemoveScript": "../packaging/linux/postremove.sh",
         "files": {
-          "/usr/share/icons/hicolor/256x256/apps/zmanager-desktop.png": "icons/icon-256.png",
-          "/usr/share/icons/hicolor/512x512/apps/zmanager-desktop.png": "icons/icon-512.png",
-          "/usr/share/icons/hicolor/1024x1024/apps/zmanager-desktop.png": "icons/icon.png",
           "/usr/share/icons/hicolor/256x256/mimetypes/application-x-zmanager-tzap.png": "icons/icon-256.png",
           "/usr/share/icons/hicolor/512x512/mimetypes/application-x-zmanager-tzap.png": "icons/icon-512.png",
           "/usr/share/icons/hicolor/1024x1024/mimetypes/application-x-zmanager-tzap.png": "icons/icon.png",
           "/usr/share/icons/hicolor/256x256/mimetypes/application-x-zmanager-tzst.png": "icons/icon-256.png",
           "/usr/share/icons/hicolor/512x512/mimetypes/application-x-zmanager-tzst.png": "icons/icon-512.png",
           "/usr/share/icons/hicolor/1024x1024/mimetypes/application-x-zmanager-tzst.png": "icons/icon.png",
-          "/usr/share/applications/zmanager-desktop.desktop": "../packaging/linux/zmanager-desktop.desktop",
           "/usr/share/metainfo/org.tzap-org.zmanager.desktop.metainfo.xml": "../packaging/linux/org.tzap-org.zmanager.desktop.metainfo.xml",
           "/usr/share/mime/packages/zmanager.xml": "../packaging/linux/xdg-mime.xml",
           "/usr/share/nautilus-python/extensions/zmanager_nautilus.py": "../packaging/linux/nautilus/zmanager_nautilus.py",
@@ -198,16 +196,12 @@
         "postInstallScript": "../packaging/linux/postinstall.sh",
         "postRemoveScript": "../packaging/linux/postremove.sh",
         "files": {
-          "/usr/share/icons/hicolor/256x256/apps/zmanager-desktop.png": "icons/icon-256.png",
-          "/usr/share/icons/hicolor/512x512/apps/zmanager-desktop.png": "icons/icon-512.png",
-          "/usr/share/icons/hicolor/1024x1024/apps/zmanager-desktop.png": "icons/icon.png",
           "/usr/share/icons/hicolor/256x256/mimetypes/application-x-zmanager-tzap.png": "icons/icon-256.png",
           "/usr/share/icons/hicolor/512x512/mimetypes/application-x-zmanager-tzap.png": "icons/icon-512.png",
           "/usr/share/icons/hicolor/1024x1024/mimetypes/application-x-zmanager-tzap.png": "icons/icon.png",
           "/usr/share/icons/hicolor/256x256/mimetypes/application-x-zmanager-tzst.png": "icons/icon-256.png",
           "/usr/share/icons/hicolor/512x512/mimetypes/application-x-zmanager-tzst.png": "icons/icon-512.png",
           "/usr/share/icons/hicolor/1024x1024/mimetypes/application-x-zmanager-tzst.png": "icons/icon.png",
-          "/usr/share/applications/zmanager-desktop.desktop": "../packaging/linux/zmanager-desktop.desktop",
           "/usr/share/metainfo/org.tzap-org.zmanager.desktop.metainfo.xml": "../packaging/linux/org.tzap-org.zmanager.desktop.metainfo.xml",
           "/usr/share/mime/packages/zmanager.xml": "../packaging/linux/xdg-mime.xml",
           "/usr/share/nautilus-python/extensions/zmanager_nautilus.py": "../packaging/linux/nautilus/zmanager_nautilus.py",

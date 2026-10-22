@@ -24,7 +24,6 @@ const artifacts = {
     await read("packaging/windows/nsis-shell-actions.generated.nsh"),
   ],
   linuxDesktop: [
-    await read("packaging/linux/zmanager-desktop.desktop"),
     await read("packaging/linux/zmanager.desktop.hbs"),
   ],
   linuxNautilus: [

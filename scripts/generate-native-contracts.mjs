@@ -1018,17 +1018,17 @@ ${nsisBackgroundActionRows}
 
 const linuxDesktopActions = orderedContextActions("linuxDesktop", "archiveSingle");
 const linuxMimeTypes = `${archive.packageAssociationProfiles.linux.mimeTypes.join(";")};`;
-const desktopActionBlocks = (exec) => linuxDesktopActions.map((action) => `
+const desktopActionBlocks = linuxDesktopActions.map((action) => `
 [Desktop Action ${action.nativeVerb}]
 Name=${action.canonicalLabel}
-Exec=${exec} --quick-action ${action.compatibilityAliases[0]} --path ${action.multiplicity === "exactly-one" ? "%f" : "%F"}
-Icon=${exec === "{{exec}}" ? "{{icon}}" : "zmanager-desktop"}`).join("\n");
+Exec={{exec}} --quick-action ${action.compatibilityAliases[0]} --path ${action.multiplicity === "exactly-one" ? "%f" : "%F"}
+Icon={{icon}}`).join("\n");
 const desktopActionNames = linuxDesktopActions.map(({ nativeVerb }) => nativeVerb).join(";");
-put("packaging/linux/zmanager-desktop.desktop", `[Desktop Entry]
-Categories=Utility;
-Comment=Safe archive manager for Windows, Linux, and macOS
-Exec=zmanager-desktop %U
-Icon=zmanager-desktop
+put("packaging/linux/zmanager.desktop.hbs", `[Desktop Entry]
+Categories={{categories}}
+{{#if comment}}Comment={{comment}}{{/if}}
+Exec={{exec}} %U
+Icon={{icon}}
 MimeType=${linuxMimeTypes}
 Name=ZManager
 StartupWMClass=zmanager-desktop
@@ -1036,22 +1036,7 @@ StartupNotify=true
 Terminal=false
 Type=Application
 Actions=${desktopActionNames};
-${desktopActionBlocks("zmanager-desktop")}
-`);
-put("packaging/linux/zmanager.desktop.hbs", `[Desktop Entry]
-Categories={{categories}}
-{{#if comment}}Comment={{comment}}{{/if}}
-Exec={{exec}} %U
-Icon={{icon}}
-MimeType=${linuxMimeTypes}
-Name={{name}}
-NoDisplay=true
-StartupWMClass=zmanager-desktop
-StartupNotify=true
-Terminal=false
-Type=Application
-Actions=${desktopActionNames};
-${desktopActionBlocks("{{exec}}")}
+${desktopActionBlocks}
 `);
 
 const kdeFile = (contexts, mimeTypes) => {
