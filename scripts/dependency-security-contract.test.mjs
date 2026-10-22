@@ -27,7 +27,7 @@ test("security workflow audits npm and every desktop Rust lockfile without advis
 test("forensic patches have immutable checkout pins and bootstrap on both platforms", () => {
   const manifest = read("src-tauri/Cargo.toml");
   const pins = read("forensic-forks.lock").split("\n").filter((line) => line.trim() && !line.startsWith("#"));
-  assert.equal(pins.length, 6);
+  assert.equal(pins.length, 5);
   for (const line of pins) {
     const [name, repository, revision, extra] = line.split(/\s+/);
     assert.equal(extra, undefined);
@@ -37,6 +37,38 @@ test("forensic patches have immutable checkout pins and bootstrap on both platfo
   }
   for (const script of ["scripts/ensure-sibling-repos.sh", "scripts/ensure-sibling-repos.ps1"]) {
     assert.ok(read(script).includes("checkout-forensic-forks.mjs"), `${script} must provision the patches`);
+  }
+});
+
+test("AFF4 and archive-core share ZIP forensic 0.2.2 without the retired checkout", () => {
+  const manifest = read("src-tauri/Cargo.toml");
+  const pins = read("forensic-forks.lock");
+  assert.match(manifest, /^zip-forensic-core = \{ path = "\.\.\/\.\.\/zip-forensic-core\/core" \}$/m);
+  assert.doesNotMatch(manifest + pins, /zip-forensic-core-0[.12]/);
+  const packages = read("src-tauri/Cargo.lock").split("[[package]]");
+  const zip = packages.filter((entry) => /^\s*name = "zip-forensic-core"$/m.test(entry));
+  assert.equal(zip.length, 1);
+  assert.match(zip[0], /version = "0\.2\.2"/);
+  assert.doesNotMatch(zip[0], /source =|checksum =/);
+  for (const name of ["aff4", "archive-core"]) {
+    const entry = packages.find((entry) => entry.includes(`name = "${name}"\n`));
+    assert.ok(entry, `${name} must be resolved`);
+    assert.match(entry, /"zip-forensic-core",/);
+  }
+});
+
+test("Fedora test and artifact jobs install Rust before checking sibling lockfiles", () => {
+  const workflow = read(".github/workflows/package.yml");
+  const prerequisites = workflow.split("      - name: Install Fedora prerequisites\n").slice(1);
+  assert.equal(prerequisites.length, 2, "both test and package jobs need Fedora prerequisites");
+  for (const section of prerequisites) {
+    const step = section.split("\n      - name:")[0];
+    const install = step.match(/dnf install -y ([^\n]+)/);
+    assert.ok(install, "Fedora must install prerequisites");
+    for (const tool of ["rust", "cargo"]) {
+      assert.ok(install[1].split(/\s+/).includes(tool), `Fedora must install ${tool} before sibling validation`);
+    }
+    assert.ok(step.indexOf(install[0]) < step.indexOf("scripts/ensure-sibling-repos.sh"));
   }
 });
 
@@ -73,7 +105,8 @@ test("the product lockfile resolves GLib 0.18 to the patched local source", () =
 });
 
 test("release pins the fixed core and bootstraps reject lockfile drift", () => {
-  assert.match(read(".github/workflows/release.yml"), /ZMANAGER_ZMANAGER_REF: [0-9a-f]{40}\b/);
+  const reviewedCoreRevision = "b1c7ea05f8434b855ebf24e982d80572d0d4ff8f";
+  assert.ok(read(".github/workflows/release.yml").includes(`ZMANAGER_ZMANAGER_REF: ${reviewedCoreRevision}`));
   assert.match(read("scripts/ensure-sibling-repos.sh"), /cargo tree --locked --all-features --target all/);
   assert.match(read("scripts/ensure-sibling-repos.ps1"), /"tree", "--locked", "--all-features", "--target", "all"/);
   for (const path of ["scripts/ensure-sibling-repos.sh", "scripts/ensure-sibling-repos.ps1"]) {

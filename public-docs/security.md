@@ -24,7 +24,7 @@ checks; artifact workflows enforce their own dependency on the gate.
 Both sibling bootstraps validate Cargo resolution with `--locked` before
 packaging, so a stale sibling manifest cannot silently replace audited
 dependencies. Releases pin core security commit
-`217ba084197f07a74b99c9d605b97c3a59a3a2a4`; the earlier `v2.1.7` tag predates
+`b1c7ea05f8434b855ebf24e982d80572d0d4ff8f`; the earlier `v2.1.7` tag predates
 the codec fixes. Advance that pin only with a reviewed, audited lockfile.
 The shell and PowerShell bootstraps use the same pin by default. Developers
 can explicitly override `ZMANAGER_ZMANAGER_REF` while working on core changes.
@@ -33,7 +33,9 @@ can explicitly override `ZMANAGER_ZMANAGER_REF` while working on core changes.
 
 Until the forensic readers publish fixed codec constraints, desktop mirrors the
 reviewed forks used by the core workspace. `forensic-forks.lock` records exact
-commit pins for AFF4, Btrfs, DAR, ZFS and both ZIP reader API lines.
+commit pins for AFF4, Btrfs, DAR, ZFS and the shared ZIP 0.2.2 reader.
+AFF4 and archive-core now use the same patched `zip-forensic-core`; the ZIP 0.1
+backport and checkout are no longer needed.
 
 `scripts/checkout-forensic-forks.mjs` runs from both the shell and PowerShell
 sibling bootstraps. It clones missing forks at detached revisions and rejects
