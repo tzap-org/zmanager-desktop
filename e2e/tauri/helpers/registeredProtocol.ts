@@ -65,6 +65,7 @@ type DefaultBrowserObservation = Readonly<{
  */
 export async function observeWindowsDefaultBrowserNavigation(
   expectedOrigin: string,
+  triggerNavigation: () => Promise<void>,
   timeoutSeconds = 30,
 ): Promise<DefaultBrowserObservation> {
   if (process.platform !== "win32") {
@@ -94,6 +95,11 @@ export async function observeWindowsDefaultBrowserNavigation(
   child.stderr.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => { stdout += chunk; });
   child.stderr.on("data", (chunk: string) => { stderr += chunk; });
+  let observerExited = false;
+  const exit = new Promise<number>((resolve) => {
+    child.once("error", () => { observerExited = true; resolve(1); });
+    child.once("close", (code) => { observerExited = true; resolve(code ?? 1); });
+  });
 
   try {
     // Loading UIAutomationClient and the first Chromium accessibility tree can
@@ -101,18 +107,17 @@ export async function observeWindowsDefaultBrowserNavigation(
     // startup bound separate from the navigation observation bound so a slow
     // runner does not fail before it has installed its handlers.
     const readyDeadline = Date.now() + 15_000;
-    while (!existsSync(readyPath) && Date.now() < readyDeadline) {
+    while (!existsSync(readyPath) && !observerExited && Date.now() < readyDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
     if (!existsSync(readyPath)) {
-      child.kill();
       throw new Error("Default browser observer did not become ready.");
     }
 
-    const exitCode = await new Promise<number>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("close", (code) => resolve(code ?? 1));
-    });
+    // Baseline collection must finish before the opener can navigate. Starting
+    // an observer promise beside the UI click does not establish that ordering.
+    await triggerNavigation();
+    const exitCode = await exit;
     const line = stdout.trim().split(/\r?\n/u).filter(Boolean).at(-1);
     let result: { status?: string; origin?: string; path?: string; queryKeys?: string; url?: string; observedAtUnixMs?: number; errorCode?: string } = {};
     try {
@@ -136,6 +141,8 @@ export async function observeWindowsDefaultBrowserNavigation(
       observedAtUnixMs: result.observedAtUnixMs ?? 0,
     };
   } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    await exit;
     rmSync(observerDirectory, { recursive: true, force: true });
   }
 }
@@ -404,13 +411,18 @@ async function observeMacOSHistoryNavigation(
 
 export async function observeDefaultBrowserNavigation(
   expectedOrigin: string,
+  triggerNavigation: () => Promise<void>,
   timeoutSeconds = 30,
 ): Promise<DefaultBrowserObservation> {
   if (process.platform === "win32") {
-    return observeWindowsDefaultBrowserNavigation(expectedOrigin, timeoutSeconds);
+    return observeWindowsDefaultBrowserNavigation(expectedOrigin, triggerNavigation, timeoutSeconds);
   }
   if (process.platform === "darwin") {
-    return observeMacOSDefaultBrowserNavigation(expectedOrigin, timeoutSeconds);
+    const [observed] = await Promise.all([
+      observeMacOSDefaultBrowserNavigation(expectedOrigin, timeoutSeconds),
+      triggerNavigation(),
+    ]);
+    return observed;
   }
   throw new Error("The installed standalone browser observer is not implemented on this platform.");
 }

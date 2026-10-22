@@ -127,7 +127,10 @@ export const config: WebdriverIO.Config = {
   framework: "jasmine",
   reporters: ["spec"],
   jasmineOpts: {
-    defaultTimeoutInterval: 60_000,
+    // WDIO's async wrapper uses Jasmine's global timeout even when a spec
+    // supplies its own budget. Cover the longest hosted/archive test here;
+    // Jasmine still enforces each spec's explicit, shorter timeout.
+    defaultTimeoutInterval: 300_000,
   },
   afterTest: async (test, _context, result) => {
     if (result.passed) return;

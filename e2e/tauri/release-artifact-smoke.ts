@@ -85,8 +85,7 @@ async function completeBrowserAuth(launchUrl: string): Promise<string> {
 
 async function signInThroughInstalledApplication(options: { allowAlreadyCompleted?: boolean } = {}): Promise<void> {
   const completionOffset = options.allowAlreadyCompleted && existsSync(logPath) ? statSync(logPath).size : 0;
-  const browserObservation = observeWindowsDefaultBrowserNavigation("https://staging.tzap.org");
-  await runUiAction("SignIn");
+  const browserObservation = observeWindowsDefaultBrowserNavigation("https://staging.tzap.org", () => runUiAction("SignIn"));
   const browserFlow = browserObservation.then(async (observed) => {
     assert.ok(["/auth/launch", "/auth/login"].includes(observed.path), `unexpected staging auth path: ${observed.path}`);
     const callback = await completeBrowserAuth(observed.launchUrl);
@@ -129,9 +128,7 @@ async function main(): Promise<void> {
   try {
     await startWindowsInstalledApplication(appPath);
     await runUiAction("OpenAccount");
-    const browserObservation = observeWindowsDefaultBrowserNavigation("https://staging.tzap.org");
-    await runUiAction("SignIn");
-    const observed = await browserObservation;
+    const observed = await observeWindowsDefaultBrowserNavigation("https://staging.tzap.org", () => runUiAction("SignIn"));
     assert.equal(observed.origin, "https://staging.tzap.org");
     assert.ok(["/auth/launch", "/auth/login"].includes(observed.path), `unexpected staging auth path: ${observed.path}`);
     mark("environmentSelection", "passed", `${observed.origin}${observed.path}`);
@@ -171,9 +168,7 @@ async function main(): Promise<void> {
     await runUiAction("OpenAccount");
     await runUiAction("SignOut");
     await runUiAction("AssertSignedOut");
-    const coldObservationPromise = observeWindowsDefaultBrowserNavigation("https://staging.tzap.org");
-    await runUiAction("SignIn");
-    const coldObserved = await coldObservationPromise;
+    const coldObserved = await observeWindowsDefaultBrowserNavigation("https://staging.tzap.org", () => runUiAction("SignIn"));
     assert.ok(["/auth/launch", "/auth/login"].includes(coldObserved.path), `unexpected staging auth path: ${coldObserved.path}`);
     const coldCallback = await completeBrowserAuth(coldObserved.launchUrl);
     const wrongStateCallback = new URL(coldCallback);

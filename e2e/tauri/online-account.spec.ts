@@ -28,13 +28,11 @@ const boundaryResults: Record<string, { status: "passed" | "failed"; detail?: st
 // contended pool, so give this real headroom rather than nudge it again.
 const BROWSER_NAVIGATION_TIMEOUT_SECONDS = 90;
 
-// jasmineOpts.defaultTimeoutInterval (wdio.conf.ts) is 60s, sized for
-// ordinary UI-only specs. These two tests drive a real browser against the
+// These two tests drive a real browser against the
 // live staging service and, in the second test, wait out real archive jobs
 // through runJobInTaskWindow's own 120s budget — each already exceeds the
-// global default on its own, so (as archive-task-failures.spec.ts does for
-// its own job waits) they need an explicit per-test timeout sized to what
-// they actually await, not the UI-only default.
+// former 60s UI-only limit on its own. Keep explicit per-test budgets as well
+// as the matching global WDIO cap configured in wdio.conf.ts.
 //
 // Test 1 budget: BROWSER_NAVIGATION_TIMEOUT_SECONDS (90s) + browser launch
 // and login-page round trip (~45s) + waitForSignedIn (60s) + buffer.
@@ -71,9 +69,9 @@ async function clickHostedSignInFromUi(): Promise<void> {
 }
 
 async function clickHostedSignInAndObserveBrowser(): Promise<string> {
-  const observation = observeDefaultBrowserNavigation("https://staging.tzap.org", BROWSER_NAVIGATION_TIMEOUT_SECONDS);
-  await clickHostedSignInFromUi();
-  const observed = await observation;
+  const observed = await observeDefaultBrowserNavigation(
+    "https://staging.tzap.org", clickHostedSignInFromUi, BROWSER_NAVIGATION_TIMEOUT_SECONDS,
+  );
   assert.equal(observed.origin, "https://staging.tzap.org");
   assert.ok(["/auth/launch", "/auth/login"].includes(observed.path), `unexpected staging auth path: ${observed.path}`);
   assert(observed.launchUrl, "the default-browser observer must return the observed launch URL in memory");
