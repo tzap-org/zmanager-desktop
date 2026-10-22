@@ -18,13 +18,13 @@ Override defaults via environment variables:
   ZMANAGER_TZAP_REF                  – branch or tag to check out (default: main)
   ZMANAGER_TZAP_DIR                  – absolute path for tzap clone
   ZMANAGER_ZMANAGER_REPO             – zmanager repository URL
-  ZMANAGER_ZMANAGER_REF              – branch or tag to check out (default: main)
+  ZMANAGER_ZMANAGER_REF              – branch, tag or commit (default: reviewed security commit)
   ZMANAGER_ZMANAGER_DIR              – absolute path for zmanager clone
   ZMANAGER_LOCALSEND_REPO            – localsend-rs repository URL
   ZMANAGER_LOCALSEND_REF             – branch or tag to check out (default: main)
   ZMANAGER_LOCALSEND_DIR             – absolute path for localsend-rs clone
   ZMANAGER_FORENSIC_VFS_ENGINE_REPO  – forensic-vfs-engine repository URL
-  ZMANAGER_FORENSIC_VFS_ENGINE_REF   – branch or tag to check out (default: main)
+  ZMANAGER_FORENSIC_VFS_ENGINE_REF   – branch, tag or commit (default: reviewed compatibility commit)
   ZMANAGER_FORENSIC_VFS_ENGINE_DIR   – absolute path for forensic-vfs-engine clone
   ZMANAGER_ISO9660_FORENSIC_REPO     – iso9660-forensic repository URL
   ZMANAGER_ISO9660_FORENSIC_REF      – branch or tag to check out (default: PR branch)
@@ -53,7 +53,7 @@ $tzapRef = if ($env:ZMANAGER_TZAP_REF) { $env:ZMANAGER_TZAP_REF } else { "main" 
 $tzapDir = if ($env:ZMANAGER_TZAP_DIR) { $env:ZMANAGER_TZAP_DIR } else { Join-Path $parentDir "tzap" }
 
 $zmanagerRepo = if ($env:ZMANAGER_ZMANAGER_REPO) { $env:ZMANAGER_ZMANAGER_REPO } else { "https://github.com/tzap-org/zmanager" }
-$zmanagerRef = if ($env:ZMANAGER_ZMANAGER_REF) { $env:ZMANAGER_ZMANAGER_REF } else { "main" }
+$zmanagerRef = if ($env:ZMANAGER_ZMANAGER_REF) { $env:ZMANAGER_ZMANAGER_REF } else { "217ba084197f07a74b99c9d605b97c3a59a3a2a4" }
 $zmanagerDir = if ($env:ZMANAGER_ZMANAGER_DIR) { $env:ZMANAGER_ZMANAGER_DIR } else { Join-Path $parentDir "zmanager" }
 
 $localsendRepo = if ($env:ZMANAGER_LOCALSEND_REPO) { $env:ZMANAGER_LOCALSEND_REPO } else { "https://github.com/frankmanzhu/localsend-rs" }
@@ -61,7 +61,8 @@ $localsendRef = if ($env:ZMANAGER_LOCALSEND_REF) { $env:ZMANAGER_LOCALSEND_REF }
 $localsendDir = if ($env:ZMANAGER_LOCALSEND_DIR) { $env:ZMANAGER_LOCALSEND_DIR } else { Join-Path $parentDir "localsend-rs" }
 
 $forensicVfsEngineRepo = if ($env:ZMANAGER_FORENSIC_VFS_ENGINE_REPO) { $env:ZMANAGER_FORENSIC_VFS_ENGINE_REPO } else { "https://github.com/frankmanzhu/forensic-vfs-engine" }
-$forensicVfsEngineRef = if ($env:ZMANAGER_FORENSIC_VFS_ENGINE_REF) { $env:ZMANAGER_FORENSIC_VFS_ENGINE_REF } else { "main" }
+# Match core's upstream ISO 0.8 / VFS 0.7 interface until this lands on main.
+$forensicVfsEngineRef = if ($env:ZMANAGER_FORENSIC_VFS_ENGINE_REF) { $env:ZMANAGER_FORENSIC_VFS_ENGINE_REF } else { "400c3d719c4afe354b3d21d67f71c39092059eee" }
 $forensicVfsEngineDir = if ($env:ZMANAGER_FORENSIC_VFS_ENGINE_DIR) { $env:ZMANAGER_FORENSIC_VFS_ENGINE_DIR } else { Join-Path $parentDir "forensic-vfs-engine" }
 
 $iso9660ForensicRepo = if ($env:ZMANAGER_ISO9660_FORENSIC_REPO) { $env:ZMANAGER_ISO9660_FORENSIC_REPO } else { "https://github.com/frankmanzhu/iso9660-forensic" }
@@ -170,16 +171,28 @@ function Ensure-SiblingRepo {
                 Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "pull", "--rebase", "--autostash", "--no-tags", "origin", $BranchRef)
                 Assert-NoUnmergedConflicts -Directory $Directory -Name $Name
             } else {
-                Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "checkout", $BranchRef)
+                if ($BranchRef -match "^[0-9a-f]{40}$") {
+                    Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "fetch", "--no-tags", "origin", $BranchRef)
+                    Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "checkout", "--detach", $BranchRef)
+                } else {
+                    Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "checkout", $BranchRef)
+                }
             }
         } catch {
             throw "Unable to update $Name at ${Directory}; refusing to build. $_"
         }
     } else {
         Write-Host "Cloning $Name ($BranchRef) into: $Directory"
-        Invoke-Native -FilePath $git -Arguments @(
-            "clone", "--depth", "1", "--branch", $BranchRef, $RepoUrl, $Directory
-        )
+        if ($BranchRef -match "^[0-9a-f]{40}$") {
+            Invoke-Native -FilePath $git -Arguments @("init", $Directory)
+            Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "remote", "add", "origin", $RepoUrl)
+            Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "fetch", "--depth", "1", "origin", $BranchRef)
+            Invoke-Native -FilePath $git -Arguments @("-C", $Directory, "checkout", "--detach", "FETCH_HEAD")
+        } else {
+            Invoke-Native -FilePath $git -Arguments @(
+                "clone", "--depth", "1", "--branch", $BranchRef, $RepoUrl, $Directory
+            )
+        }
         Write-Host "$Name clone complete."
     }
 }
@@ -234,3 +247,16 @@ Ensure-SiblingRepo -Name "forensic-vfs-engine" -Directory $forensicVfsEngineDir 
 
 # ── iso9660-forensic ────────────────────────────────────────────────────
 Ensure-SiblingRepo -Name "iso9660-forensic" -Directory $iso9660ForensicDir -RepoUrl $iso9660ForensicRepo -BranchRef $iso9660ForensicRef
+
+# Reproduce the reviewed codec fixes used by both desktop and the core FFI.
+Invoke-Native -FilePath "node" -Arguments @(
+    (Join-Path $PSScriptRoot "checkout-forensic-forks.mjs"), $parentDir
+)
+
+# Packaging must use the lockfile that passed the security gate.
+$desktopManifest = Join-Path $PSScriptRoot "..\src-tauri\Cargo.toml"
+if (Test-Path $desktopManifest) {
+    Invoke-Native -FilePath "cargo" -Arguments @(
+        "tree", "--locked", "--all-features", "--target", "all", "--depth", "0", "--manifest-path", $desktopManifest
+    )
+}

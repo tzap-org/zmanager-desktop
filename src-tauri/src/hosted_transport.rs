@@ -3,7 +3,9 @@ use reqwest::blocking::Client;
 #[cfg(feature = "hosted-online")]
 use std::time::Duration;
 use url::Url;
-use zmanager_tzap_hosted::auth_client::{TzapAuthError, TzapAuthHttpMethod, TzapAuthHttpRequest, TzapAuthHttpResponse, TzapAuthHttpTransport};
+#[cfg(feature = "hosted-online")]
+use zmanager_tzap_hosted::auth_client::TzapAuthHttpMethod;
+use zmanager_tzap_hosted::auth_client::{TzapAuthError, TzapAuthHttpRequest, TzapAuthHttpResponse, TzapAuthHttpTransport};
 
 #[cfg(feature = "hosted-online")]
 const DESKTOP_USER_AGENT: &str = concat!("ZManager-Desktop/", env!("CARGO_PKG_VERSION"));

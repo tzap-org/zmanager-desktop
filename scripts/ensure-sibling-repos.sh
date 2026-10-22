@@ -15,12 +15,12 @@ set -euo pipefail
 #   ZMANAGER_TZAP_REPO                 – tzap repository URL
 #   ZMANAGER_TZAP_REF                  – branch or tag to check out (default: main)
 #   ZMANAGER_ZMANAGER_REPO             – zmanager repository URL
-#   ZMANAGER_ZMANAGER_REF              – branch or tag to check out (default: main)
+#   ZMANAGER_ZMANAGER_REF              – branch, tag or commit (default: reviewed security commit)
 #   ZMANAGER_LOCALSEND_REPO            – localsend-rs repository URL
 #   ZMANAGER_LOCALSEND_REF             – branch or tag to check out (default: main)
 #   ZMANAGER_LOCALSEND_DIR             – absolute path for localsend-rs clone
 #   ZMANAGER_FORENSIC_VFS_ENGINE_REPO  – forensic-vfs-engine repository URL
-#   ZMANAGER_FORENSIC_VFS_ENGINE_REF   – branch or tag to check out (default: main)
+#   ZMANAGER_FORENSIC_VFS_ENGINE_REF   – branch, tag or commit (default: reviewed compatibility commit)
 #   ZMANAGER_ISO9660_FORENSIC_REPO     – iso9660-forensic repository URL
 #   ZMANAGER_ISO9660_FORENSIC_REF      – branch or tag to check out (default: PR branch)
 #   ZMANAGER_ISO9660_FORENSIC_DIR      – absolute path for iso9660-forensic clone
@@ -35,7 +35,7 @@ tzap_ref="${ZMANAGER_TZAP_REF:-main}"
 tzap_dir="${ZMANAGER_TZAP_DIR:-$parent_dir/tzap}"
 
 zmanager_repo="${ZMANAGER_ZMANAGER_REPO:-https://github.com/tzap-org/zmanager}"
-zmanager_ref="${ZMANAGER_ZMANAGER_REF:-main}"
+zmanager_ref="${ZMANAGER_ZMANAGER_REF:-217ba084197f07a74b99c9d605b97c3a59a3a2a4}"
 zmanager_dir="${ZMANAGER_ZMANAGER_DIR:-$parent_dir/zmanager}"
 
 localsend_repo="${ZMANAGER_LOCALSEND_REPO:-https://github.com/frankmanzhu/localsend-rs}"
@@ -43,7 +43,9 @@ localsend_ref="${ZMANAGER_LOCALSEND_REF:-main}"
 localsend_dir="${ZMANAGER_LOCALSEND_DIR:-$parent_dir/localsend-rs}"
 
 forensic_vfs_engine_repo="${ZMANAGER_FORENSIC_VFS_ENGINE_REPO:-https://github.com/frankmanzhu/forensic-vfs-engine}"
-forensic_vfs_engine_ref="${ZMANAGER_FORENSIC_VFS_ENGINE_REF:-main}"
+# Core now uses the upstream ISO 0.8 API with VFS 0.7. The fork's main branch
+# still resolves the older ISO interface; pin its reviewed compatibility commit.
+forensic_vfs_engine_ref="${ZMANAGER_FORENSIC_VFS_ENGINE_REF:-400c3d719c4afe354b3d21d67f71c39092059eee}"
 forensic_vfs_engine_dir="${ZMANAGER_FORENSIC_VFS_ENGINE_DIR:-$parent_dir/forensic-vfs-engine}"
 
 iso9660_forensic_repo="${ZMANAGER_ISO9660_FORENSIC_REPO:-https://github.com/frankmanzhu/iso9660-forensic}"
@@ -112,7 +114,13 @@ ensure_sibling_repo() {
         git -C "$dir" pull --rebase --autostash --no-tags origin "$ref" &&
         ensure_no_unmerged_conflicts "$dir" "$name"
       else
-        git -C "$dir" checkout "$ref"
+        if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+          # Existing shallow clones may not contain a pin from another branch.
+          git -C "$dir" fetch --no-tags origin "$ref" &&
+          git -C "$dir" checkout --detach "$ref"
+        else
+          git -C "$dir" checkout "$ref"
+        fi
       fi
     ); then
       echo "Unable to update $name at $dir; refusing to build." >&2
@@ -120,7 +128,14 @@ ensure_sibling_repo() {
     fi
   else
     echo "Cloning $name ($ref) into: $dir"
-    git clone --depth 1 --branch "$ref" "$repo" "$dir"
+    if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+      git init "$dir"
+      git -C "$dir" remote add origin "$repo"
+      git -C "$dir" fetch --depth 1 origin "$ref"
+      git -C "$dir" checkout --detach FETCH_HEAD
+    else
+      git clone --depth 1 --branch "$ref" "$repo" "$dir"
+    fi
     echo "$name clone complete."
   fi
 }
@@ -183,3 +198,12 @@ ensure_sibling_repo "forensic-vfs-engine" "$forensic_vfs_engine_dir" "$forensic_
 
 # ── iso9660-forensic ────────────────────────────────────────────────────
 ensure_sibling_repo "iso9660-forensic" "$iso9660_forensic_dir" "$iso9660_forensic_repo" "$iso9660_forensic_ref"
+
+# Reproduce the reviewed codec fixes used by both desktop and the core FFI.
+node "$repo_root/scripts/checkout-forensic-forks.mjs" "$parent_dir"
+
+# Packaging must use the lockfile that passed the security gate. Reject sibling
+# manifest drift before a build can silently resolve different dependencies.
+if [[ -f "$repo_root/src-tauri/Cargo.toml" ]]; then
+  cargo tree --locked --all-features --target all --depth 0 --manifest-path "$repo_root/src-tauri/Cargo.toml"
+fi

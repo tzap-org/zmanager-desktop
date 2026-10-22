@@ -1,8 +1,6 @@
 use std::collections::HashSet;
 
-#[cfg(test)]
-use super::NativeFileDragItemKind;
-use super::{NativeFileDragCandidate, NativeFileDragError, NativeFileDragItem};
+use super::{NativeFileDragCandidate, NativeFileDragError, NativeFileDragItem, NativeFileDragItemKind};
 
 pub(super) fn prepare_windows_drag_items(
     candidates: &[NativeFileDragCandidate],
@@ -12,7 +10,15 @@ pub(super) fn prepare_windows_drag_items(
     let mut items = Vec::with_capacity(candidates.len());
 
     for candidate in candidates {
-        let display_path = windows_drag_display_path(&candidate.entry_path, strip_components)?;
+        let display_path = match windows_drag_display_path(&candidate.entry_path, strip_components)? {
+            Some(path) => path,
+            // A stripped directory is the virtual destination root, not a
+            // descriptor to send to Explorer. Its descendants still drag out.
+            None if candidate.kind == NativeFileDragItemKind::Directory => continue,
+            None => {
+                return Err(NativeFileDragError::invalid_request(format!("entry path is empty after stripping components: {}", candidate.entry_path)));
+            }
+        };
         if !display_path_keys.insert(display_path.to_lowercase()) {
             return Err(NativeFileDragError::invalid_request(format!("more than one selected entry would drag out as {display_path}")));
         }
@@ -28,11 +34,11 @@ pub(super) fn prepare_windows_drag_items(
     Ok(items)
 }
 
-fn windows_drag_display_path(entry_path: &str, strip_components: usize) -> Result<String, NativeFileDragError> {
+fn windows_drag_display_path(entry_path: &str, strip_components: usize) -> Result<Option<String>, NativeFileDragError> {
     let components = entry_path.split(['/', '\\']).filter(|component| !component.is_empty()).skip(strip_components).collect::<Vec<_>>();
 
     if components.is_empty() {
-        return Err(NativeFileDragError::invalid_request(format!("entry path is empty after stripping components: {entry_path}")));
+        return Ok(None);
     }
 
     for component in &components {
@@ -44,7 +50,7 @@ fn windows_drag_display_path(entry_path: &str, strip_components: usize) -> Resul
         return Err(NativeFileDragError::invalid_request(format!("entry path is too long for Windows virtual drag-out: {entry_path}")));
     }
 
-    Ok(display_path)
+    Ok(Some(display_path))
 }
 
 const WINDOWS_FILE_DESCRIPTOR_PATH_MAX_UTF16: usize = 259;
@@ -89,6 +95,17 @@ mod tests {
         let items = prepare_windows_drag_items(&[candidate("docs/nested/readme.txt")], 1).expect("prepare Windows path");
 
         assert_eq!(items[0].display_path, "nested\\readme.txt");
+    }
+
+    #[test]
+    fn strips_selected_root_directories_without_dropping_their_descendants() {
+        let mut directory = candidate("docs");
+        directory.kind = NativeFileDragItemKind::Directory;
+        let items = prepare_windows_drag_items(&[directory, candidate("docs/readme.txt")], 1).expect("strip the directory root");
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].entry_path, "docs/readme.txt");
+        assert_eq!(items[0].display_path, "readme.txt");
     }
 
     #[test]

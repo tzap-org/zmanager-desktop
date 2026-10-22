@@ -26,6 +26,7 @@ test("third-party license generator copies Rust and production npm license files
   const metadataPath = path.join(workspace, "metadata.json");
   await writeFile(path.join(registryRoot, "LICENSE"), "demo rust license\n");
   await writeFile(path.join(pathPackageRoot, "license.txt"), "path package license\n");
+  await writeFile(path.join(pathPackageRoot, "COPYRIGHT"), "Upstream authors\n");
   await writeFile(path.join(npmRoot, "package.json"), JSON.stringify({ name: "demo-package", version: "2.0.0" }));
   await writeFile(path.join(npmRoot, "LICENSE"), "demo npm license\n");
   await writeFile(path.join(workspace, "package-lock.json"), JSON.stringify({
@@ -64,6 +65,7 @@ test("third-party license generator copies Rust and production npm license files
   assert.match(notice, /licensed-path/);
   assert.match(notice, /demo-package/);
   await access(path.join(licenses, "rust", "demo-crate-1.0.0", "LICENSE"));
+  await access(path.join(licenses, "rust", "licensed-path-1.0.0", "COPYRIGHT"));
   await access(path.join(licenses, "npm", "demo-package-2.0.0", "LICENSE"));
 });
 

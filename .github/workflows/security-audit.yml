@@ -1,0 +1,83 @@
+name: Security Audit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Recheck newly published advisories even without a dependency change.
+    - cron: "37 20 * * *"
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  npm:
+    name: npm advisory gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+      # Read the committed lockfile without installing or running package scripts.
+      - run: npm audit --audit-level=low
+      - run: npm run test:security
+      - run: node --test scripts/sibling-repository-contract.test.mjs scripts/third-party-license-generator.test.mjs
+
+  rust:
+    name: RustSec (${{ matrix.lockfile }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        lockfile:
+          - src-tauri/Cargo.lock
+          - native/windows-shell-extension/Cargo.lock
+          - crates/zmanager-shell-contract/Cargo.lock
+          - vendor/glib/Cargo.lock
+    steps:
+      - uses: actions/checkout@v6
+      - run: rustup toolchain install stable --profile minimal
+      - run: cargo +stable install cargo-audit --locked --version 0.22.2
+      # Audit every platform's committed resolution, without sibling checkouts.
+      - run: cargo audit --deny yanked --file "${{ matrix.lockfile }}"
+
+  glib:
+    name: GLib backport regression (release)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev
+      # The upstream public iterator tests reproduce the UB under optimization.
+      - run: cargo test --manifest-path vendor/glib/Cargo.toml --locked --release --lib variant_iter::tests
+
+  core:
+    name: macOS FFI RustSec
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Read the reviewed release core revision
+        id: core
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const source = fs.readFileSync('.github/workflows/release.yml', 'utf8');
+          const revision = source.match(/^  ZMANAGER_ZMANAGER_REF: ([0-9a-f]{40})$/m)?.[1];
+          if (!revision) throw new Error('Release must pin a reviewed core commit');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `revision=${revision}\n`);
+          NODE
+      - uses: actions/checkout@v6
+        with:
+          repository: tzap-org/zmanager
+          ref: ${{ steps.core.outputs.revision }}
+          path: .audit/core
+      - run: rustup toolchain install stable --profile minimal
+      - run: cargo +stable install cargo-audit --locked --version 0.22.2
+      - run: cargo audit --deny yanked --file .audit/core/Cargo.lock

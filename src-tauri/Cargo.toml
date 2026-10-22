@@ -24,20 +24,20 @@ online-profile = ["hosted-online", "dep:reqwest", "dep:rustls", "zmanager-tzap-h
 hosted-online = []
 
 [build-dependencies]
-tauri-build = { version = "2", features = [] }
+tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
 base64 = "0.23.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 openssl = "0.10"
-tauri = { version = "2", features = [] }
-tauri-plugin-dialog = "2"
-tauri-plugin-opener = "2"
+tauri = { version = "2.12.5", features = [] }
+tauri-plugin-dialog = "2.8.3"
+tauri-plugin-opener = "2.7.2"
 url = "2"
-tauri-plugin-single-instance = "2"
-tauri-plugin-wdio = "1.3.0"
-tauri-plugin-wdio-webdriver = "1.3.0"
+tauri-plugin-single-instance = "2.5.4"
+tauri-plugin-wdio = "1.5.0"
+tauri-plugin-wdio-webdriver = "1.5.0"
 tokio = { version = "1", features = ["sync", "rt", "macros"] }
 unicode-normalization = "0.1"
 zmanager-shell-contract = { path = "../crates/zmanager-shell-contract" }
@@ -45,8 +45,8 @@ zmanager-core = { path = "../../zmanager/crates/zmanager-core", package = "zmana
 zmanager-tzap-hosted = { path = "../../zmanager/crates/zmanager-tzap-hosted" }
 zmanager-localsend = { path = "../../zmanager/crates/zmanager-localsend" }
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls-no-provider"], optional = true }
-rustls = { version = "0.23.36", default-features = false, features = ["ring", "std", "tls12", "logging"], optional = true }
-tauri-plugin-deep-link = "2"
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"], optional = true }
+tauri-plugin-deep-link = "2.6.2"
 
 [target.'cfg(windows)'.dependencies]
 png = "0.18.1"
@@ -83,11 +83,27 @@ gdk = "0.18.2"
 gio = "0.18.4"
 glib = "0.18.5"
 gtk = "0.18.2"
+# tauri-plugin-deep-link 2.6.2 initializes ParseOption without the fields added
+# in rust-ini 0.21.2. Remove this compatibility pin once the plugin uses Default.
+rust-ini = "=0.21.1"
 keyring = { version = "4.1.6", default-features = false, features = ["v1"] }
 x11 = { version = "2.21", features = ["xlib"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 keyring = { version = "4.1.6", default-features = false, features = ["v1"] }
+
+# Cargo does not inherit patches from the sibling core workspace. Keep these
+# compatible codec fixes aligned with forensic-forks.lock and bootstrap them
+# through scripts/checkout-forensic-forks.mjs. See public-docs/security.md.
+[patch.crates-io]
+aff4 = { path = "../../aff4/core" }
+btrfs-core = { path = "../../btrfs-core/core" }
+dar-core = { path = "../../dar-core/core" }
+zfs-forensic-core = { path = "../../zfs-forensic-core/core" }
+zip-forensic-core-01 = { package = "zip-forensic-core", path = "../../zip-forensic-core-0.1/core" }
+zip-forensic-core-02 = { package = "zip-forensic-core", path = "../../zip-forensic-core/core" }
+# Backport the upstream VariantStrIter fix while Tauri requires GLib 0.18.
+glib = { path = "../vendor/glib" }
 
 [profile.release]
 lto = "thin"

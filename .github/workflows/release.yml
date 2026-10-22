@@ -18,10 +18,17 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ZMANAGER_ZMANAGER_REF: v2.1.7
+  # Reviewed core security fixes; the v2.1.7 tag predates the codec updates.
+  ZMANAGER_ZMANAGER_REF: 217ba084197f07a74b99c9d605b97c3a59a3a2a4
 
 jobs:
+  security:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/security-audit.yml
+
   package-macos:
+    needs: security
     name: macOS ${{ matrix.arch }} ${{ matrix.profile }} package
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -202,6 +209,7 @@ jobs:
           find "$RUNNER_TEMP" -maxdepth 1 -type f \( -name '*.p12' -o -name 'AuthKey_*.p8' -o -name '*.provisionprofile' \) -delete
 
   package-windows:
+    needs: security
     name: Windows ${{ matrix.arch }} ${{ matrix.profile }} package
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -345,6 +353,7 @@ jobs:
             ${{ runner.temp }}\zmanager-desktop-*-third-party-licenses.zip
 
   package-deb:
+    needs: security
     name: Linux DEB ${{ matrix.arch }} ${{ matrix.profile }} package
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -393,6 +402,7 @@ jobs:
             /tmp/zmanager-desktop-deb-${{ matrix.profile }}/*.deb
 
   package-rpm:
+    needs: security
     name: Linux RPM ${{ matrix.arch }} ${{ matrix.profile }} package
     runs-on: ${{ matrix.runner }}
     container:
@@ -638,7 +648,7 @@ jobs:
           body: |
             Automated release of zmanager-desktop from GitHub Actions.
 
-            - Built from pinned zmanager dependency tag.
+            - Built from the pinned zmanager dependency commit.
             - Default artifacts use the local/offline profile. The Microsoft Store MSIX uses this profile; separate `full` artifacts include online features.
             - Includes macOS arm64/x86_64 ZIP and DMG artifacts, Windows portable and installer binaries, optional local-profile Store MSIX packages, and Linux DEB/RPM packages.
             - Includes a generated third-party license bundle with Rust, frontend, vendored, and Windows vcpkg notices.

@@ -37,8 +37,8 @@ function git(cwd, args) {
 }
 
 function configureGitUser(directory) {
-  git(directory, ["config", "user.name", "Sibling update test"]);
-  git(directory, ["config", "user.email", "sibling-update-test@example.invalid"]);
+  git(directory, ["config", "user.name", "Frank Zhu"]);
+  git(directory, ["config", "user.email", "frankmanzhu@hotmail.com"]);
 }
 
 function createSiblingUpdateFixture() {
@@ -50,6 +50,7 @@ function createSiblingUpdateFixture() {
 
   mkdirSync(join(workspace, "scripts"), { recursive: true });
   cpSync(join(scriptsDirectory, "ensure-sibling-repos.sh"), script);
+  cpSync(join(scriptsDirectory, "checkout-forensic-forks.mjs"), join(workspace, "scripts", "checkout-forensic-forks.mjs"));
   git(undefined, ["init", "--bare", "--initial-branch=main", remote]);
   git(root, ["clone", remote, seed]);
   configureGitUser(seed);
@@ -57,6 +58,12 @@ function createSiblingUpdateFixture() {
   git(seed, ["add", "tracked.txt"]);
   git(seed, ["commit", "-m", "base"]);
   git(seed, ["push", "origin", "main"]);
+
+  const revision = git(seed, ["rev-parse", "HEAD"]);
+  const forkNames = readFileSync(join(repositoryRoot, "forensic-forks.lock"), "utf8")
+    .split("\n").filter((line) => line.trim() && !line.startsWith("#"))
+    .map((line) => line.split(/\s+/)[0]);
+  writeFileSync(join(workspace, "forensic-forks.lock"), forkNames.map((name) => `${name} ${remote} ${revision}\n`).join(""));
 
   const env = { ...process.env };
   for (const [prefix, name] of siblingDirectories) {
@@ -210,6 +217,42 @@ test("shell updater builds a detached-HEAD checkout without self-updating", () =
     const output = runUpdater(fixture);
 
     assert.match(output, /detached HEAD[\s\S]*skipping self-update/);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("sibling bootstrap can clone an immutable commit without creating a branch", () => {
+  const fixture = createSiblingUpdateFixture();
+  try {
+    const revision = git(fixture.seed, ["rev-parse", "HEAD"]);
+    fixture.env.ZMANAGER_FORENSIC_VFS_ENGINE_REF = revision;
+    runUpdater(fixture);
+    const engine = join(fixture.root, "siblings", "forensic-vfs-engine");
+    assert.equal(git(engine, ["rev-parse", "HEAD"]), revision);
+    assert.equal(git(engine, ["branch", "--show-current"]), "");
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
+test("sibling bootstrap fetches a pin missing from an existing shallow clone", () => {
+  const fixture = createSiblingUpdateFixture();
+  try {
+    const pinned = git(fixture.seed, ["rev-parse", "HEAD"]);
+    writeFileSync(join(fixture.seed, "new.txt"), "new head\n");
+    git(fixture.seed, ["add", "new.txt"]);
+    git(fixture.seed, ["commit", "-m", "Advance head"]);
+    git(fixture.seed, ["push", "origin", "main"]);
+    fixture.env.ZMANAGER_FORENSIC_VFS_ENGINE_REPO = new URL(`file://${fixture.remote}`).href;
+    runUpdater(fixture);
+    const engine = join(fixture.root, "siblings", "forensic-vfs-engine");
+    assert.equal(git(engine, ["rev-parse", "--is-shallow-repository"]), "true");
+    assert.throws(() => git(engine, ["cat-file", "-e", pinned]));
+    fixture.env.ZMANAGER_FORENSIC_VFS_ENGINE_REF = pinned;
+    runUpdater(fixture);
+    assert.equal(git(engine, ["rev-parse", "HEAD"]), pinned);
+    assert.equal(git(engine, ["branch", "--show-current"]), "");
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

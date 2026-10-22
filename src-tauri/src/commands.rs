@@ -3234,11 +3234,11 @@ mod tests {
         let items = native_drag_items_from_listing(&entries, &["docs".to_string()], 0, false, &[]).unwrap();
 
         assert_eq!(
-            items.iter().map(|item| (item.display_path.as_str(), item.kind)).collect::<Vec<_>>(),
+            items.iter().map(|item| (item.display_path.clone(), item.kind)).collect::<Vec<_>>(),
             vec![
-                ("docs", crate::platform::NativeFileDragItemKind::Directory),
-                ("docs/empty", crate::platform::NativeFileDragItemKind::Directory),
-                ("docs/a.txt", crate::platform::NativeFileDragItemKind::File),
+                ("docs".to_string(), crate::platform::NativeFileDragItemKind::Directory),
+                (format!("docs{}empty", std::path::MAIN_SEPARATOR), crate::platform::NativeFileDragItemKind::Directory),
+                (format!("docs{}a.txt", std::path::MAIN_SEPARATOR), crate::platform::NativeFileDragItemKind::File),
             ],
         );
     }

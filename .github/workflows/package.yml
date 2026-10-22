@@ -15,7 +15,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  security:
+    uses: ./.github/workflows/security-audit.yml
+
   test:
+    needs: security
     name: Test ${{ matrix.flavor }} ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
