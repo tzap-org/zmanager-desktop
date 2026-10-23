@@ -72,11 +72,14 @@ Write-Step "Classic handlers registered for *, Directory and Folder."
 # Advisory only: the MSVC linker stamps a timestamp and a PDB signature into the
 # PE, so two builds of identical source are never byte-identical. Compare what
 # is meaningful instead, and let the interface check below be the real gate.
+# NSIS can preserve the source timestamp only to whole-second precision, so
+# allow a small timestamp gap to avoid false warnings around second boundaries.
 $builtDll = Join-Path $repoRoot "target\windows-shell-extension\zmanager-shell-extension.dll"
 if (Test-Path -LiteralPath $builtDll) {
     $built = Get-Item -LiteralPath $builtDll
     $installed = Get-Item -LiteralPath $installedDll
-    if ($installed.LastWriteTime -lt $built.LastWriteTime -or $installed.Length -ne $built.Length) {
+    $timestampTolerance = [TimeSpan]::FromSeconds(2)
+    if ($installed.LastWriteTime -lt $built.LastWriteTime.Subtract($timestampTolerance) -or $installed.Length -ne $built.Length) {
         Write-Warning ("The installed handler predates this working tree's build " +
             "(installed $($installed.LastWriteTime), $($installed.Length) bytes; built $($built.LastWriteTime), $($built.Length) bytes). " +
             "Re-run the installer if you expected this build to be live.")
