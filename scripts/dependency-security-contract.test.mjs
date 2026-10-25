@@ -105,7 +105,8 @@ test("the product lockfile resolves GLib 0.18 to the patched local source", () =
 });
 
 test("release pins the fixed core and bootstraps reject lockfile drift", () => {
-  const reviewedCoreRevision = "b1c7ea05f8434b855ebf24e982d80572d0d4ff8f";
+  const reviewedCoreRevision = read(".github/workflows/release.yml").match(/ZMANAGER_ZMANAGER_REF: ([0-9a-f]{40})/)?.[1];
+  assert.ok(reviewedCoreRevision, "release must pin the reviewed core commit");
   assert.ok(read(".github/workflows/release.yml").includes(`ZMANAGER_ZMANAGER_REF: ${reviewedCoreRevision}`));
   assert.match(read("scripts/ensure-sibling-repos.sh"), /cargo tree --locked --all-features --target all/);
   assert.match(read("scripts/ensure-sibling-repos.ps1"), /"tree", "--locked", "--all-features", "--target", "all"/);

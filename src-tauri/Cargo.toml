@@ -4,8 +4,9 @@ resolver = "2"
 [workspace.package]
 version = "1.2.6"
 
-# TZAP 0.2.4 includes the Unicode-safe volume-name parsing fix that previously
-# required a temporary sibling-checkout patch.
+# TZAP 0.2.6 includes the Unicode-safe volume-name parsing fix. Development
+# builds of the zmanager sibling continue to use its local ../tzap patch;
+# release and audit lockfiles resolve the published 0.2.6 crates.
 
 [package]
 name = "zmanager-desktop"
