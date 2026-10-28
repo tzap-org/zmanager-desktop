@@ -98,10 +98,13 @@ keyring = { version = "4.1.6", default-features = false, features = ["v1"] }
 # through scripts/checkout-forensic-forks.mjs. See public-docs/security.md.
 [patch.crates-io]
 aff4 = { path = "../../aff4/core" }
+backhand = { path = "../../backhand/backhand" }
 btrfs-core = { path = "../../btrfs-core/core" }
 dar-core = { path = "../../dar-core/core" }
 zfs-forensic-core = { path = "../../zfs-forensic-core/core" }
 zip-forensic-core = { path = "../../zip-forensic-core/core" }
+# Match the reviewed core workspace's fixed TZAP codec dependency.
+tzap-core = { path = "../../tzap/crates/tzap-core" }
 # Backport the upstream VariantStrIter fix while Tauri requires GLib 0.18.
 glib = { path = "../vendor/glib" }
 

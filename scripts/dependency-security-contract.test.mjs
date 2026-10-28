@@ -27,14 +27,16 @@ test("security workflow audits npm and every desktop Rust lockfile without advis
 test("forensic patches have immutable checkout pins and bootstrap on both platforms", () => {
   const manifest = read("src-tauri/Cargo.toml");
   const pins = read("forensic-forks.lock").split("\n").filter((line) => line.trim() && !line.startsWith("#"));
-  assert.equal(pins.length, 5);
+  assert.equal(pins.length, 6);
   for (const line of pins) {
     const [name, repository, revision, extra] = line.split(/\s+/);
     assert.equal(extra, undefined);
     assert.match(repository, /^https:\/\/github\.com\/frankmanzhu\//);
     assert.match(revision, /^[0-9a-f]{40}$/);
-    assert.ok(manifest.includes(`path = "../../${name}/core"`), `${name} must be patched at the desktop workspace root`);
+    const path = name === "backhand" ? "../../backhand/backhand" : `../../${name}/core`;
+    assert.ok(manifest.includes(`path = "${path}"`), `${name} must be patched at the desktop workspace root`);
   }
+  assert.match(manifest, /^tzap-core = \{ path = "\.\.\/\.\.\/tzap\/crates\/tzap-core" \}$/m);
   for (const script of ["scripts/ensure-sibling-repos.sh", "scripts/ensure-sibling-repos.ps1"]) {
     assert.ok(read(script).includes("checkout-forensic-forks.mjs"), `${script} must provision the patches`);
   }
@@ -104,6 +106,18 @@ test("the product lockfile resolves GLib 0.18 to the patched local source", () =
   assert.doesNotMatch(glib[0], /source =|checksum =/);
 });
 
+test("the product lockfile uses the reviewed codec sources and excludes yanked crypto-bigint", () => {
+  const packages = read("src-tauri/Cargo.lock").split("[[package]]");
+  const packageEntries = (name) => packages.filter((entry) => new RegExp(`^\\s*name = "${name}"$`, "m").test(entry));
+  const versions = (name) => packageEntries(name).map((entry) => entry.match(/^version = "([^"]+)"/m)?.[1]);
+
+  assert.deepEqual(versions("backhand"), ["0.25.5"]);
+  assert.deepEqual(versions("tzap-core"), ["0.2.6"]);
+  assert.deepEqual(versions("zstd"), ["0.14.3"]);
+  assert.deepEqual(versions("zstd-safe"), ["8.2.0"]);
+  assert.deepEqual(versions("crypto-bigint"), ["0.7.10"]);
+});
+
 test("release pins the fixed core and bootstraps reject lockfile drift", () => {
   const reviewedCoreRevision = read(".github/workflows/release.yml").match(/ZMANAGER_ZMANAGER_REF: ([0-9a-f]{40})/)?.[1];
   assert.ok(reviewedCoreRevision, "release must pin the reviewed core commit");
@@ -114,5 +128,6 @@ test("release pins the fixed core and bootstraps reject lockfile drift", () => {
     assert.ok(read(path).includes("400c3d719c4afe354b3d21d67f71c39092059eee"));
     const coreRevision = read(".github/workflows/release.yml").match(/ZMANAGER_ZMANAGER_REF: ([0-9a-f]{40})/)?.[1];
     assert.ok(coreRevision && read(path).includes(coreRevision), `${path} must use the audited core revision`);
+    assert.equal(coreRevision, "1cc01b9e5dc0f2fcf0a3a2eb840062f783bfcfc2");
   }
 });

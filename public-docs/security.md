@@ -24,7 +24,7 @@ checks; artifact workflows enforce their own dependency on the gate.
 Both sibling bootstraps validate Cargo resolution with `--locked` before
 packaging, so a stale sibling manifest cannot silently replace audited
 dependencies. Releases pin core security commit
-`b1c7ea05f8434b855ebf24e982d80572d0d4ff8f`; the earlier `v2.1.7` tag predates
+`1cc01b9e5dc0f2fcf0a3a2eb840062f783bfcfc2`; the earlier `v2.1.7` tag predates
 the codec fixes. Advance that pin only with a reviewed, audited lockfile.
 The shell and PowerShell bootstraps use the same pin by default. Developers
 can explicitly override `ZMANAGER_ZMANAGER_REF` while working on core changes.
@@ -33,7 +33,7 @@ can explicitly override `ZMANAGER_ZMANAGER_REF` while working on core changes.
 
 Until the forensic readers publish fixed codec constraints, desktop mirrors the
 reviewed forks used by the core workspace. `forensic-forks.lock` records exact
-commit pins for AFF4, Btrfs, DAR, ZFS and the shared ZIP 0.2.2 reader.
+commit pins for AFF4, backhand, Btrfs, DAR, ZFS and the shared ZIP 0.2.2 reader.
 AFF4 and archive-core now use the same patched `zip-forensic-core`; the ZIP 0.1
 backport and checkout are no longer needed.
 
@@ -42,8 +42,9 @@ sibling bootstraps. It clones missing forks at detached revisions and rejects
 existing checkouts with a different revision or local changes, preserving the
 developer's work. Cargo's `[patch.crates-io]` entries in `src-tauri/Cargo.toml`
 apply the forks at the desktop workspace root; Cargo does not inherit core's
-workspace patches. The same sibling layout supports the core workspace used
-by the macOS FFI build.
+workspace patches. The backhand pin and local TZAP core path keep the desktop
+codec graph on the same fixed zstd releases as the core workspace. The same
+sibling layout supports the core workspace used by the macOS FFI build.
 
 The engine bootstrap pins compatibility commit
 `400c3d719c4afe354b3d21d67f71c39092059eee` to match core's upstream ISO 0.8 /
