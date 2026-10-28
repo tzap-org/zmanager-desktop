@@ -19,7 +19,7 @@ concurrency:
 
 env:
   # Reviewed core security fixes; the v2.1.7 tag predates the codec updates.
-  ZMANAGER_ZMANAGER_REF: 1cc01b9e5dc0f2fcf0a3a2eb840062f783bfcfc2
+  ZMANAGER_ZMANAGER_REF: b237ac0c0fa4c91ef09b6c424586e7ad65799e76
 
 jobs:
   security:

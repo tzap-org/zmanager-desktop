@@ -19,7 +19,11 @@ test("security workflow audits npm and every desktop Rust lockfile without advis
   assert.match(workflow, /cargo audit --deny yanked --file/);
   assert.match(workflow, /repository: tzap-org\/zmanager/);
   assert.match(workflow, /ref: \$\{\{ steps\.core\.outputs\.revision \}\}/);
-  assert.match(workflow, /cargo audit --deny yanked --file \.audit\/core\/Cargo.lock/);
+  assert.ok(workflow.includes("git clone https://github.com/tzap-org/tzap.git"));
+  assert.ok(workflow.includes("checkout-forensic-forks.mjs .audit"));
+  assert.ok(workflow.includes("cargo update --package tzap-core"));
+  assert.ok(workflow.includes("cargo update --package crypto-bigint"));
+  assert.ok(workflow.includes("cargo audit --deny yanked --file Cargo.lock"));
   assert.doesNotMatch(workflow, /continue-on-error|--ignore|\|\| true/);
   assert.doesNotMatch(workflow, /docs\/|ensure-sibling-repos|secrets\./);
 });
@@ -128,6 +132,6 @@ test("release pins the fixed core and bootstraps reject lockfile drift", () => {
     assert.ok(read(path).includes("400c3d719c4afe354b3d21d67f71c39092059eee"));
     const coreRevision = read(".github/workflows/release.yml").match(/ZMANAGER_ZMANAGER_REF: ([0-9a-f]{40})/)?.[1];
     assert.ok(coreRevision && read(path).includes(coreRevision), `${path} must use the audited core revision`);
-    assert.equal(coreRevision, "1cc01b9e5dc0f2fcf0a3a2eb840062f783bfcfc2");
+    assert.equal(coreRevision, "b237ac0c0fa4c91ef09b6c424586e7ad65799e76");
   }
 });

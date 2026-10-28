@@ -78,6 +78,29 @@ jobs:
           repository: tzap-org/zmanager
           ref: ${{ steps.core.outputs.revision }}
           path: .audit/core
+      - name: Clone sibling TZAP dependency
+        working-directory: .audit/core
+        run: git clone https://github.com/tzap-org/tzap.git ../tzap
+      - name: Clone core's pinned sibling repositories
+        working-directory: .audit/core
+        run: |
+          LOCALSEND_REV=$(cat localsend-rs-rev.txt 2>/dev/null || echo "main")
+          git clone https://github.com/frankmanzhu/localsend-rs.git ../localsend-rs
+          git -C ../localsend-rs checkout "$LOCALSEND_REV" || git -C ../localsend-rs checkout main
+          FVE_REV=$(cat forensic-vfs-engine-rev.txt 2>/dev/null || echo "main")
+          git clone https://github.com/frankmanzhu/forensic-vfs-engine.git ../forensic-vfs-engine
+          git -C ../forensic-vfs-engine checkout "$FVE_REV" || git -C ../forensic-vfs-engine checkout main
+      - name: Checkout pinned forensic dependency forks
+        run: node scripts/checkout-forensic-forks.mjs .audit
       - run: rustup toolchain install stable --profile minimal
       - run: cargo +stable install cargo-audit --locked --version 0.22.2
-      - run: cargo audit --deny yanked --file .audit/core/Cargo.lock
+      # Match zmanager's successful audit: refresh lock entries resolved against
+      # sibling TZAP, then audit the resulting core dependency graph.
+      - name: Resolve sibling TZAP dependencies
+        working-directory: .audit/core
+        run: |
+          cargo update --package tzap-core
+          cargo update --package crypto-bigint
+      - name: Audit resolved core lockfile
+        working-directory: .audit/core
+        run: cargo audit --deny yanked --file Cargo.lock
