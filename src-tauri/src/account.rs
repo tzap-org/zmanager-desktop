@@ -39,7 +39,7 @@ use zmanager_tzap_hosted::status_client::{TzapBulkStatusLookup, TzapStatusClient
 use zmanager_tzap_hosted::trust::{self, TzapCertificateProfileOptions};
 
 use crate::error::{CommandErrorDto, ErrorSeverityDto};
-use crate::secure_store::{NativeTzapLocalIdentityStore, NativeTzapSecretStore};
+use crate::secure_store::{AccountTzapSecretStore, NativeTzapLocalIdentityStore, account_runtime_secret_store};
 
 const ACCOUNT_KEY: &str = "default";
 const REDIRECT_URI: &str = "tzap://auth/callback";
@@ -349,11 +349,11 @@ fn restore_session_environment(session: Option<TzapSessionRecord>, _legacy_envir
 }
 
 #[derive(Clone)]
-pub struct AccountRuntime(Arc<Mutex<AccountRuntimeState>>, Arc<Mutex<NativeTzapSecretStore>>, Arc<Mutex<()>>);
+pub struct AccountRuntime(Arc<Mutex<AccountRuntimeState>>, Arc<Mutex<AccountTzapSecretStore>>, Arc<Mutex<()>>);
 
 impl AccountRuntime {
     pub fn new() -> Self {
-        let store = NativeTzapSecretStore::for_desktop_account().expect("desktop account secure-store scope is valid");
+        let store = account_runtime_secret_store();
         let persisted_session = store.load_session(ACCOUNT_KEY);
         // The native record contains its own issuer and environment. A stale
         // companion item must not erase a newer CLI session on app startup.
@@ -1869,7 +1869,7 @@ fn snapshot_at(root: &Path, runtime: &AccountRuntime) -> Result<AccountSnapshotD
 
 fn with_secret_store<T>(
     runtime: &AccountRuntime,
-    operation: impl FnOnce(&mut NativeTzapSecretStore) -> Result<T, TzapSecretStoreError>,
+    operation: impl FnOnce(&mut AccountTzapSecretStore) -> Result<T, TzapSecretStoreError>,
 ) -> Result<T, TzapSecretStoreError> {
     let mut secret_store = runtime.1.lock().expect("account secure-store lock poisoned");
     operation(&mut secret_store)

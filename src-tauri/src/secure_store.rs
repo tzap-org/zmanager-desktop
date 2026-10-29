@@ -4,15 +4,22 @@ use keyring::{Entry, Error as KeyringError};
 use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::OnceLock;
+#[cfg(test)]
+use std::sync::atomic::{AtomicUsize, Ordering};
+#[cfg(test)]
+use zmanager_core::identity_catalog::InMemoryTzapSecretMaterialStore;
 use zmanager_core::identity_catalog::{
     FileTzapIdentityCatalogStore, TzapIdentityCatalogStore, TzapSecretMaterialStore, TzapSecretPurpose, TzapSecretRef, TzapSecretStoreError,
     load_inventory_from_catalog, store_inventory_as_catalog,
 };
 use zmanager_core::local_identity_store::{TzapLocalIdentityInventory, TzapLocalIdentityStore, TzapLocalIdentityStoreError};
 use zmanager_core::secrets::SecretBytes;
+#[cfg(test)]
+use zmanager_tzap_hosted::auth_client::InMemoryTzapSessionStore;
 use zmanager_tzap_hosted::auth_client::{TzapAuthError, TzapSessionRecord, TzapSessionStore};
 
 const SERVICE_NAME: &str = "org.tzap.zmanager.identity";
+#[cfg(not(test))]
 const SESSION_ENVIRONMENT_KEY: &str = "session-environment";
 
 fn session_storage_account_key(account_key: &str) -> String {
@@ -43,6 +50,49 @@ fn account_scope() -> String {
 #[derive(Debug, Clone)]
 pub struct NativeTzapSecretStore {
     account_scope: String,
+}
+
+#[cfg(test)]
+pub(crate) struct InMemoryDesktopTzapSecretStore {
+    account_scope: String,
+    secrets: InMemoryTzapSecretMaterialStore,
+    sessions: InMemoryTzapSessionStore,
+}
+
+#[cfg(test)]
+impl InMemoryDesktopTzapSecretStore {
+    fn new() -> Self {
+        static NEXT_TEST_SCOPE: AtomicUsize = AtomicUsize::new(1);
+        Self {
+            account_scope: format!("unit-test-{}", NEXT_TEST_SCOPE.fetch_add(1, Ordering::Relaxed)),
+            secrets: InMemoryTzapSecretMaterialStore::new(),
+            sessions: InMemoryTzapSessionStore::new(),
+        }
+    }
+
+    pub(crate) fn secure_scope(&self) -> &str {
+        &self.account_scope
+    }
+
+    pub(crate) fn clear_session_environment(&self, _account_key: &str) -> Result<(), TzapAuthError> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+pub(crate) type AccountTzapSecretStore = InMemoryDesktopTzapSecretStore;
+#[cfg(not(test))]
+pub(crate) type AccountTzapSecretStore = NativeTzapSecretStore;
+
+pub(crate) fn account_runtime_secret_store() -> AccountTzapSecretStore {
+    #[cfg(test)]
+    {
+        InMemoryDesktopTzapSecretStore::new()
+    }
+    #[cfg(not(test))]
+    {
+        NativeTzapSecretStore::for_desktop_account().expect("desktop account secure-store scope is valid")
+    }
 }
 
 /// Desktop adapter for the shared lifecycle client. Public catalog metadata is
@@ -122,6 +172,7 @@ impl NativeTzapSecretStore {
         Self::new(account_scope())
     }
 
+    #[cfg(not(test))]
     pub(crate) fn secure_scope(&self) -> &str {
         &self.account_scope
     }
@@ -132,12 +183,14 @@ impl NativeTzapSecretStore {
             .map_err(|error| map_keyring_error(error, reference))
     }
 
+    #[cfg(not(test))]
     fn session_environment_entry(&self, account_key: &str) -> Result<Entry, TzapAuthError> {
         let storage_account_key = session_storage_account_key(account_key);
         Entry::new(SERVICE_NAME, &format!("{}:{}:{}", self.account_scope, SESSION_ENVIRONMENT_KEY, storage_account_key))
             .map_err(|_| TzapAuthError::Storage { message: "Session environment keyring entry failed".to_owned() })
     }
 
+    #[cfg(not(test))]
     pub fn clear_session_environment(&self, account_key: &str) -> Result<(), TzapAuthError> {
         let entry = self.session_environment_entry(account_key)?;
         match entry.delete_credential() {
@@ -209,6 +262,41 @@ impl TzapSessionStore for NativeTzapSecretStore {
     }
 }
 
+#[cfg(test)]
+impl TzapSecretMaterialStore for InMemoryDesktopTzapSecretStore {
+    fn put(&mut self, purpose: TzapSecretPurpose, material: SecretBytes) -> Result<TzapSecretRef, TzapSecretStoreError> {
+        self.secrets.put(purpose, material)
+    }
+
+    fn put_at(&mut self, purpose: TzapSecretPurpose, reference: &TzapSecretRef, material: SecretBytes) -> Result<(), TzapSecretStoreError> {
+        self.secrets.put_at(purpose, reference, material)
+    }
+
+    fn resolve(&self, purpose: TzapSecretPurpose, reference: &TzapSecretRef) -> Result<SecretBytes, TzapSecretStoreError> {
+        self.secrets.resolve(purpose, reference)
+    }
+
+    fn delete(&mut self, purpose: TzapSecretPurpose, reference: &TzapSecretRef) -> Result<(), TzapSecretStoreError> {
+        self.secrets.delete(purpose, reference)
+    }
+}
+
+#[cfg(test)]
+impl TzapSessionStore for InMemoryDesktopTzapSecretStore {
+    fn save_session(&mut self, account_key: &str, session: TzapSessionRecord) -> Result<(), TzapAuthError> {
+        session.require_hosted_provenance()?;
+        self.sessions.save_session(account_key, session)
+    }
+
+    fn load_session(&self, account_key: &str) -> Option<TzapSessionRecord> {
+        self.sessions.load_session(account_key).filter(|session| session.require_hosted_provenance().is_ok())
+    }
+
+    fn clear_session(&mut self, account_key: &str) -> Result<(), TzapAuthError> {
+        self.sessions.clear_session(account_key)
+    }
+}
+
 fn serialize_session_record(session: &TzapSessionRecord) -> Result<Vec<u8>, TzapAuthError> {
     session.require_hosted_provenance()?;
     serde_json::to_vec(&session.to_secure_json()).map_err(|error| TzapAuthError::Storage { message: format!("Serialize failed: {error}") })
@@ -247,6 +335,15 @@ mod tests {
         assert!(NativeTzapSecretStore::new("default").is_ok());
         assert!(NativeTzapSecretStore::new("default:other").is_err());
         assert!(NativeTzapSecretStore::new("../other").is_err());
+    }
+
+    #[test]
+    fn account_runtime_uses_isolated_in_memory_store_in_unit_tests() {
+        let first = account_runtime_secret_store();
+        let second = account_runtime_secret_store();
+        assert_ne!(first.secure_scope(), second.secure_scope());
+        assert!(first.secure_scope().starts_with("unit-test-"));
+        assert!(second.secure_scope().starts_with("unit-test-"));
     }
 
     #[test]
