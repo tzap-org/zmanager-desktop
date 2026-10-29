@@ -339,11 +339,11 @@ struct AccountRuntimeState {
 }
 
 fn restore_session_environment(session: Option<TzapSessionRecord>, _legacy_environment: Option<String>) -> (Option<TzapSessionRecord>, String) {
-    if let Some(session) = session {
-        if let Ok(binding) = session.require_hosted_provenance() {
-            let environment = zmanager_tzap_hosted::session_provenance::environment_name(binding.environment).to_owned();
-            return (Some(session), environment);
-        }
+    if let Some(session) = session
+        && let Ok(binding) = session.require_hosted_provenance()
+    {
+        let environment = zmanager_tzap_hosted::session_provenance::environment_name(binding.environment).to_owned();
+        return (Some(session), environment);
     }
     (None, "prod".to_owned())
 }
