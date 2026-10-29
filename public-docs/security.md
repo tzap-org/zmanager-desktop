@@ -24,10 +24,10 @@ checks; artifact workflows enforce their own dependency on the gate.
 Both sibling bootstraps validate Cargo resolution with `--locked` before
 packaging, so a stale sibling manifest cannot silently replace audited
 dependencies. Releases pin core security commit
-`b237ac0c0fa4c91ef09b6c424586e7ad65799e76`, whose Security Audit passed. The
-earlier `1cc01b9e5dc0f2fcf0a3a2eb840062f783bfcfc2` lockfile still contained
-vulnerable and yanked dependencies. Advance the pin only with a reviewed,
-audited lockfile.
+`363b3103d2d2359f5eed76f6155cd2839778d5a4`. It includes the later RustSec
+dependency fixes, yanked dependency refresh, and TZAP 0.2.7 update. The release
+security job audits this exact source revision's resolved core dependency
+graph before packaging.
 The shell and PowerShell bootstraps use the same pin by default. Developers
 can explicitly override `ZMANAGER_ZMANAGER_REF` while working on core changes.
 

@@ -116,7 +116,7 @@ test("the product lockfile uses the reviewed codec sources and excludes yanked c
   const versions = (name) => packageEntries(name).map((entry) => entry.match(/^version = "([^"]+)"/m)?.[1]);
 
   assert.deepEqual(versions("backhand"), ["0.25.5"]);
-  assert.deepEqual(versions("tzap-core"), ["0.2.6"]);
+  assert.deepEqual(versions("tzap-core"), ["0.2.7"]);
   assert.deepEqual(versions("zstd"), ["0.14.3"]);
   assert.deepEqual(versions("zstd-safe"), ["8.2.0"]);
   assert.deepEqual(versions("crypto-bigint"), ["0.7.10"]);
@@ -132,6 +132,6 @@ test("release pins the fixed core and bootstraps reject lockfile drift", () => {
     assert.ok(read(path).includes("400c3d719c4afe354b3d21d67f71c39092059eee"));
     const coreRevision = read(".github/workflows/release.yml").match(/ZMANAGER_ZMANAGER_REF: ([0-9a-f]{40})/)?.[1];
     assert.ok(coreRevision && read(path).includes(coreRevision), `${path} must use the audited core revision`);
-    assert.equal(coreRevision, "b237ac0c0fa4c91ef09b6c424586e7ad65799e76");
+    assert.equal(coreRevision, "363b3103d2d2359f5eed76f6155cd2839778d5a4");
   }
 });

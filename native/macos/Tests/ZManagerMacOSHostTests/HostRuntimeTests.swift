@@ -134,6 +134,10 @@ private func promiseReleaseCallback(_: UnsafeMutableRawPointer?) {}
     #expect(NativeHostEventEncoder.hostedAuthPayload(from: valid)?["callbackUrl"] as? String
         == "tzap://auth/callback")
 
+    let serverCallback = try #require(URL(string: "tzap://auth/callback?state=state-1234567890&handoff_code=handoff-code-1234567890"))
+    #expect(NativeHostEventEncoder.hostedAuthPayload(from: serverCallback)?["result"] as? String == "completed")
+    #expect(NativeHostEventEncoder.hostedAuthPayload(from: serverCallback)?["handoffCode"] as? String == "handoff-code-1234567890")
+
     let cancelled = try #require(URL(string: "tzap://auth/callback?state=state-1234567890&result=cancelled&handoff_code=handoff-code-1234567890"))
     #expect(NativeHostEventEncoder.hostedAuthPayload(from: cancelled)?["handoffCode"] == nil)
     let secret = try #require(URL(string:

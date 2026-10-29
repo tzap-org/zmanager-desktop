@@ -35,10 +35,13 @@ struct NativeHostEventEncoder {
             values[item.name] = value
         }
         let forbidden = ["code", "token", "access_token", "authorization_code", "password", "relay_body", "session_token", "refresh_token", "id_token"]
+        // The server's successful handoff is state + handoff_code. Match the
+        // Rust/mobile parser: result is optional and defaults to completed.
+        let result = values["result"] ?? "completed"
         guard forbidden.allSatisfy({ values[$0] == nil }),
               let state = values["state"], (16 ... 256).contains(state.count),
               state.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" || $0 == "-" }),
-              let result = values["result"], ["completed", "cancelled", "failed"].contains(result)
+              ["completed", "cancelled", "failed"].contains(result)
         else { return nil }
         if result == "completed" {
             guard let handoffCode = values["handoff_code"], (16 ... 2048).contains(handoffCode.count),

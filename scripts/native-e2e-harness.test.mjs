@@ -4,7 +4,26 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { executeAsync } from "@wdio/utils";
-import { observeWindowsDefaultBrowserNavigation } from "../e2e/tauri/helpers/registeredProtocol.ts";
+import { countInstalledApplicationProcesses, observeWindowsDefaultBrowserNavigation } from "../e2e/tauri/helpers/registeredProtocol.ts";
+
+test("macOS singleton evidence counts the tested executable rather than other installed copies", { skip: process.platform === "win32" }, async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "zmanager-process-count-"));
+  const previousPath = process.env.PATH;
+  const platform = Object.getOwnPropertyDescriptor(process, "platform");
+  t.after(() => {
+    process.env.PATH = previousPath;
+    Object.defineProperty(process, "platform", platform);
+    rmSync(root, { recursive: true, force: true });
+  });
+  for (const [name, output] of [["pgrep", "123\\n456"], ["ps", "/Applications/ZManager.app/Contents/MacOS/zmanager-desktop\\n/tmp/test/zmanager-desktop"]]) {
+    const executable = join(root, name);
+    writeFileSync(executable, `#!${process.execPath}\nconsole.log(${JSON.stringify(output)}.replaceAll('\\\\n', '\\n'));\n`);
+    chmodSync(executable, 0o755);
+  }
+  process.env.PATH = `${root}:${previousPath}`;
+  Object.defineProperty(process, "platform", { value: "darwin" });
+  assert.equal(await countInstalledApplicationProcesses("/tmp/test/zmanager-desktop"), 1);
+});
 
 test("the configured WDIO wrapper allows a hosted handoff beyond the UI timeout", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "zmanager-wdio-budget-"));

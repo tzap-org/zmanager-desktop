@@ -35,7 +35,7 @@ tzap_ref="${ZMANAGER_TZAP_REF:-main}"
 tzap_dir="${ZMANAGER_TZAP_DIR:-$parent_dir/tzap}"
 
 zmanager_repo="${ZMANAGER_ZMANAGER_REPO:-https://github.com/tzap-org/zmanager}"
-zmanager_ref="${ZMANAGER_ZMANAGER_REF:-b237ac0c0fa4c91ef09b6c424586e7ad65799e76}"
+zmanager_ref="${ZMANAGER_ZMANAGER_REF:-363b3103d2d2359f5eed76f6155cd2839778d5a4}"
 zmanager_dir="${ZMANAGER_ZMANAGER_DIR:-$parent_dir/zmanager}"
 
 localsend_repo="${ZMANAGER_LOCALSEND_REPO:-https://github.com/frankmanzhu/localsend-rs}"

@@ -367,6 +367,11 @@ pub(super) fn handle_run_event(event: &tauri::RunEvent, inbox: &crate::native_la
             {
                 file_paths.push(path_str.to_string());
             }
+        } else if let Some(event) = crate::quick_action::hosted_auth_callback_event_from_args([std::ffi::OsString::from(url.as_str())]) {
+            if let Some(diagnostics) = NATIVE_DIAGNOSTICS.get() {
+                let _ = diagnostics.record("launch", "hostedAuthCallbackObserved", crate::diagnostics::fields([("source", serde_json::json!("tauriOpened"))]));
+            }
+            ingest_macos_native_event(event, inbox);
         } else if let Some(event) = shell_action_event_from_url(url, pid, timestamp_ms, index) {
             ingest_macos_native_event(event, inbox);
         }
@@ -834,6 +839,18 @@ mod tests {
     use crate::platform::NativeFileDragItemKind;
 
     use super::*;
+
+    #[test]
+    fn tauri_opened_delivers_the_server_hosted_callback_to_the_native_inbox() {
+        let inbox = crate::native_launch_inbox::NativeLaunchInbox::new();
+        inbox.attach_emitter(std::sync::Arc::new(|_, _| Ok(()))).unwrap();
+        inbox.frontend_ready("main").unwrap();
+        let callback = tauri::Url::parse("tzap://auth/callback?state=state-1234567890&handoff_code=handoff-code-1234567890").unwrap();
+        handle_run_event(&tauri::RunEvent::Opened { urls: vec![callback] }, &inbox);
+        let events = inbox.pending_events("main");
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, crate::native_launch_inbox::NativeInboundEventKind::HostedAuthCallback);
+    }
 
     fn candidate(path: &str) -> NativeFileDragCandidate {
         NativeFileDragCandidate { entry_path: path.to_string(), kind: NativeFileDragItemKind::File, size: Some(1), modified_unix_seconds: None }

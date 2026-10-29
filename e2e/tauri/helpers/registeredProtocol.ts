@@ -479,8 +479,7 @@ export async function countInstalledApplicationProcesses(executablePath: string)
   if (process.platform !== "darwin") {
     throw new Error("The installed application process helper is not implemented on this platform.");
   }
-  const executableName = path.basename(executablePath);
-  const child = spawn("pgrep", ["-x", executableName], { stdio: ["ignore", "pipe", "ignore"] });
+  const child = spawn("ps", ["-axo", "comm="], { stdio: ["ignore", "pipe", "ignore"] });
   let stdout = "";
   child.stdout.setEncoding("utf8");
   child.stdout.on("data", (chunk: string) => { stdout += chunk; });
@@ -489,7 +488,7 @@ export async function countInstalledApplicationProcesses(executablePath: string)
     child.once("close", (code) => resolve(code ?? 1));
   });
   if (exitCode !== 0 && exitCode !== 1) throw new Error("Installed application process count failed.");
-  return stdout.split(/\r?\n/u).filter(Boolean).length;
+  return stdout.split(/\r?\n/u).map((line) => line.trim()).filter((line) => line === path.resolve(executablePath)).length;
 }
 
 export async function startWindowsInstalledApplication(executablePath: string): Promise<void> {

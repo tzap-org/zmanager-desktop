@@ -18,6 +18,10 @@ const sourceRoot = path.resolve("e2e", "fixtures", "online", "source");
 const runArtifactDir = path.resolve(process.env.TZAP_E2E_ARTIFACT_DIR ?? path.join(".tmp", "zmanager-online-e2e"));
 const username = process.env.TZAP_E2E_USERNAME;
 const password = process.env.TZAP_E2E_PASSWORD;
+const authLaunchMode = process.env.TZAP_E2E_AUTH_LAUNCH_MODE ?? "browser";
+if (authLaunchMode !== "browser" && authLaunchMode !== "native-command") {
+  throw new Error("TZAP_E2E_AUTH_LAUNCH_MODE must be browser or native-command.");
+}
 const boundaryResults: Record<string, { status: "passed" | "failed"; detail?: string }> = {};
 
 // The OS opening a real browser and navigating it is slower on a loaded
@@ -69,6 +73,14 @@ async function clickHostedSignInFromUi(): Promise<void> {
 }
 
 async function clickHostedSignInAndObserveBrowser(): Promise<string> {
+  if (authLaunchMode === "native-command") {
+    const launch = await invoke<{ launchUrl: string }>("account_begin_hosted_auth", {
+      request: { environment: "staging", audience: "sign.tzap.org" },
+    });
+    assert.equal(new URL(launch.launchUrl).origin, "https://staging.tzap.org");
+    recordBoundary("nativeCommandLaunch", "passed");
+    return launch.launchUrl;
+  }
   const observed = await observeDefaultBrowserNavigation(
     "https://staging.tzap.org", clickHostedSignInFromUi, BROWSER_NAVIGATION_TIMEOUT_SECONDS,
   );
@@ -241,7 +253,7 @@ describe("Online TZAP account lifecycle", () => {
     await invoke("account_forget");
     const launchUrl = new URL(await clickHostedSignInAndObserveBrowser());
     recordBoundary("oauthLaunch", "passed", `${launchUrl.origin}${launchUrl.pathname}`);
-    recordBoundary("tauriOpener", "passed");
+    if (authLaunchMode === "browser") recordBoundary("tauriOpener", "passed");
     assert.equal(launchUrl.origin, "https://staging.tzap.org");
     assert.ok(["/auth/launch", "/auth/login"].includes(launchUrl.pathname), `unexpected staging auth path: ${launchUrl.pathname}`);
     assert.equal(launchUrl.searchParams.get("redirect_uri"), "tzap://auth/callback");

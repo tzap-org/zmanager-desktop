@@ -41,6 +41,17 @@ npm.cmd run test:gui:run
 
 ## Staging configuration
 
+For focused macOS diagnosis, `TZAP_E2E_AUTH_LAUNCH_MODE=native-command`
+starts `online-account.spec.ts` at `account_begin_hosted_auth`, then runs the
+real staging browser login, Rust callback exchange, enrollment, signing,
+extraction, offline verification, fresh status, and callback rejection checks.
+Run it through `npm run test:gui:run -- --spec e2e/tauri/online-account.spec.ts`;
+use the staging environment and GUI binary settings from `test-macos-gui.sh`.
+This mode records `nativeCommandLaunch` and does not claim a UI opener check.
+The default `browser` mode remains the release test for the real Account UI
+and default-browser opener. A raw GUI binary uses the documented native
+callback adapter; testing the OS protocol handler requires an installed bundle.
+
 Copy [staging.env.example](../../staging.env.example) to a private env file and
 fill in the account credentials and registered staging client ID before running:
 
