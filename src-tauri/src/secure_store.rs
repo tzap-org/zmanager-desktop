@@ -1,7 +1,7 @@
 //! Native OS secure-store adapter for TZAP private material.
 
 use keyring::{Entry, Error as KeyringError};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 use zmanager_core::identity_catalog::{
@@ -10,8 +10,7 @@ use zmanager_core::identity_catalog::{
 };
 use zmanager_core::local_identity_store::{TzapLocalIdentityInventory, TzapLocalIdentityStore, TzapLocalIdentityStoreError};
 use zmanager_core::secrets::SecretBytes;
-use zmanager_core::trust::TzapIdentityAssurance;
-use zmanager_tzap_hosted::auth_client::{TzapAuthError, TzapBearerToken, TzapSessionRecord, TzapSessionStore};
+use zmanager_tzap_hosted::auth_client::{TzapAuthError, TzapSessionRecord, TzapSessionStore};
 
 const SERVICE_NAME: &str = "org.tzap.zmanager.identity";
 const SESSION_ENVIRONMENT_KEY: &str = "session-environment";
@@ -123,6 +122,10 @@ impl NativeTzapSecretStore {
         Self::new(account_scope())
     }
 
+    pub(crate) fn secure_scope(&self) -> &str {
+        &self.account_scope
+    }
+
     fn entry(&self, purpose: TzapSecretPurpose, reference: &TzapSecretRef) -> Result<Entry, TzapSecretStoreError> {
         TzapSecretRef::parse(reference.as_str().to_owned())?;
         Entry::new(SERVICE_NAME, &format!("{}:{}:{}", self.account_scope, purpose.as_str(), reference.as_str()))
@@ -133,22 +136,6 @@ impl NativeTzapSecretStore {
         let storage_account_key = session_storage_account_key(account_key);
         Entry::new(SERVICE_NAME, &format!("{}:{}:{}", self.account_scope, SESSION_ENVIRONMENT_KEY, storage_account_key))
             .map_err(|_| TzapAuthError::Storage { message: "Session environment keyring entry failed".to_owned() })
-    }
-
-    pub fn save_session_environment(&self, account_key: &str, environment: &str) -> Result<(), TzapAuthError> {
-        if !matches!(environment, "local" | "staging" | "prod") {
-            return Err(TzapAuthError::Storage { message: "Unsupported hosted environment".to_owned() });
-        }
-        self.session_environment_entry(account_key)?
-            .set_secret(environment.as_bytes())
-            .map_err(|_| TzapAuthError::Storage { message: "Session environment could not be stored".to_owned() })
-    }
-
-    pub fn load_session_environment(&self, account_key: &str) -> Option<String> {
-        let entry = self.session_environment_entry(account_key).ok()?;
-        let bytes = entry.get_secret().ok()?;
-        let environment = std::str::from_utf8(&bytes).ok()?;
-        matches!(environment, "local" | "staging" | "prod").then(|| environment.to_owned())
     }
 
     pub fn clear_session_environment(&self, account_key: &str) -> Result<(), TzapAuthError> {
@@ -192,14 +179,8 @@ impl TzapSecretMaterialStore for NativeTzapSecretStore {
 
 impl TzapSessionStore for NativeTzapSecretStore {
     fn save_session(&mut self, account_key: &str, session: TzapSessionRecord) -> Result<(), TzapAuthError> {
-        let json_value = json!({
-            "audience": session.audience,
-            "access_token": session.access_token.expose(),
-            "expires_at_unix_seconds": session.expires_at_unix_seconds,
-            "identity_assurance": session.identity_assurance.as_str(),
-            "selected_org_id": session.selected_org_id,
-            "login_session_id": session.login_session_id,
-        });
+        session.require_hosted_provenance()?;
+        let json_value = session.to_secure_json();
         let bytes = serde_json::to_vec(&json_value).map_err(|e| TzapAuthError::Storage { message: format!("Serialize failed: {}", e) })?;
 
         let storage_account_key = session_storage_account_key(account_key);
@@ -217,14 +198,9 @@ impl TzapSessionStore for NativeTzapSecretStore {
         let bytes = entry.get_secret().ok()?;
         let value: Value = serde_json::from_slice(&bytes).ok()?;
 
-        let audience = value.get("audience")?.as_str()?.to_string();
-        let access_token = TzapBearerToken::new(value.get("access_token")?.as_str()?).ok()?;
-        let expires_at_unix_seconds = value.get("expires_at_unix_seconds")?.as_u64()?;
-        let identity_assurance = TzapIdentityAssurance::parse(value.get("identity_assurance")?.as_str()?)?;
-        let selected_org_id = value.get("selected_org_id").and_then(|v| v.as_str()).map(|s| s.to_string());
-        let login_session_id = value.get("login_session_id").and_then(|v| v.as_str()).map(|s| s.to_string());
-
-        Some(TzapSessionRecord { audience, access_token, expires_at_unix_seconds, identity_assurance, selected_org_id, login_session_id })
+        let session = TzapSessionRecord::from_secure_json(&value).ok()?;
+        session.require_hosted_provenance().ok()?;
+        Some(session)
     }
 
     fn clear_session(&mut self, account_key: &str) -> Result<(), TzapAuthError> {
