@@ -1072,6 +1072,7 @@ pub fn account_generate_signing_identity(
         legacy_key_id: None,
         metadata_version: None,
         policy_oid: None,
+        hosted_binding: None,
         signing_key_ref: signing_key_ref.clone(),
         lifecycle: "active".to_owned(),
     });
@@ -1162,6 +1163,7 @@ pub fn account_import_signing_identity(
         legacy_key_id: None,
         metadata_version: None,
         policy_oid: None,
+        hosted_binding: None,
         signing_key_ref: signing_key_ref.clone(),
         lifecycle: "active".to_owned(),
     });
@@ -2325,6 +2327,7 @@ mod tests {
             legacy_key_id: None,
             metadata_version: Some(1),
             policy_oid: None,
+            hosted_binding: None,
             signing_key_ref: TzapSecretRef::generate(),
             lifecycle: "active".to_owned(),
         };
@@ -2594,6 +2597,7 @@ mod tests {
             legacy_key_id: None,
             metadata_version: None,
             policy_oid: None,
+            hosted_binding: None,
             signing_key_ref: TzapSecretRef::generate(),
             lifecycle: "deletion_pending".to_owned(),
         });

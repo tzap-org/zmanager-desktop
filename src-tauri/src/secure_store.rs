@@ -179,9 +179,7 @@ impl TzapSecretMaterialStore for NativeTzapSecretStore {
 
 impl TzapSessionStore for NativeTzapSecretStore {
     fn save_session(&mut self, account_key: &str, session: TzapSessionRecord) -> Result<(), TzapAuthError> {
-        session.require_hosted_provenance()?;
-        let json_value = session.to_secure_json();
-        let bytes = serde_json::to_vec(&json_value).map_err(|e| TzapAuthError::Storage { message: format!("Serialize failed: {}", e) })?;
+        let bytes = serialize_session_record(&session)?;
 
         let storage_account_key = session_storage_account_key(account_key);
         let entry = Entry::new(SERVICE_NAME, &format!("{}:session:{}", self.account_scope, storage_account_key))
@@ -196,11 +194,7 @@ impl TzapSessionStore for NativeTzapSecretStore {
         let entry = Entry::new(SERVICE_NAME, &format!("{}:session:{}", self.account_scope, storage_account_key)).ok()?;
 
         let bytes = entry.get_secret().ok()?;
-        let value: Value = serde_json::from_slice(&bytes).ok()?;
-
-        let session = TzapSessionRecord::from_secure_json(&value).ok()?;
-        session.require_hosted_provenance().ok()?;
-        Some(session)
+        deserialize_session_record(&bytes).ok()
     }
 
     fn clear_session(&mut self, account_key: &str) -> Result<(), TzapAuthError> {
@@ -213,6 +207,18 @@ impl TzapSessionStore for NativeTzapSecretStore {
             Err(e) => Err(TzapAuthError::Storage { message: format!("Delete failed: {}", e) }),
         }
     }
+}
+
+fn serialize_session_record(session: &TzapSessionRecord) -> Result<Vec<u8>, TzapAuthError> {
+    session.require_hosted_provenance()?;
+    serde_json::to_vec(&session.to_secure_json()).map_err(|error| TzapAuthError::Storage { message: format!("Serialize failed: {error}") })
+}
+
+fn deserialize_session_record(bytes: &[u8]) -> Result<TzapSessionRecord, TzapAuthError> {
+    let value: Value = serde_json::from_slice(bytes).map_err(|error| TzapAuthError::Storage { message: format!("Deserialize failed: {error}") })?;
+    let session = TzapSessionRecord::from_secure_json(&value)?;
+    session.require_hosted_provenance()?;
+    Ok(session)
 }
 
 fn map_keyring_error(error: KeyringError, reference: &TzapSecretRef) -> TzapSecretStoreError {
@@ -233,6 +239,8 @@ fn current_unix_seconds() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zmanager_tzap_hosted::auth_client::{TzapHostedAuthEnvironment, TzapHostedAuthLaunchConfig, TzapSessionRecord};
+    use zmanager_tzap_hosted::trust::TzapIdentityAssurance;
 
     #[test]
     fn store_scope_rejects_path_or_separator_injection() {
@@ -247,5 +255,45 @@ mod tests {
         let error = map_keyring_error(KeyringError::NoStorageAccess(Box::new(std::io::Error::other("locked"))), &reference);
         assert_eq!(error, TzapSecretStoreError::Locked);
         assert!(!format!("{error}").contains(reference.as_str()));
+    }
+
+    #[test]
+    fn shared_cli_session_schema_round_trips_through_desktop_storage_codec() {
+        let mut session = TzapSessionRecord {
+            user_id: Some("staging-user".to_owned()),
+            provenance: None,
+            audience: "sign.tzap.org".to_owned(),
+            access_token: zmanager_tzap_hosted::auth_client::TzapBearerToken::new("fixture-token").unwrap(),
+            expires_at_unix_seconds: 10_000,
+            identity_assurance: TzapIdentityAssurance::OauthVerifiedEmail,
+            selected_org_id: None,
+            login_session_id: Some("staging-login".to_owned()),
+        };
+        let config = TzapHostedAuthLaunchConfig::for_environment(TzapHostedAuthEnvironment::Staging, "zmanager-cli", "http://127.0.0.1:49152/auth/callback");
+        let binding = zmanager_tzap_hosted::session_provenance::TzapSessionProvenance::from_launch(&config, "cli-flow-fixture").unwrap();
+        session.bind_provenance(binding).unwrap();
+
+        let encoded = serialize_session_record(&session).unwrap();
+        let restored = deserialize_session_record(&encoded).unwrap();
+        assert_eq!(restored, session);
+        let provenance = restored.require_hosted_provenance().unwrap();
+        assert_eq!(provenance.auth_flow_id, "cli-flow-fixture");
+        assert_eq!(provenance.auth_origin, "https://staging.tzap.org");
+        assert_eq!(provenance.environment, TzapHostedAuthEnvironment::Staging);
+    }
+
+    #[test]
+    fn desktop_storage_codec_rejects_unbound_sessions() {
+        let session = TzapSessionRecord {
+            user_id: None,
+            provenance: None,
+            audience: "sign.tzap.org".to_owned(),
+            access_token: zmanager_tzap_hosted::auth_client::TzapBearerToken::new("fixture-token").unwrap(),
+            expires_at_unix_seconds: 10_000,
+            identity_assurance: TzapIdentityAssurance::OauthVerifiedEmail,
+            selected_org_id: None,
+            login_session_id: None,
+        };
+        assert!(serialize_session_record(&session).is_err());
     }
 }
