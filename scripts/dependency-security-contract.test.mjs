@@ -117,6 +117,8 @@ test("the product lockfile uses the reviewed codec sources and excludes yanked c
 
   assert.deepEqual(versions("backhand"), ["0.25.5"]);
   assert.deepEqual(versions("tzap-core"), ["0.2.7"]);
+  assert.doesNotMatch(packageEntries("tzap-core")[0], /source =|checksum =/,
+    "tzap-core must resolve to the local patch provisioned by the sibling bootstrap");
   assert.deepEqual(versions("zstd"), ["0.14.3"]);
   assert.deepEqual(versions("zstd-safe"), ["8.2.0"]);
   assert.deepEqual(versions("crypto-bigint"), ["0.7.10"]);
