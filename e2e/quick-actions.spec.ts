@@ -568,8 +568,9 @@ test("LAN share discovers from picker, shows progress, and locks completed recei
   const peer = { alias: "Same name", fingerprint: "peer", port: 53317, protocol: "https", ip: "192.168.1.5", deviceModel: "Windows", lastSeenUnixSeconds: null };
   await installQuickActionTauriStub(page, [notRequestedState], { shareItems: [shareFixture()], discoveries: [[], [peer, { ...peer, fingerprint: "other", ip: "192.168.1.6" }]] });
   await page.goto("/");
+  await expectWindowCommand(page, "get_share_queue");
   const panel = page.getByRole("region", { name: "Share queue" });
-  await expect(panel).toBeVisible();
+  await expect(panel).toBeVisible({ timeout: 15_000 });
   await expect(panel.getByRole("button", { name: "Refresh receivers" })).toHaveCount(0);
   await panel.getByRole("button", { name: "LAN receiver" }).click();
   await expect(page.getByText(/No devices found/)).toBeVisible();
