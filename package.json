@@ -77,6 +77,8 @@
   },
   "overrides": {
     "deepmerge-ts": "^8.0.1",
-    "@puppeteer/browsers": "^3.2.1"
+    "@puppeteer/browsers": "^3.2.1",
+    "glob": "^14.0.3",
+    "minimatch": "^11.0.3"
   }
 }
