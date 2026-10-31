@@ -134,7 +134,7 @@ impl TzapLocalIdentityStore for NativeTzapLocalIdentityStore {
         inventory.validate()?;
         let mut catalog_store = FileTzapIdentityCatalogStore::new(&self.root);
         let mut secret_store = self.secret_store()?;
-        store_inventory_as_catalog(&mut catalog_store, &mut secret_store, account_key, &inventory, current_unix_seconds())?;
+        store_inventory_as_catalog(&mut catalog_store, &mut secret_store, account_key, &inventory)?;
         Ok(())
     }
 
@@ -318,10 +318,6 @@ fn map_keyring_error(error: KeyringError, reference: &TzapSecretRef) -> TzapSecr
         KeyringError::Invalid(_, _) | KeyringError::TooLong(_, _) => TzapSecretStoreError::Denied,
         _ => TzapSecretStoreError::Unavailable,
     }
-}
-
-fn current_unix_seconds() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |duration| duration.as_secs())
 }
 
 #[cfg(test)]
