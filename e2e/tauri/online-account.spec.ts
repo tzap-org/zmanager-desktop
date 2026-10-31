@@ -10,6 +10,7 @@ import type {
   VerifyTzapCertificateResponse,
 } from "../../src/api/types";
 import { captureHostedCallback } from "./helpers/hostedCallback.ts";
+import { openStagingLogin } from "./helpers/stagingLogin.ts";
 import { countInstalledApplicationProcesses, observeDefaultBrowserNavigation, openRegisteredProtocol, runWindowsAccountUiAction } from "./helpers/registeredProtocol.ts";
 import { runJobInTaskWindow } from "./helpers/archiveCommands.ts";
 import { assertHashManifestEqual, assertNoSecrets, hashTree, writeArchiveEvidence } from "./helpers/tzapArtifacts.ts";
@@ -120,12 +121,8 @@ async function completeBrowserAuth(launchUrl: string, dispatchCallback = true): 
       }
       await route.continue();
     });
-    await page.goto(launchUrl, { waitUntil: "domcontentloaded" });
+    const { username: usernameInput, password: passwordInput } = await openStagingLogin(page, launchUrl);
     assert.equal(productionRequest, null, `staging browser attempted production TZAP traffic: ${productionRequest}`);
-    const usernameInput = page.locator("input[name=username], input[name=email], input[type=email]").first();
-    const passwordInput = page.locator("input[name=password], input[type=password]").first();
-    await usernameInput.waitFor({ state: "visible", timeout: 15_000 });
-    await passwordInput.waitFor({ state: "visible", timeout: 15_000 });
     await usernameInput.fill(username);
     await passwordInput.fill(password);
     const callbackPromise = captureHostedCallback(page);

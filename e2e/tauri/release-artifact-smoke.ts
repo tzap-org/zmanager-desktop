@@ -5,6 +5,7 @@ import path from "node:path";
 import { chromium } from "@playwright/test";
 
 import { captureHostedCallback } from "./helpers/hostedCallback.ts";
+import { openStagingLogin } from "./helpers/stagingLogin.ts";
 import { countWindowsInstalledApplicationProcesses, observeWindowsDefaultBrowserNavigation, openRegisteredProtocol, startWindowsInstalledApplication, stopWindowsInstalledApplication } from "./helpers/registeredProtocol.ts";
 
 const appPath = process.env.ZMANAGER_GUI_APP_PATH;
@@ -58,18 +59,9 @@ async function completeBrowserAuth(launchUrl: string): Promise<string> {
       }
       await route.continue();
     });
-    await page.goto(launchUrl, { waitUntil: "domcontentloaded" });
-    await page.waitForLoadState("networkidle", { timeout: 10_000 }).catch(() => undefined);
+    const { username: usernameInput, password: passwordInput } = await openStagingLogin(page, launchUrl);
     assert.equal(productionOrigin, null, `staging browser attempted production TZAP traffic: ${productionOrigin}`);
     assert.equal(new URL(page.url()).origin, "https://staging.tzap.org");
-    const usernameInput = page.locator("input[type=email], input[name=username], input[name=email], input[type=text]").first();
-    const passwordInput = page.locator("input[name=password], input[type=password]").first();
-    try {
-      await usernameInput.waitFor({ state: "visible", timeout: 30_000 });
-      await passwordInput.waitFor({ state: "visible", timeout: 30_000 });
-    } catch {
-      throw new Error(`staging login form was not visible (path=${new URL(page.url()).pathname}, inputs=${await page.locator("input").count()}, buttons=${await page.locator("button").count()})`);
-    }
     await usernameInput.fill(username);
     await passwordInput.fill(password);
     const callbackPromise = captureHostedCallback(page);
