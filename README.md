@@ -1,10 +1,10 @@
 # ZManager Desktop
 
-[![Package](https://github.com/frankmanzhu/zmanager-desktop/actions/workflows/package.yml/badge.svg?branch=main)](https://github.com/frankmanzhu/zmanager-desktop/actions/workflows/package.yml)
-[![Release](https://github.com/frankmanzhu/zmanager-desktop/actions/workflows/release.yml/badge.svg)](https://github.com/frankmanzhu/zmanager-desktop/actions/workflows/release.yml)
-[![Release version](https://img.shields.io/github/v/release/frankmanzhu/zmanager-desktop?include_prereleases&label=release)](https://github.com/frankmanzhu/zmanager-desktop/releases)
-[![Latest tag](https://img.shields.io/github/v/tag/frankmanzhu/zmanager-desktop?sort=semver&label=latest%20tag)](https://github.com/frankmanzhu/zmanager-desktop/tags)
-[![Downloads](https://img.shields.io/github/downloads/frankmanzhu/zmanager-desktop/total)](https://github.com/frankmanzhu/zmanager-desktop/releases)
+[![Package](https://github.com/tzap-org/zmanager-desktop/actions/workflows/package.yml/badge.svg?branch=main)](https://github.com/tzap-org/zmanager-desktop/actions/workflows/package.yml)
+[![Release](https://github.com/tzap-org/zmanager-desktop/actions/workflows/release.yml/badge.svg)](https://github.com/tzap-org/zmanager-desktop/actions/workflows/release.yml)
+[![Release version](https://img.shields.io/github/v/release/tzap-org/zmanager-desktop?include_prereleases&label=release)](https://github.com/tzap-org/zmanager-desktop/releases)
+[![Latest tag](https://img.shields.io/github/v/tag/tzap-org/zmanager-desktop?sort=semver&label=latest%20tag)](https://github.com/tzap-org/zmanager-desktop/tags)
+[![Downloads](https://img.shields.io/github/downloads/tzap-org/zmanager-desktop/total)](https://github.com/tzap-org/zmanager-desktop/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 A fast, open-source archive manager for Windows, Linux, and macOS. ZManager
@@ -15,7 +15,7 @@ If someone sends you an archive and you are not sure which tool to use, start
 with ZManager. It can open a very broad range of existing files, while keeping
 new archive creation focused on formats that are fast, compatible, or secure.
 
-## Latest release: 1.2.5
+## Latest release: 1.2.7
 
 The latest release packages the cross-platform desktop app for macOS arm64 and
 x86_64, Windows x64 and ARM64, and Linux x64 and ARM64. Release assets include
@@ -23,8 +23,8 @@ macOS DMG and ZIP packages, Windows installer and portable binaries, Linux DEB
 and RPM packages, a generated third-party license bundle, and SHA256 checksums
 for verification.
 
-See the [full release notes](https://github.com/frankmanzhu/zmanager-desktop/releases/tag/v1.2.5)
-and download the installers from [GitHub Releases](https://github.com/frankmanzhu/zmanager-desktop/releases/latest).
+See the [full release notes](https://github.com/tzap-org/zmanager-desktop/releases/tag/v1.2.7)
+and download the installers from [GitHub Releases](https://github.com/tzap-org/zmanager-desktop/releases/latest).
 
 ## What can I do with it?
 
@@ -140,7 +140,7 @@ list, test, and extract through a prompt or standard input.
 
 ## Get started in 60 seconds
 
-1. Open [GitHub Releases](https://github.com/frankmanzhu/zmanager-desktop/releases/latest).
+1. Open [GitHub Releases](https://github.com/tzap-org/zmanager-desktop/releases/latest).
 2. Download the default package for your OS. These packages use the local/offline profile. To enable hosted account features, choose the matching filename containing `full`:
    - **Windows:** `zmanager-desktop-<version>-windows-x64-installer.exe` or `...-windows-arm64-installer.exe`
    - **Linux:** `zmanager-desktop-<version>-linux-x64` or `...-linux-arm64` (`.deb` / `.rpm`)
@@ -184,7 +184,7 @@ The Microsoft Store MSIX is built from the local/offline profile.
 
 ## For users who want to go deeper
 
-- [Release notes](https://github.com/frankmanzhu/zmanager-desktop/releases)
+- [Release notes](https://github.com/tzap-org/zmanager-desktop/releases)
 - Engine context: [`zmanager` README](https://github.com/frankmanzhu/zmanager/blob/main/README.md)
 - TZAP context: [`TZAP` README](https://github.com/frankmanzhu/tzap/blob/main/README.md)
 
