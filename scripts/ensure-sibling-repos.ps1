@@ -53,7 +53,7 @@ $tzapRef = if ($env:ZMANAGER_TZAP_REF) { $env:ZMANAGER_TZAP_REF } else { "main" 
 $tzapDir = if ($env:ZMANAGER_TZAP_DIR) { $env:ZMANAGER_TZAP_DIR } else { Join-Path $parentDir "tzap" }
 
 $zmanagerRepo = if ($env:ZMANAGER_ZMANAGER_REPO) { $env:ZMANAGER_ZMANAGER_REPO } else { "https://github.com/tzap-org/zmanager" }
-$zmanagerRef = if ($env:ZMANAGER_ZMANAGER_REF) { $env:ZMANAGER_ZMANAGER_REF } else { "f5c0d9547eb88055a583d1f5d4e17cceec42bce3" }
+$zmanagerRef = if ($env:ZMANAGER_ZMANAGER_REF) { $env:ZMANAGER_ZMANAGER_REF } else { "59443d1acb34dc12fc1057d1f56a8b882b6dc968" }
 $zmanagerDir = if ($env:ZMANAGER_ZMANAGER_DIR) { $env:ZMANAGER_ZMANAGER_DIR } else { Join-Path $parentDir "zmanager" }
 
 $localsendRepo = if ($env:ZMANAGER_LOCALSEND_REPO) { $env:ZMANAGER_LOCALSEND_REPO } else { "https://github.com/frankmanzhu/localsend-rs" }

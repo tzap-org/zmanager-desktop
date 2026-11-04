@@ -134,6 +134,6 @@ test("release pins the fixed core and bootstraps reject lockfile drift", () => {
     assert.ok(read(path).includes("400c3d719c4afe354b3d21d67f71c39092059eee"));
     const coreRevision = read(".github/workflows/release.yml").match(/ZMANAGER_ZMANAGER_REF: ([0-9a-f]{40})/)?.[1];
     assert.ok(coreRevision && read(path).includes(coreRevision), `${path} must use the audited core revision`);
-    assert.equal(coreRevision, "f5c0d9547eb88055a583d1f5d4e17cceec42bce3");
+    assert.equal(coreRevision, "59443d1acb34dc12fc1057d1f56a8b882b6dc968");
   }
 });

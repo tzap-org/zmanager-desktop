@@ -19,7 +19,7 @@ concurrency:
 
 env:
   # Pin the core commit that carries the hosted CLI auth and device readiness flow.
-  ZMANAGER_ZMANAGER_REF: f5c0d9547eb88055a583d1f5d4e17cceec42bce3
+  ZMANAGER_ZMANAGER_REF: 59443d1acb34dc12fc1057d1f56a8b882b6dc968
 
 jobs:
   security:

@@ -23,12 +23,10 @@ checks; artifact workflows enforce their own dependency on the gate.
 
 Both sibling bootstraps validate Cargo resolution with `--locked` before
 packaging, so a stale sibling manifest cannot silently replace audited
-dependencies. Releases pin the `v2.2.0` core release commit
-`f5c0d9547eb88055a583d1f5d4e17cceec42bce3`. It includes the RustSec dependency
-fixes, yanked dependency refresh, TZAP 0.2.7 update, hosted CLI auth/device
-readiness, restart-safe identity recovery, and archive extraction hardening.
-The release security job audits this exact source revision's resolved core
-dependency graph before packaging.
+dependencies. Releases pin the reviewed core source revision
+`59443d1acb34dc12fc1057d1f56a8b882b6dc968`, which includes the `async-executor`
+1.14.1 refresh and the `v2.2.0` release changes. The release security job audits
+this exact source revision's resolved core dependency graph before packaging.
 The shell and PowerShell bootstraps use the same pin by default. Developers
 can explicitly override `ZMANAGER_ZMANAGER_REF` while working on core changes.
 
