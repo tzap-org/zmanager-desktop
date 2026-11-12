@@ -12,6 +12,7 @@ use openssl::pkcs12::Pkcs12;
 use openssl::x509::X509;
 use tauri::{AppHandle, State, WebviewWindow, ipc::Channel};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
+use tauri_plugin_opener::OpenerExt;
 
 use crate::archive_selection::{ArchivePathSet, archive_entry_key};
 #[cfg(test)]
@@ -24,10 +25,10 @@ use crate::{
     dto::{
         AckSubscriptionRequest, AcknowledgeAcceptedJobRequest, ArchiveEntryDto, ArchiveEntryKindDto, CreatePlanEntryDto, CreatePlanResponse,
         DestinationCollisionStrategyDto, HandoffCoordinatorLeaseRequest, NativeFileDragAcceptanceResponse, NativeFileDragOutcomeDto, NativeFileDragRequest,
-        NativeFileDragResponse, PauseJobRequest, PlanCreateRequest, PreviewEntryRequest, PreviewEntryResponse, ProjectContract, ProjectIntegrationContract,
-        ResumeJobRequest, StartCreateRequest, StartExtractRequest, StartNativeFileDragRequest, SubscribeAcceptedJobsRequest, SubscribeJobRequest,
-        SubscriptionRequest, SystemFileIconRequest, SystemFileIconResponse, TestArchiveRequest, TzapRestorePolicyDto, ValidateDirectoryRequest,
-        ValidateDirectoryResponse,
+        NativeFileDragResponse, OpenJobOutputRequest, OpenPreviewPathRequest, PauseJobRequest, PlanCreateRequest, PreviewEntryRequest, PreviewEntryResponse,
+        ProjectContract, ProjectIntegrationContract, ResumeJobRequest, StartCreateRequest, StartExtractRequest, StartNativeFileDragRequest,
+        SubscribeAcceptedJobsRequest, SubscribeJobRequest, SubscriptionRequest, SystemFileIconRequest, SystemFileIconResponse, TestArchiveRequest,
+        TzapRestorePolicyDto, ValidateDirectoryRequest, ValidateDirectoryResponse,
     },
     error::{CommandErrorDto, ErrorSeverityDto},
     job_dto::{
@@ -1784,6 +1785,23 @@ pub fn preview_entry(
         preview_path: report.preview_path.to_string_lossy().to_string(),
         written_bytes: report.written_bytes,
     })
+}
+
+#[tauri::command]
+pub fn open_preview_path(request: OpenPreviewPathRequest, registry: State<'_, JobRegistry>, app: AppHandle) -> Result<(), CommandErrorDto> {
+    let path = ensure_non_empty_path(request.preview_path, "previewPath")?;
+    let path = registry.preview_path_for_open(Path::new(&path)).ok_or_else(|| CommandErrorDto::not_found("preview entry is no longer available", None))?;
+    app.opener()
+        .open_path(path.to_string_lossy().into_owned(), None::<String>)
+        .map_err(|_| CommandErrorDto::operation_failed("Unable to open the preview entry."))
+}
+
+#[tauri::command]
+pub fn open_job_output(request: OpenJobOutputRequest, registry: State<'_, JobRegistry>, app: AppHandle) -> Result<(), CommandErrorDto> {
+    let path = registry
+        .openable_output_path(&request.job_id, &request.action_id, &request.artifact_id)
+        .ok_or_else(|| CommandErrorDto::not_found("task output is no longer available", None))?;
+    app.opener().open_path(path.to_string_lossy().to_string(), None::<String>).map_err(|_| CommandErrorDto::operation_failed("Unable to open the task output."))
 }
 
 #[tauri::command]

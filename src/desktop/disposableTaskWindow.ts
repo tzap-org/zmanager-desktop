@@ -8,6 +8,9 @@ export const DISPOSABLE_TASK_OUTPUT_ACTION_EVENT = "zmanager-disposable-task-out
 
 export type DisposableTaskOutputActionRequest = Readonly<{
   action: JobAvailableActionDto["kind"];
+  jobId: string;
+  actionId: string;
+  artifactId: string;
   path: string;
 }>;
 export async function announceDisposableTaskReady(): Promise<void> {

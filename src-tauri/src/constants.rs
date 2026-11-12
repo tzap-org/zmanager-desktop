@@ -27,6 +27,8 @@ pub const COMMAND_PLAN_CREATE: &str = "plan_create";
 pub const COMMAND_START_CREATE: &str = "start_create";
 pub const COMMAND_START_EXTRACT: &str = "start_extract";
 pub const COMMAND_PREVIEW_ENTRY: &str = "preview_entry";
+pub const COMMAND_OPEN_PREVIEW_PATH: &str = "open_preview_path";
+pub const COMMAND_OPEN_JOB_OUTPUT: &str = "open_job_output";
 pub const COMMAND_ACCEPT_NATIVE_FILE_DRAG: &str = "accept_native_file_drag";
 pub const COMMAND_START_NATIVE_FILE_DRAG: &str = "start_native_file_drag";
 pub const COMMAND_CLEANUP_PREVIEW_ROOTS: &str = "cleanup_preview_roots";
@@ -61,6 +63,8 @@ pub const PLANNED_COMMANDS: &[&str] = &[
     COMMAND_START_CREATE,
     COMMAND_START_EXTRACT,
     COMMAND_PREVIEW_ENTRY,
+    COMMAND_OPEN_PREVIEW_PATH,
+    COMMAND_OPEN_JOB_OUTPUT,
     COMMAND_ACCEPT_NATIVE_FILE_DRAG,
     COMMAND_START_NATIVE_FILE_DRAG,
     COMMAND_CLEANUP_PREVIEW_ROOTS,

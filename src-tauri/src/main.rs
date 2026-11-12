@@ -246,6 +246,8 @@ fn main() {
             commands::verify_tzap_certificate,
             commands::validate_tzap_signing_identity,
             commands::preview_entry,
+            commands::open_preview_path,
+            commands::open_job_output,
             commands::accept_native_file_drag,
             commands::start_native_file_drag,
             commands::cleanup_preview_roots,

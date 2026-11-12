@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main-window",
-  "description": "Allow the main ZManager window to run archive commands and use native file dialogs/openers.",
+  "description": "Allow the main ZManager window to run archive commands and use validated file-opening, URL, dialog, and reveal operations.",
   "windows": [
     "main"
   ],
@@ -107,8 +107,9 @@
     "core:window:allow-unminimize",
     "dialog:allow-open",
     "dialog:allow-save",
+    "allow-open-preview-path",
+    "allow-open-job-output",
     "opener:allow-reveal-item-in-dir",
-    "opener:allow-open-path",
     "opener:allow-open-url",
     "opener:allow-default-urls",
     "wdio:default",

@@ -312,6 +312,8 @@ import {
   runLocalSendTrustDevice,
   runPlanCreate,
   runPreviewEntry,
+  runOpenJobOutput,
+  runOpenPreviewPath,
   runStartCreate,
   runStartExtract,
   runTestArchive,
@@ -352,7 +354,7 @@ import {
   type DesktopFileDropEvent,
 } from "../desktop/fileDrop";
 import {
-  openDesktopPath,
+  openDesktopUrl,
   revealInFileManager,
 } from "../desktop/fileManager";
 import {
@@ -529,6 +531,21 @@ function reportJobPresentationFailure(
     },
   });
   setOperationalStatus("The Job started, but its task window could not be opened.");
+}
+function previewOpenErrorDetail(error: unknown, path: string): string {
+  let detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+  const pathParts = path.split(/[\\/]/u).filter(Boolean);
+  const privateValues = [
+    path,
+    path.replace(/[\\/][^\\/]*$/u, ""),
+    pathParts.at(-1) ?? "",
+    encodeURI(path),
+    encodeURIComponent(path),
+  ].filter((value) => value.length > 0).sort((left, right) => right.length - left.length);
+  for (const privateValue of privateValues) {
+    detail = detail.replaceAll(privateValue, "[PREVIEW_PATH]");
+  }
+  return detail.slice(0, 200);
 }
 const disposableTaskWindows = createDisposableTaskWindowManager({
   onReady: () => {},
@@ -1027,8 +1044,38 @@ const archivePreviewController = createArchivePreviewController({
     ...(password ? { password } : {}),
   }),
   cachedPreviewPathForEntry: (entryPath) => shellWorkspace.getCachedPreviewPathForEntry(entryPath),
-  runPreviewEntry,
-  openPath: openDesktopPath,
+  runPreviewEntry: async (request) => {
+    diagnostics.record({ scope: "archivePreview", name: "materializationStarted", fields: {} });
+    try {
+      const response = await runPreviewEntry(request);
+      diagnostics.record({ scope: "archivePreview", name: "materializationSucceeded", fields: {} });
+      return response;
+    } catch (error) {
+      diagnostics.record({
+        scope: "archivePreview",
+        name: "materializationFailed",
+        fields: { errorCode: asCommandError(error)?.code ?? "unknown" },
+      });
+      throw error;
+    }
+  },
+  openPath: async (path) => {
+    diagnostics.record({ scope: "archivePreview", name: "openRequested", fields: {} });
+    try {
+      await runOpenPreviewPath({ previewPath: path });
+      diagnostics.record({ scope: "archivePreview", name: "openSucceeded", fields: {} });
+    } catch (error) {
+      diagnostics.record({
+        scope: "archivePreview",
+        name: "openFailed",
+        fields: {
+          errorCode: asCommandError(error)?.code ?? "unknown",
+          errorDetail: previewOpenErrorDetail(error, path),
+        },
+      });
+      throw error;
+    }
+  },
   clearTrackedPreviewState,
   trackPreviewResult: (metadata) => {
     shellWorkspace.trackPreviewResultMetadata(metadata);
@@ -1299,7 +1346,7 @@ const accountController = createAccountController({
   inspectContactCard: inspectAccountContactCard,
   acceptContactCard: acceptAccountContactCard,
   syncContacts: syncAccountContacts,
-  openUrl: openDesktopPath,
+  openUrl: openDesktopUrl,
   publish: publishReactSnapshot,
   errorMessage: (error) => unknownErrorMessage(error, "Account operation failed."),
   diagnostics,
@@ -4190,7 +4237,7 @@ async function initializeNativeQuickActionPath() {
   });
   await listenDisposableTaskOutputActions((request) => {
     const effect = request.action === "open"
-      ? openDesktopPath(request.path)
+      ? runOpenJobOutput({ jobId: request.jobId, actionId: request.actionId, artifactId: request.artifactId })
       : revealInFileManager(request.path);
     void effect.catch((error) => {
       setOperationalStatus(unknownErrorMessage(error, "Unable to open the task output."));

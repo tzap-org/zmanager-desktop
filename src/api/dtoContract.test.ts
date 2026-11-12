@@ -23,6 +23,8 @@ const REQUEST_DTO_TYPES: readonly (string | Readonly<{ typeScriptName: string; r
   "StartExtractRequest",
   "VerifyTzapCertificateRequest",
   "PreviewEntryRequest",
+  "OpenPreviewPathRequest",
+  "OpenJobOutputRequest",
   "NativeFileDragRequest",
   "TestArchiveRequest",
   "CancelJobRequest",

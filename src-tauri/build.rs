@@ -52,6 +52,8 @@ fn main() {
         "verify_tzap_certificate",
         "validate_tzap_signing_identity",
         "preview_entry",
+        "open_preview_path",
+        "open_job_output",
         "accept_native_file_drag",
         "start_native_file_drag",
         "cleanup_preview_roots",

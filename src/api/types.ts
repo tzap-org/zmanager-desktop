@@ -589,6 +589,16 @@ export type PreviewEntryResponse = {
   writtenBytes: number;
 };
 
+export type OpenPreviewPathRequest = {
+  previewPath: string;
+};
+
+export type OpenJobOutputRequest = {
+  jobId: string;
+  actionId: string;
+  artifactId: string;
+};
+
 export type NativeFileDragRequest = {
   archivePath: string;
   entryPaths: string[];

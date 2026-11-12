@@ -294,6 +294,16 @@ const COMMAND_WRAPPERS = [
     }),
   },
   {
+    command: "open_preview_path",
+    request: { previewPath: "/tmp/zmanager-preview-session/readme.txt" },
+    call: () => api.runOpenPreviewPath({ previewPath: "/tmp/zmanager-preview-session/readme.txt" }),
+  },
+  {
+    command: "open_job_output",
+    request: { jobId: "job-1", actionId: "open-output", artifactId: "output" },
+    call: () => api.runOpenJobOutput({ jobId: "job-1", actionId: "open-output", artifactId: "output" }),
+  },
+  {
     command: "accept_native_file_drag",
     request: { archivePath: "C:/archives/demo.zip", entryPaths: ["root.txt"], stripComponents: 0 },
     call: () => api.runAcceptNativeFileDrag({ archivePath: "C:/archives/demo.zip", entryPaths: ["root.txt"], stripComponents: 0 }),

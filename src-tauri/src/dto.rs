@@ -605,6 +605,20 @@ pub struct PreviewEntryRequest {
     pub strip_components: usize,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenPreviewPathRequest {
+    pub preview_path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenJobOutputRequest {
+    pub job_id: String,
+    pub action_id: String,
+    pub artifact_id: String,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewEntryResponse {

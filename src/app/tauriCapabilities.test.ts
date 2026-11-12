@@ -74,6 +74,10 @@ describe("Tauri command capabilities", () => {
     );
   });
 
+  it("keeps generic filesystem opening out of the webview opener capability", () => {
+    expect(mainWindowPermissionIds()).not.toContain("opener:allow-open-path");
+  });
+
   it("allows native window resize control from the main window", () => {
     expect(mainWindowPermissionIds()).toEqual(
       expect.arrayContaining(nativeWindowResizePermissions),

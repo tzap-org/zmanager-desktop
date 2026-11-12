@@ -207,7 +207,13 @@ function DisposableTaskRuntime({ bootstrap }: Readonly<{ bootstrap: DisposableTa
     onRetry={() => { void retry(); }}
     onResume={() => { void resumeJob({ jobId: state.job.jobId }).catch(() => dispatch({ type: "controlRejected" })); }}
     onRunOutputAction={(action, path) => {
-      void requestDisposableTaskOutputAction({ action, path }).catch(() => {
+      void requestDisposableTaskOutputAction({
+        action: action.kind,
+        jobId: state.job.jobId,
+        actionId: action.actionId,
+        artifactId: action.artifactId,
+        path,
+      }).catch(() => {
         setSurfaceError("Unable to open the task output.");
       });
     }}

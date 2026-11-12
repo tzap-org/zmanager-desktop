@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
     sync::{Arc, Condvar, Mutex},
     time::{Duration, Instant},
@@ -393,6 +393,26 @@ impl JobRegistry {
     /// read a single fact about it, such as its output artifacts.
     pub fn current_job_snapshot(&self, job_id: &str) -> Option<Arc<DesktopJobSnapshotDto>> {
         self.with_lock(|state| state.jobs.get(job_id).map(|record| record.snapshot_sender.borrow().clone()))
+    }
+
+    pub fn openable_output_path(&self, job_id: &str, action_id: &str, artifact_id: &str) -> Option<PathBuf> {
+        let snapshot = self.current_job_snapshot(job_id)?;
+        let action = snapshot.available_actions.iter().find(|action| action.action_id == action_id && action.artifact_id == artifact_id)?;
+        if action.kind != crate::job_dto::JobActionKindDto::Open {
+            return None;
+        }
+        snapshot.output_artifacts.iter().find(|artifact| artifact.artifact_id == artifact_id).map(|artifact| PathBuf::from(&artifact.path))
+    }
+
+    pub fn preview_path_for_open(&self, path: &Path) -> Option<PathBuf> {
+        let candidate = path.canonicalize().ok()?;
+        self.with_lock(|state| {
+            state
+                .preview_roots
+                .iter()
+                .any(|root| root.canonicalize().map(|canonical_root| candidate.starts_with(canonical_root)).unwrap_or(false))
+                .then_some(candidate)
+        })
     }
 
     pub fn configure_recovery_facts(
@@ -1985,6 +2005,60 @@ mod tests {
         let removed = registry.remove_job_if_terminal(&response.job_id).expect("terminal job should be removable");
         assert!(matches!(removed, JobKindDto::ZipCreate));
         assert!(registry.snapshot(&response.job_id).is_none());
+    }
+
+    #[test]
+    fn preview_path_must_resolve_inside_the_registered_preview_root() {
+        let registry = JobRegistry::new();
+        let root = temporary_preview_root();
+        let preview_root = root.join("zmanager-preview-session");
+        let preview_file = preview_root.join("nested/readme.txt");
+        let outside_file = root.join("outside.txt");
+        fs::create_dir_all(preview_file.parent().expect("preview file should have a parent")).unwrap();
+        fs::write(&preview_file, "preview").unwrap();
+        fs::write(&outside_file, "outside").unwrap();
+        registry.replace_preview_root(preview_root.clone());
+
+        assert_eq!(registry.preview_path_for_open(&preview_file), preview_file.canonicalize().ok());
+        assert_eq!(registry.preview_path_for_open(&outside_file), None);
+        assert_eq!(registry.preview_path_for_open(&root.join("missing.txt")), None);
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let escaped_link = preview_root.join("escaped.txt");
+            symlink(&outside_file, &escaped_link).expect("test symlink should be created");
+            assert_eq!(registry.preview_path_for_open(&escaped_link), None);
+        }
+
+        registry.cleanup_preview_roots();
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn openable_output_path_requires_a_matching_open_action() {
+        let registry = JobRegistry::new();
+        let (job, _) = registry.create_job(JobKindDto::ZipExtract);
+        registry
+            .configure_recovery_facts(
+                &job.job_id,
+                None,
+                vec![JobOutputArtifactDto { artifact_id: "output".into(), kind: crate::job_dto::JobArtifactKindDto::Directory, path: "/tmp/output".into() }],
+                vec![JobAvailableActionDto { action_id: "open-output".into(), kind: crate::job_dto::JobActionKindDto::Open, artifact_id: "output".into() }],
+            )
+            .unwrap();
+        registry
+            .commit_completed(
+                &job.job_id,
+                JobKindDto::ZipExtract,
+                JobTerminalSummaryDto { written_entries: 1, skipped_entries: None, written_bytes: 1, warnings: Vec::new() },
+            )
+            .unwrap();
+
+        assert_eq!(registry.openable_output_path(&job.job_id, "open-output", "output"), Some(PathBuf::from("/tmp/output")));
+        assert_eq!(registry.openable_output_path(&job.job_id, "reveal-output", "output"), None);
+        assert_eq!(registry.openable_output_path(&job.job_id, "open-output", "other"), None);
     }
 
     #[test]

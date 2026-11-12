@@ -51,7 +51,10 @@ export function DisposableTaskView({
   onPause(): void;
   onRetry(): void;
   onResume(): void;
-  onRunOutputAction(action: "open" | "reveal", path: string): void;
+  onRunOutputAction(
+    action: DisposableTaskJobSnapshot["availableActions"][number],
+    path: string,
+  ): void;
   retrying?: boolean;
   retryDisabled?: boolean;
   surfaceError?: string;
@@ -234,7 +237,7 @@ export function DisposableTaskView({
               type="button"
               variant="dialog"
               size="unset"
-              onClick={() => onRunOutputAction(action.kind, action.path)}
+              onClick={() => onRunOutputAction(action, action.path)}
             >
               {action.kind === "open" ? "Open output" : "Show output"}
             </Button>
