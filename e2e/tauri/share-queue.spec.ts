@@ -1,8 +1,66 @@
 import { mkdtemp, writeFile, rm, mkdir, readFile } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve, basename } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import type { EnqueueShareResponse, ShareRegistrySnapshot, LocalSendDeviceInfoDto } from "../../src/api/types";
+
+type DiagnosticLogInfo = Readonly<{
+  enabled: boolean;
+  path: string | null;
+  sessionId: string;
+}>;
+
+type DiagnosticLogEntry = Readonly<{
+  sessionId: string;
+  scope: string;
+  name: string;
+  fields: Record<string, unknown>;
+}>;
+
+function launchNativeShareQuickAction(artifactPath: string): Promise<void> {
+  const appPath = process.env.ZMANAGER_GUI_APP_PATH ?? resolve("src-tauri", "target", "debug", "zmanager-desktop");
+  const child = spawn(appPath, ["--quick-action", "share-lan", "--path", artifactPath], {
+    env: {
+      ...process.env,
+      ZMANAGER_GUI_TEST_MODE: "1",
+      ZMANAGER_GUI_TEST_DEEP_LINK: "1",
+    },
+    stdio: "ignore",
+  });
+
+  return new Promise((resolvePromise, reject) => {
+    const timeout = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error("Secondary ZManager launch did not finish."));
+    }, 15_000);
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("exit", (code, signal) => {
+      clearTimeout(timeout);
+      if (code === 0) resolvePromise();
+      else reject(new Error(`Secondary ZManager launch exited with code ${code ?? "null"} and signal ${signal ?? "none"}.`));
+    });
+  });
+}
+
+async function nativeInboundOutcomeCounts(info: DiagnosticLogInfo): Promise<Readonly<{ acknowledged: number; failed: number }>> {
+  if (!info.enabled || !info.path) throw new Error("Native diagnostic log is unavailable.");
+  const entries = (await readFile(info.path, "utf8")).split(/\r?\n/u).flatMap((line) => {
+    try {
+      return line ? [JSON.parse(line) as DiagnosticLogEntry] : [];
+    } catch {
+      return [];
+    }
+  });
+  const nativeInboundEntries = entries.filter((entry) => entry.sessionId === info.sessionId && entry.scope === "nativeInbound");
+  return {
+    acknowledged: nativeInboundEntries.filter((entry) => entry.name === "eventAcknowledged" && entry.fields.kind === "shellActionRequest").length,
+    failed: nativeInboundEntries.filter((entry) => entry.name === "deliveryFailed").length,
+  };
+}
 
 async function command<T>(name: string, request?: unknown): Promise<T> {
   return browser.tauri.execute(async ({ core }, cmd, args) => core.invoke(cmd, args), name, request === undefined ? {} : { request }) as Promise<T>;
@@ -33,23 +91,21 @@ describe("native share queue", () => {
   });
 
   it("restores a minimized window for a native direct-share request without background focus", async () => {
-    const requestId = `native-share-${Date.now()}`;
+    const diagnosticInfo = await command<DiagnosticLogInfo>("diagnostic_log_info");
+    const baselineOutcomes = await nativeInboundOutcomeCounts(diagnosticInfo);
+    const previousShareQueue = await command<ShareRegistrySnapshot>("get_share_queue");
+    const previousShareIds = new Set(previousShareQueue.items.map((item) => item.shareId));
     await browser.tauri.execute(async ({ core }) => {
       await core.invoke("plugin:window|minimize", { label: "main" });
     });
     await browser.waitUntil(async () => browser.tauri.execute(async ({ core }) => {
       return !!await core.invoke("plugin:window|is_minimized", { label: "main" });
     }));
-    await browser.tauri.execute(async ({ core }, path, eventId) => {
-      await core.invoke("plugin:event|emit", { event: "zmanager-native-inbound-event", payload: {
-        version: 1, eventId, kind: "shellActionRequest", timestampUnixMs: Date.now(),
-        payload: { request: { kind: "shareOnLan", paths: [path] } },
-      } });
-    }, artifact, requestId);
+    await launchNativeShareQuickAction(artifact);
     let shareId = "";
     await browser.waitUntil(async () => {
       const queue = await command<ShareRegistrySnapshot>("get_share_queue");
-      shareId = queue.items.find(item => item.clientRequestId === requestId)?.shareId ?? "";
+      shareId = queue.items.find((item) => !previousShareIds.has(item.shareId))?.shareId ?? "";
       return !!shareId;
     });
     await browser.waitUntil(async () => browser.tauri.execute(async ({ core }) => {
@@ -57,6 +113,11 @@ describe("native share queue", () => {
       return !!await core.invoke("plugin:window|is_visible", args) && !await core.invoke("plugin:window|is_minimized", args);
     }));
     await browser.$(`[data-share-id="${shareId}"]`).waitForDisplayed();
+    await browser.waitUntil(async () => {
+      const outcomes = await nativeInboundOutcomeCounts(diagnosticInfo);
+      if (outcomes.failed > baselineOutcomes.failed) throw new Error("Native share request delivery failed.");
+      return outcomes.acknowledged > baselineOutcomes.acknowledged;
+    }, { timeout: 5_000, interval: 100 });
     await command("cancel_share", { shareId });
     await command("remove_share", { shareId });
   });
