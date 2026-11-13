@@ -380,26 +380,32 @@
   System::Call 'user32::SendMessageTimeoutW(i 0xFFFF, i 0x001A, i 0, w "Shell", i 0x0002, i 5000, *i 0)'
 !macroend
 
-; Set when the handler DLL could not be deleted because a running Explorer still
-; had it mapped. That is precisely the upgrade-over-a-live-Explorer case, and
-; the only case where restarting Explorer is required.
+; Set when the handler DLL or an earlier renamed copy could not be deleted
+; because a running Explorer still had it mapped. That is precisely the
+; upgrade-over-a-live-Explorer case, and the only case where restarting
+; Explorer is required.
 Var /GLOBAL ZM_ShellExtensionWasLocked
 
 ; Explorer keeps a context menu handler DLL loaded for the lifetime of the
 ; process, so overwriting it in place fails and a silent install would leave the
 ; previous build on disk while the new registration points at it. Renaming a
-; loaded DLL within its own directory is allowed, so move the old copy aside and
-; let Windows remove it on the next reboot.
+; loaded DLL within its own directory is allowed, so move the old copy aside.
+; If Windows still has that copy mapped after Explorer restarts, leave it in
+; place and try again during the next install instead of scheduling a reboot.
 !macro ZM_INSTALL_SHELL_EXTENSION_BINARY
   StrCpy $ZM_ShellExtensionWasLocked "0"
   ClearErrors
-  Delete "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}"
-  IfErrors 0 zm_shell_extension_binary_write
-  StrCpy $ZM_ShellExtensionWasLocked "1"
   Delete "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}.old"
+  IfErrors 0 zm_shell_extension_delete_current
+  StrCpy $ZM_ShellExtensionWasLocked "1"
+zm_shell_extension_delete_current:
+  ClearErrors
+  Delete "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}"
+  IfErrors zm_shell_extension_current_locked zm_shell_extension_binary_write
+zm_shell_extension_current_locked:
+  StrCpy $ZM_ShellExtensionWasLocked "1"
   ClearErrors
   Rename "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}" "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}.old"
-  Delete /REBOOTOK "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}.old"
   ClearErrors
 zm_shell_extension_binary_write:
   SetOverwrite on
@@ -426,8 +432,14 @@ zm_explorer_restart_now:
   ; Windows normally relaunches the shell on its own (AutoRestartShell). Only
   ; start it manually when it did not come back, so we never open a stray window.
   FindWindow $0 "Shell_TrayWnd"
-  IntCmp $0 0 0 zm_explorer_restart_done zm_explorer_restart_done
+  IntCmp $0 0 zm_explorer_restart_launch zm_explorer_restart_cleanup zm_explorer_restart_cleanup
+zm_explorer_restart_launch:
   Exec '$WINDIR\explorer.exe'
+zm_explorer_restart_cleanup:
+  ; Explorer has released the old image. Best-effort cleanup must never set
+  ; NSIS's reboot-required flag; a remaining copy is retried next install.
+  Delete "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}.old"
+  ClearErrors
   Goto zm_explorer_restart_done
 zm_explorer_restart_later:
   DetailPrint "The ZManager context menu will finish updating after you sign out or restart."
@@ -486,6 +498,10 @@ zm_explorer_restart_done:
   !insertmacro ZM_UNREGISTER_RETIRED_COMMANDSTORE_VERBS
   !insertmacro ZM_UNREGISTER_SHELL_EXTENSION_CLASSES
   !insertmacro ZM_REFRESH_SHELL_ASSOCIATIONS
-  Delete /REBOOTOK "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}"
-  Delete /REBOOTOK "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}.old"
+  ; Do not schedule a reboot to remove a handler still mapped by Explorer.
+  ; Upgrades replace it after restarting Explorer; uninstalls leave a locked
+  ; copy for Windows or a later install to release naturally.
+  Delete "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}"
+  Delete "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}.old"
+  ClearErrors
 !macroend

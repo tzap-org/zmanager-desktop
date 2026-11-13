@@ -23,9 +23,10 @@ The registration mirrors what 7-Zip's `DllRegisterServer` writes:
 
 Explorer keeps a handler DLL loaded for the lifetime of the process, so
 `ZM_INSTALL_SHELL_EXTENSION_BINARY` moves a locked DLL aside (renaming inside the
-same directory is permitted) and schedules the stale copy for deletion on reboot
-before writing the new one. Without that step a reinstall would silently keep the
-previous DLL and the refreshed registration would resolve to stale code.
+same directory is permitted) before writing the new one. After Explorer restarts,
+the installer tries to remove the stale copy. If it remains locked, it leaves the
+`.old` file in place and retries on a later install; it does not schedule deletion
+at reboot or ask the user to restart Windows.
 
 Replacing the file is not enough on its own: a running Explorer keeps serving the
 image it already mapped. The rename is therefore also the signal that this
@@ -36,7 +37,8 @@ happened, and `ZM_RESTART_EXPLORER_IF_STALE` acts on it:
 - **Upgrade over a running Explorer** — the DLL was locked. A silent install
   (`/S`, which `scripts/build.bat` uses) restarts Explorer automatically; an
   interactive install asks first, because the user's open Explorer windows close.
-  Declining leaves the menu on the old handler until the next sign-out.
+  Declining leaves the menu on the old handler until Explorer is restarted. The
+  update never requires a Windows reboot.
 
 Windows normally relaunches the shell itself, so the hook only starts
 `explorer.exe` manually when `Shell_TrayWnd` has not reappeared. That avoids
@@ -104,7 +106,8 @@ Do not use file timestamps to decide whether Explorer is stale. NSIS `File` and
 installed DLL carries its build time and can look older than a shell that started
 after it was installed. The reliable signal is whether the renamed-aside
 `<dll>.old` can be deleted: if it is still locked, some process has the previous
-image mapped, and deleting it after the restart proves the image was released.
+image mapped. The installer retries removal after Explorer restarts and on later
+installs, without setting NSIS's reboot-required flag.
 
 ## Microsoft Store (MSIX)
 
