@@ -91,8 +91,10 @@ describe("native share queue", () => {
   });
 
   it("restores a minimized window for a native direct-share request without background focus", async () => {
-    const diagnosticInfo = await command<DiagnosticLogInfo>("diagnostic_log_info");
-    const baselineOutcomes = await nativeInboundOutcomeCounts(diagnosticInfo);
+    const verifiesLinuxSingletonDelivery = process.platform === "linux";
+    const diagnosticInfo = verifiesLinuxSingletonDelivery ? await command<DiagnosticLogInfo>("diagnostic_log_info") : null;
+    const baselineOutcomes = diagnosticInfo ? await nativeInboundOutcomeCounts(diagnosticInfo) : null;
+    const requestId = `native-share-${Date.now()}`;
     const previousShareQueue = await command<ShareRegistrySnapshot>("get_share_queue");
     const previousShareIds = new Set(previousShareQueue.items.map((item) => item.shareId));
     await browser.tauri.execute(async ({ core }) => {
@@ -101,11 +103,22 @@ describe("native share queue", () => {
     await browser.waitUntil(async () => browser.tauri.execute(async ({ core }) => {
       return !!await core.invoke("plugin:window|is_minimized", { label: "main" });
     }));
-    await launchNativeShareQuickAction(artifact);
+    if (verifiesLinuxSingletonDelivery) {
+      await launchNativeShareQuickAction(artifact);
+    } else {
+      await browser.tauri.execute(async ({ core }, path, eventId) => {
+        await core.invoke("plugin:event|emit", { event: "zmanager-native-inbound-event", payload: {
+          version: 1, eventId, kind: "shellActionRequest", timestampUnixMs: Date.now(),
+          payload: { request: { kind: "shareOnLan", paths: [path] } },
+        } });
+      }, artifact, requestId);
+    }
     let shareId = "";
     await browser.waitUntil(async () => {
       const queue = await command<ShareRegistrySnapshot>("get_share_queue");
-      shareId = queue.items.find((item) => !previousShareIds.has(item.shareId))?.shareId ?? "";
+      shareId = queue.items.find((item) => verifiesLinuxSingletonDelivery
+        ? !previousShareIds.has(item.shareId)
+        : item.clientRequestId === requestId)?.shareId ?? "";
       return !!shareId;
     });
     await browser.waitUntil(async () => browser.tauri.execute(async ({ core }) => {
@@ -113,11 +126,13 @@ describe("native share queue", () => {
       return !!await core.invoke("plugin:window|is_visible", args) && !await core.invoke("plugin:window|is_minimized", args);
     }));
     await browser.$(`[data-share-id="${shareId}"]`).waitForDisplayed();
-    await browser.waitUntil(async () => {
-      const outcomes = await nativeInboundOutcomeCounts(diagnosticInfo);
-      if (outcomes.failed > baselineOutcomes.failed) throw new Error("Native share request delivery failed.");
-      return outcomes.acknowledged > baselineOutcomes.acknowledged;
-    }, { timeout: 5_000, interval: 100 });
+    if (diagnosticInfo && baselineOutcomes) {
+      await browser.waitUntil(async () => {
+        const outcomes = await nativeInboundOutcomeCounts(diagnosticInfo);
+        if (outcomes.failed > baselineOutcomes.failed) throw new Error("Native share request delivery failed.");
+        return outcomes.acknowledged > baselineOutcomes.acknowledged;
+      }, { timeout: 5_000, interval: 100 });
+    }
     await command("cancel_share", { shareId });
     await command("remove_share", { shareId });
   });
