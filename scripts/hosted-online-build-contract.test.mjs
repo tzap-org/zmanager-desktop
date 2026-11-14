@@ -22,7 +22,10 @@ test("the opener capability includes a scoped default URL permission", () => {
   );
   assert.deepEqual(openUrlPermission, {
     identifier: "opener:allow-open-url",
-    allow: [{ url: "https://staging.tzap.org/*", app: "msedge" }],
+    allow: [{
+      url: "https://staging.tzap.org/*",
+      app: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    }],
   }, "the app must authorize only the staging URL opened with Edge");
   assert.ok(capability.permissions.includes("opener:allow-default-urls"), "the app must allow the system browser URL scope");
 });

@@ -97,7 +97,7 @@ if ([string]::IsNullOrWhiteSpace($edgePath) -or -not (Test-Path -LiteralPath $ed
 }
 $edgeDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($edgePath))
 $env:PATH = "$edgeDirectory;$env:PATH"
-$env:VITE_ZMANAGER_GUI_TEST_BROWSER = "msedge"
+$env:VITE_ZMANAGER_GUI_TEST_BROWSER = [IO.Path]::GetFullPath($edgePath)
 Write-Host "Windows staging GUI E2E browser: $([IO.Path]::GetFileName($edgePath))"
 Write-Host "Hosted account standalone E2E environment: staging"
 
