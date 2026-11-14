@@ -68,9 +68,10 @@ test("Windows build entry points keep local E2E on staging and production explic
   assert.match(standaloneRunner, /test:gui:run -- --spec e2e\/tauri\/online-account\.spec\.ts/u);
   assert.match(standaloneRunner, /tauri\.standalone-debug\.conf\.json/u);
   assert.match(standaloneRunner, /VITE_ENABLE_HOSTED_CERTIFICATE_SECTION = "true"/u);
-  assert.match(standaloneRunner, /TZAP_E2E_EDGE_CDP_PORT = \[string\]\$edgeCdpPort/u);
-  assert.match(standaloneRunner, /--remote-debugging-port=\$edgeCdpPort/u);
-  assert.match(standaloneRunner, /127\.0\.0\.1:\$edgeCdpPort\/json\/version/u);
+  assert.match(standaloneRunner, /TZAP_E2E_HOSTED_LAUNCH_FILE/u);
+  assert.match(wdioConfig, /TZAP_E2E_HOSTED_LAUNCH_FILE/u);
+  assert.match(accountSource, /capture_gui_test_hosted_launch/u);
+  assert.match(accountSource, /strip_prefix\(std::env::temp_dir\(\)\)/u);
   assert.match(standaloneRunner, /build-windows-shell-extension\.ps1[\s\S]*-Architecture \$resolvedArchitecture/u);
   assert.equal(standaloneDebugConfig.app.withGlobalTauri, true);
   assert.equal(standaloneDebugConfig.build.beforeBuildCommand, "npm run build:gui");

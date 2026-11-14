@@ -1,6 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { copyFileSync, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
-import { createRequire } from "node:module";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
@@ -73,6 +72,11 @@ export async function observeWindowsDefaultBrowserNavigation(
     throw new Error("The installed standalone browser observer is currently implemented for Windows only.");
   }
 
+  const capturedLaunchPath = process.env.TZAP_E2E_HOSTED_LAUNCH_FILE;
+  if (capturedLaunchPath) {
+    return observeWindowsCapturedHostedLaunch(expectedOrigin, capturedLaunchPath, triggerNavigation);
+  }
+
   const observerPath = path.resolve("scripts", "observe-windows-default-browser.ps1");
   const observerDirectory = mkdtempSync(path.join(tmpdir(), "zmanager-default-browser-observer-"));
   const readyPath = path.join(observerDirectory, "ready");
@@ -115,12 +119,6 @@ export async function observeWindowsDefaultBrowserNavigation(
       throw new Error("Default browser observer did not become ready.");
     }
 
-    const cdpPortText = process.env.TZAP_E2E_EDGE_CDP_PORT;
-    const cdpPort = cdpPortText ? Number.parseInt(cdpPortText, 10) : null;
-    const cdpBaseline = cdpPort && Number.isInteger(cdpPort)
-      ? await readWindowsCdpPages(cdpPort)
-      : null;
-
     // Baseline collection must finish before the opener can navigate. Starting
     // an observer promise beside the UI click does not establish that ordering.
     const navigationStartedAtUnixMs = Date.now();
@@ -134,21 +132,6 @@ export async function observeWindowsDefaultBrowserNavigation(
       // The sanitized fallback below avoids echoing PowerShell/UIA output.
     }
     if (exitCode !== 0 || result.status !== "observed") {
-      if (cdpPort && cdpBaseline) {
-        const cdpObservation = await observeWindowsCdpNavigation(
-          expectedOrigin,
-          cdpPort,
-          cdpBaseline,
-          5,
-        );
-        if (cdpObservation) return cdpObservation;
-      }
-      const historyObservation = await observeWindowsBrowserHistoryNavigation(
-        expectedOrigin,
-        navigationStartedAtUnixMs,
-        5,
-      );
-      if (historyObservation) return historyObservation;
       throw new Error(`Default browser navigation was not observed (${result.errorCode ?? "observer_failed"}).`);
     }
     if (stderr.trim()) {
@@ -170,145 +153,46 @@ export async function observeWindowsDefaultBrowserNavigation(
   }
 }
 
-type WindowsCdpPage = Readonly<{ id: string; type: string; url: string }>;
-
-async function readWindowsCdpPages(port: number): Promise<WindowsCdpPage[] | null> {
-  try {
-    const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(1_000) });
-    if (!response.ok) return null;
-    const targets: unknown = await response.json();
-    if (!Array.isArray(targets)) return null;
-    return targets.filter((target): target is WindowsCdpPage =>
-      typeof target === "object" && target !== null &&
-      typeof (target as WindowsCdpPage).id === "string" &&
-      typeof (target as WindowsCdpPage).type === "string" &&
-      typeof (target as WindowsCdpPage).url === "string",
-    );
-  } catch {
-    return null;
-  }
-}
-
-async function observeWindowsCdpNavigation(
+async function observeWindowsCapturedHostedLaunch(
   expectedOrigin: string,
-  port: number,
-  baseline: WindowsCdpPage[],
-  timeoutSeconds: number,
-): Promise<DefaultBrowserObservation | null> {
-  const baselineUrls = new Map(baseline.map((target) => [target.id, target.url]));
-  const deadline = Date.now() + timeoutSeconds * 1_000;
-  while (Date.now() < deadline) {
-    const targets = await readWindowsCdpPages(port);
-    for (const target of targets ?? []) {
-      if (target.type !== "page" || baselineUrls.get(target.id) === target.url) continue;
-      let parsed: URL;
-      try { parsed = new URL(target.url); } catch { continue; }
-      if (parsed.origin !== expectedOrigin) continue;
-      return {
-        status: "observed",
-        origin: parsed.origin,
-        path: parsed.pathname,
-        queryKeys: [...parsed.searchParams.keys()].sort().join(","),
-        launchUrl: target.url,
-        observedAtUnixMs: Date.now(),
-      };
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
+  launchPath: string,
+  triggerNavigation: () => Promise<void>,
+): Promise<DefaultBrowserObservation> {
+  const resolvedLaunchPath = path.resolve(launchPath);
+  const temporaryRoot = path.resolve(tmpdir());
+  const relativePath = path.relative(temporaryRoot, resolvedLaunchPath);
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    throw new Error("The hosted launch capture path must stay under the system temporary directory.");
   }
-  return null;
-}
 
-type ChromiumHistoryDatabase = Readonly<{ path: string }>;
-type ChromiumHistoryRow = Readonly<{ url: unknown; visit_time: unknown }>;
-type ChromiumHistoryStatement = Readonly<{
-  all: (...parameters: Array<string | number | bigint | null>) => ChromiumHistoryRow[];
-}>;
-type ChromiumHistoryConnection = Readonly<{
-  prepare: (query: string) => ChromiumHistoryStatement;
-  close: () => void;
-}>;
-
-/**
- * Windows runner images can expose an Edge top-level window without exposing
- * its address bar through UI Automation. Edge's Chromium history records the
- * navigation independently, so use a read-only snapshot as a fallback after
- * the UIA observer has completed. The full URL stays in memory and is returned
- * only to the existing staging login flow.
- */
-async function observeWindowsBrowserHistoryNavigation(
-  expectedOrigin: string,
-  navigationStartedAtUnixMs: number,
-  timeoutSeconds: number,
-): Promise<DefaultBrowserObservation | null> {
-  const localAppData = process.env.LOCALAPPDATA;
-  if (!localAppData) return null;
-
-  const userDataRoots = [
-    path.join(localAppData, "Microsoft", "Edge", "User Data"),
-    path.join(localAppData, "Google", "Chrome", "User Data"),
-  ];
-  const databases: ChromiumHistoryDatabase[] = userDataRoots.flatMap((root) => {
-    if (!existsSync(root)) return [];
-    return readdirSync(root, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => ({ path: path.join(root, entry.name, "History") }))
-      .filter((database) => existsSync(database.path));
-  });
-  if (databases.length === 0) return null;
-
-  const require = createRequire(import.meta.url);
-  const { DatabaseSync } = require("node:sqlite") as {
-    DatabaseSync: new (location: string) => ChromiumHistoryConnection;
-  };
-  const snapshotDirectory = mkdtempSync(path.join(tmpdir(), "zmanager-browser-history-"));
-  const visitThreshold = navigationStartedAtUnixMs * 1_000 + 11_644_473_600_000_000;
-  const query = "SELECT visits.visit_time AS visit_time, urls.url AS url FROM visits JOIN urls ON urls.id = visits.url WHERE visits.visit_time > ? ORDER BY visits.visit_time DESC LIMIT 100";
-
+  rmSync(resolvedLaunchPath, { force: true });
   try {
-    const deadline = Date.now() + timeoutSeconds * 1_000;
+    await triggerNavigation();
+    const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
-      for (const [index, database] of databases.entries()) {
-        const snapshot = path.join(snapshotDirectory, `${index}-History`);
-        try {
-          for (const suffix of ["", "-wal", "-shm"]) {
-            rmSync(`${snapshot}${suffix}`, { force: true });
-          }
-          copyFileSync(database.path, snapshot);
-          for (const suffix of ["-wal", "-shm"]) {
-            const sidecar = `${database.path}${suffix}`;
-            if (existsSync(sidecar)) copyFileSync(sidecar, `${snapshot}${suffix}`);
-          }
-
-          const connection = new DatabaseSync(snapshot);
-          let rows: ChromiumHistoryRow[];
-          try {
-            rows = connection.prepare(query).all(visitThreshold);
-          } finally {
-            connection.close();
-          }
-          for (const row of rows) {
-            if (typeof row.url !== "string" || typeof row.visit_time !== "number") continue;
-            let parsed: URL;
-            try { parsed = new URL(row.url); } catch { continue; }
-            if (parsed.origin !== expectedOrigin) continue;
-            return {
-              status: "observed",
-              origin: parsed.origin,
-              path: parsed.pathname,
-              queryKeys: [...parsed.searchParams.keys()].sort().join(","),
-              launchUrl: row.url,
-              observedAtUnixMs: Math.floor(row.visit_time / 1_000 - 11_644_473_600_000),
-            };
-          }
-        } catch {
-          // Edge may be writing its database while the point-in-time copy is made.
+      if (existsSync(resolvedLaunchPath)) {
+        const launchUrl = readFileSync(resolvedLaunchPath, "utf8").trim();
+        let parsed: URL;
+        try { parsed = new URL(launchUrl); } catch {
+          throw new Error("The hosted launch capture did not contain a valid URL.");
         }
+        if (parsed.origin !== expectedOrigin) {
+          throw new Error("The hosted launch capture did not match the expected staging origin.");
+        }
+        return {
+          status: "observed",
+          origin: parsed.origin,
+          path: parsed.pathname,
+          queryKeys: [...parsed.searchParams.keys()].sort().join(","),
+          launchUrl,
+          observedAtUnixMs: Date.now(),
+        };
       }
-      await new Promise((resolve) => setTimeout(resolve, 250));
+      await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    return null;
+    throw new Error("The hosted launch URL was not captured after the sign-in action.");
   } finally {
-    rmSync(snapshotDirectory, { recursive: true, force: true });
+    rmSync(resolvedLaunchPath, { force: true });
   }
 }
 

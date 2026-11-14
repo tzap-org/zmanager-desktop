@@ -472,6 +472,21 @@ fn desktop_auth_slot(root: &Path, runtime: &AccountRuntime) -> Result<TzapAuthSl
     TzapAuthSlot::acquire_scoped(root, ACCOUNT_KEY, "desktop", &scope).map_err(|error| account_error("account_auth_callback_failed", error))
 }
 
+fn capture_gui_test_hosted_launch(launch_url: &str) {
+    if option_env!("ZMANAGER_TZAP_BUILD_ENV") != Some("staging")
+        || std::env::var("ZMANAGER_GUI_TEST_MODE").ok().as_deref() != Some("1")
+    {
+        return;
+    }
+    let Some(path) = std::env::var_os("TZAP_E2E_HOSTED_LAUNCH_FILE").map(PathBuf::from) else {
+        return;
+    };
+    if !path.is_absolute() || path.strip_prefix(std::env::temp_dir()).is_err() {
+        return;
+    }
+    let _ = std::fs::write(path, launch_url);
+}
+
 fn pending_auth_environment(auth_base_url: Option<&str>) -> Result<String, CommandErrorDto> {
     match auth_base_url {
         Some("http://localhost:8787") => Ok("local".to_owned()),
@@ -740,6 +755,8 @@ pub fn account_begin_hosted_auth(
     state.pending_audience = requested_audience.to_owned();
     state.pending_environment = Some(environment_str.to_owned());
     state.auth_status = "pending".to_string();
+    drop(state);
+    capture_gui_test_hosted_launch(&response.launch_url);
     Ok(response)
 }
 
