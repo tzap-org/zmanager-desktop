@@ -57,35 +57,82 @@ function Register-AddressBar {
 function Find-AddressBar {
     param($Window)
 
-    $addressBar = $Window.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $addressCondition)
-    if ($null -ne $addressBar) { return $addressBar }
+    $edits = $Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $editCondition)
+    $candidates = @()
+    foreach ($edit in $edits) {
+        if ($edit.Current.AutomationId -eq "addressEditBox") { $candidates += $edit }
+    }
 
     # Edge versions/locales do not expose one stable AutomationId. Prefer the
     # semantic accessible name, then fall back to the first edit whose value
     # is an absolute HTTP(S) URL. Page fields are not URL-shaped and therefore
     # cannot be mistaken for the browser address bar by the fallback.
-    $edits = $Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $editCondition)
     foreach ($edit in $edits) {
-        if ($edit.Current.Name -match "Address|search|URL|Omnibox") { return $edit }
+        if ($edit.Current.AutomationId -ne "addressEditBox" -and $edit.Current.Name -match "Address|search|URL|Omnibox") {
+            $candidates += $edit
+        }
     }
     foreach ($edit in $edits) {
+        if ($edit.Current.AutomationId -eq "addressEditBox" -or $edit.Current.Name -match "Address|search|URL|Omnibox") { continue }
         try {
             $valuePattern = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
             $candidate = [string]$valuePattern.Current.Value
             $candidateUri = $null
             if ([Uri]::TryCreate($candidate, [UriKind]::Absolute, [ref]$candidateUri) -and $candidateUri.Scheme -in @("http", "https")) {
-                return $edit
+                $candidates += $edit
             }
         } catch {
             # Controls can disappear while the browser updates its tree.
         }
     }
+
+    # The address bar can be present in the accessibility tree but temporarily
+    # lack a ValuePattern while Chromium replaces controls during navigation.
+    # Keep trying candidates instead of returning the first named edit and
+    # losing the entire browser window when that transient control is stale.
+    foreach ($candidate in $candidates) {
+        try {
+            [void]$candidate.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+            return $candidate
+        } catch {
+            # Try the next address-bar candidate in the current tree.
+        }
+    }
     return $null
+}
+
+function Get-BrowserWindows {
+    $windowsByHandle = @{}
+    $windows = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $windowCondition)
+    foreach ($window in $windows) {
+        try {
+            $handle = [long]$window.Current.NativeWindowHandle
+            if ($handle -ne 0) { $windowsByHandle[$handle] = $window }
+        } catch {
+            # A top-level window may close while the desktop tree is read.
+        }
+    }
+
+    # Some hosted Windows desktops expose Chromium's top-level windows through
+    # the process handle before they appear in RootElement's child collection.
+    # Resolve those handles as well so the observer can see a freshly launched
+    # default browser on the first navigation after app startup.
+    foreach ($browserProcess in Get-Process -Name msedge, chrome -ErrorAction SilentlyContinue) {
+        try {
+            $handle = [long]$browserProcess.MainWindowHandle
+            if ($handle -ne 0 -and -not $windowsByHandle.ContainsKey($handle)) {
+                $windowsByHandle[$handle] = [System.Windows.Automation.AutomationElement]::FromHandle([IntPtr]$handle)
+            }
+        } catch {
+            # The browser may be starting or closing while handles are resolved.
+        }
+    }
+    return @($windowsByHandle.Values)
 }
 
 function Get-BrowserAddressValues {
     $values = @()
-    $windows = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $windowCondition)
+    $windows = Get-BrowserWindows
     foreach ($window in $windows) {
         try {
             if ($window.Current.ClassName -ne "Chrome_WidgetWin_1" -and $window.Current.Name -notmatch "Microsoft Edge|Edge") {
@@ -162,7 +209,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
             }
         }
     }
-    $windows = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $windowCondition)
+    $windows = Get-BrowserWindows
     foreach ($window in $windows) {
         try {
             $className = $window.Current.ClassName
