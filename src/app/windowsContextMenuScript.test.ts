@@ -91,7 +91,12 @@ describe("Windows context menu installer hook", () => {
     expect(macro).toContain('StrCpy $ZM_InstalledShellActionRequestVersion "1"');
     expect(macro).toContain('File /oname=${ZM_SHELL_EXTENSION_NAME} "${ZM_SHELL_EXTENSION_SOURCE}"');
     expect(macro).not.toContain("/REBOOTOK");
-    expect(script).toContain('Delete "$INSTDIR\\${ZM_SHELL_EXTENSION_NAME}.old.*"');
+    const cleanupStart = script.indexOf("!macro ZM_CLEANUP_STALE_SHELL_EXTENSION_IMAGES");
+    const cleanupEnd = script.indexOf("!macroend", cleanupStart);
+    const cleanup = script.slice(cleanupStart, cleanupEnd);
+    expect(cleanup).toContain('FindFirst $R0 $R1 "$INSTDIR\\${ZM_SHELL_EXTENSION_NAME}.old.*"');
+    expect(cleanup).toContain('Delete "$INSTDIR\\$R1"');
+    expect(cleanup).toContain("FindNext $R0 $R1");
     // A silent install must fail loudly instead of registering a handler that
     // points at a DLL that never got written.
     expect(macro).toContain("Abort ");
