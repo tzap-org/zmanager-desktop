@@ -95,7 +95,9 @@ if ($edgeExecutable) {
 if ([string]::IsNullOrWhiteSpace($edgePath) -or -not (Test-Path -LiteralPath $edgePath -PathType Leaf)) {
     throw "Microsoft Edge is required for the Windows staging GUI E2E browser."
 }
-$env:VITE_ZMANAGER_GUI_TEST_BROWSER = [IO.Path]::GetFullPath($edgePath)
+$edgeDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($edgePath))
+$env:PATH = "$edgeDirectory;$env:PATH"
+$env:VITE_ZMANAGER_GUI_TEST_BROWSER = "msedge"
 Write-Host "Windows staging GUI E2E browser: $([IO.Path]::GetFileName($edgePath))"
 Write-Host "Hosted account standalone E2E environment: staging"
 

@@ -110,7 +110,15 @@
     "allow-open-preview-path",
     "allow-open-job-output",
     "opener:allow-reveal-item-in-dir",
-    "opener:allow-open-url",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "https://staging.tzap.org/*",
+          "app": "msedge"
+        }
+      ]
+    },
     "opener:allow-default-urls",
     "wdio:default",
     "wdio-webdriver:default"
