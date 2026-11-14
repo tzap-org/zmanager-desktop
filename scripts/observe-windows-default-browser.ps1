@@ -28,6 +28,11 @@ $editCondition = New-Object System.Windows.Automation.PropertyCondition(
 $baselineUrls = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 $observedAddressValues = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
 $addressHandlers = @{}
+$script:lastBrowserProcessCount = 0
+$script:lastBrowserWindowCount = 0
+$script:lastAddressBarCount = 0
+$script:lastAddressValueCount = 0
+$script:lastExpectedOriginSeen = $false
 
 function Register-AddressBar {
     param($AddressBar)
@@ -117,7 +122,9 @@ function Get-BrowserWindows {
     # the process handle before they appear in RootElement's child collection.
     # Resolve those handles as well so the observer can see a freshly launched
     # default browser on the first navigation after app startup.
-    foreach ($browserProcess in Get-Process -Name msedge, chrome -ErrorAction SilentlyContinue) {
+    $browserProcesses = @(Get-Process -Name msedge, chrome -ErrorAction SilentlyContinue)
+    $script:lastBrowserProcessCount = $browserProcesses.Count
+    foreach ($browserProcess in $browserProcesses) {
         try {
             $handle = [long]$browserProcess.MainWindowHandle
             if ($handle -ne 0 -and -not $windowsByHandle.ContainsKey($handle)) {
@@ -132,18 +139,26 @@ function Get-BrowserWindows {
 
 function Get-BrowserAddressValues {
     $values = @()
+    $script:lastBrowserWindowCount = 0
+    $script:lastAddressBarCount = 0
+    $script:lastAddressValueCount = 0
     $windows = Get-BrowserWindows
     foreach ($window in $windows) {
         try {
             if ($window.Current.ClassName -ne "Chrome_WidgetWin_1" -and $window.Current.Name -notmatch "Microsoft Edge|Edge") {
                 continue
             }
+            $script:lastBrowserWindowCount++
             $addressBar = Find-AddressBar -Window $window
             if ($null -eq $addressBar) { continue }
+            $script:lastAddressBarCount++
             Register-AddressBar -AddressBar $addressBar
             $valuePattern = $addressBar.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
             $value = [string]$valuePattern.Current.Value
-            if (-not [string]::IsNullOrWhiteSpace($value)) { $values += $value }
+            if (-not [string]::IsNullOrWhiteSpace($value)) {
+                $script:lastAddressValueCount++
+                $values += $value
+            }
         } catch {
             # Windows UI Automation trees change while tabs and windows open.
         }
@@ -209,6 +224,10 @@ while ([DateTime]::UtcNow -lt $deadline) {
             }
         }
     }
+    $script:lastBrowserWindowCount = 0
+    $script:lastAddressBarCount = 0
+    $script:lastAddressValueCount = 0
+    $script:lastExpectedOriginSeen = $false
     $windows = Get-BrowserWindows
     foreach ($window in $windows) {
         try {
@@ -217,20 +236,20 @@ while ([DateTime]::UtcNow -lt $deadline) {
             if ($className -ne "Chrome_WidgetWin_1" -and $name -notmatch "Microsoft Edge|Edge") {
                 continue
             }
+            $script:lastBrowserWindowCount++
 
             $addressBar = Find-AddressBar -Window $window
             if ($null -eq $addressBar) {
                 continue
             }
+            $script:lastAddressBarCount++
             Register-AddressBar -AddressBar $addressBar
             $valuePattern = $addressBar.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
             $rawValue = [string]$valuePattern.Current.Value
             if ([string]::IsNullOrWhiteSpace($rawValue)) {
                 continue
             }
-            if ($baselineUrls.Contains($rawValue)) {
-                continue
-            }
+            $script:lastAddressValueCount++
 
             $url = $null
             if (-not [Uri]::TryCreate($rawValue, [UriKind]::Absolute, [ref]$url)) {
@@ -240,6 +259,12 @@ while ([DateTime]::UtcNow -lt $deadline) {
             if ($url.Host -in @("login.tzap.org", "sign.tzap.org", "account.tzap.org")) {
                 Write-Result -Status "production" -Origin $url.GetLeftPart([UriPartial]::Authority) -Path $url.AbsolutePath -ErrorCode "production_host_observed"
                 exit 2
+            }
+            if ($url.GetLeftPart([UriPartial]::Authority) -eq $ExpectedOrigin) {
+                $script:lastExpectedOriginSeen = $true
+            }
+            if ($baselineUrls.Contains($rawValue)) {
+                continue
             }
             if ($url.GetLeftPart([UriPartial]::Authority) -ne $ExpectedOrigin) {
                 continue
@@ -260,5 +285,6 @@ while ([DateTime]::UtcNow -lt $deadline) {
     Start-Sleep -Milliseconds 250
 }
 
-Write-Result -Status "timeout" -ErrorCode "default_browser_navigation_not_observed"
+$diagnosticCode = "default_browser_navigation_not_observed;processes=$script:lastBrowserProcessCount;windows=$script:lastBrowserWindowCount;addressBars=$script:lastAddressBarCount;values=$script:lastAddressValueCount;expectedOriginSeen=$script:lastExpectedOriginSeen"
+Write-Result -Status "timeout" -ErrorCode $diagnosticCode
 exit 1
