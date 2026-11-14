@@ -1,6 +1,7 @@
 {
   "schemaVersion": 1,
   "shellActionRequestVersion": 1,
+  "minimumSupportedShellActionRequestVersion": 1,
   "actionOrder": [
     "open",
     "compress",

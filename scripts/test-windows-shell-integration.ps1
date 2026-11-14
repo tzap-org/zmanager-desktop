@@ -4,6 +4,7 @@ $extensionSource = Join-Path $repoRoot "native\windows-shell-extension\src\gener
 $installerHook = Join-Path $repoRoot "packaging\windows\nsis-context-menu.nsh"
 $installerActions = Join-Path $repoRoot "packaging\windows\nsis-shell-actions.generated.nsh"
 $quickActionSource = Join-Path $repoRoot "src-tauri\src\quick_action.rs"
+$shellActionManifestPath = Join-Path $repoRoot "manifests\shell-actions.json"
 $extensionHandler = Join-Path $repoRoot "native\windows-shell-extension\src\lib.rs"
 $batchBuild = Join-Path $repoRoot "scripts\build.bat"
 $staticBuild = Join-Path $repoRoot "scripts\build-windows-static.ps1"
@@ -12,6 +13,7 @@ $extensionArtifact = Join-Path $repoRoot "target\windows-shell-extension\zmanage
 $rust = Get-Content -Raw $extensionSource
 $nsis = (Get-Content -Raw $installerHook) + (Get-Content -Raw $installerActions)
 $quickAction = Get-Content -Raw $quickActionSource
+$shellActionManifest = Get-Content -Raw $shellActionManifestPath | ConvertFrom-Json
 $handler = Get-Content -Raw $extensionHandler
 $batch = Get-Content -Raw $batchBuild
 $static = Get-Content -Raw $staticBuild
@@ -52,22 +54,72 @@ foreach ($registration in @(
     }
 }
 
-# Explorer keeps the handler DLL loaded, so an in-place overwrite fails and the
-# installer would register a CLSID that still resolves to the previous build.
+# An undeletable handler image must be staged aside before the installer writes
+# the new DLL. Windows may also unlink a mapped image successfully, so protocol
+# tracking below covers that case independently of the filename.
 if (-not $nsis.Contains('!insertmacro ZM_INSTALL_SHELL_EXTENSION_BINARY') -or
-    -not $nsis.Contains('Rename "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}" "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}.old"')) {
-    throw "The installer must move a locked handler DLL aside before writing the new one."
+    -not $nsis.Contains('Rename "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}" "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}.old.$ZM_ShellExtensionBackupCounter"') -or
+    -not $nsis.Contains('FindFirst $R0 $R1 "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}.old.*"') -or
+    -not $nsis.Contains('Delete "$INSTDIR\$R1"')) {
+    throw "The installer must stage an undeletable handler DLL aside before writing the new one."
 }
 
-# An upgrade over a running Explorer leaves the previous image mapped, so the
-# installer restarts the shell - but only in that case, never on a fresh install.
+# The installer stores the request version associated with the installed DLL.
+# A compatible loaded handler stays active until Explorer naturally exits;
+# only a protocol break takes the explicit restart path.
 if (-not $nsis.Contains('Var /GLOBAL ZM_ShellExtensionWasLocked') -or
-    -not $nsis.Contains('StrCpy $ZM_ShellExtensionWasLocked "1"') -or
-    -not $nsis.Contains('!insertmacro ZM_RESTART_EXPLORER_IF_STALE')) {
-    throw "The installer must restart Explorer when it replaces a handler DLL that was locked."
+    -not $nsis.Contains('Var /GLOBAL ZM_CurrentShellExtensionWasLocked') -or
+    -not $nsis.Contains('Var /GLOBAL ZM_PreviousShellActionRequestVersion') -or
+    -not $nsis.Contains('Var /GLOBAL ZM_InstalledShellActionRequestVersion') -or
+    -not $nsis.Contains('ReadRegDWORD $ZM_PreviousShellActionRequestVersion HKCU "Software\ZManager\ShellIntegration" "PendingLoadedRequestVersion"') -or
+    -not $nsis.Contains('WriteRegDWORD HKCU "Software\ZManager\ShellIntegration" "InstalledRequestVersion" ${ZM_SHELL_ACTION_REQUEST_VERSION}') -or
+    -not $nsis.Contains('WriteRegDWORD HKCU "Software\ZManager\ShellIntegration" "PendingLoadedRequestVersion" $ZM_PreviousShellActionRequestVersion') -or
+    -not $nsis.Contains('!insertmacro ZM_RESTART_EXPLORER_IF_INCOMPATIBLE')) {
+    throw "The installer must persist shell-action compatibility and condition restarts on the supported protocol range."
 }
-if (-not $nsis.Contains('IfSilent zm_explorer_restart_now') -or -not $nsis.Contains('MessageBox MB_YESNO')) {
-    throw "An interactive install must ask before closing the user's Explorer windows; a silent install must not prompt."
+# Windows may unlink a mapped DLL successfully while the Explorer image stays
+# loaded. Preserve the old protocol both when replacing that pathname and when
+# an uninstall is followed by a reinstall with no old filename left to inspect.
+if (-not $nsis.Contains('IfFileExists "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}" 0 zm_shell_extension_delete_current_file') -or
+    -not $nsis.Contains('StrCpy $ZM_ShellExtensionWasLocked "1"') -or
+    -not $nsis.Contains('zm_shell_extension_pending_marker_loaded:') -or
+    -not $nsis.Contains('StrCpy $ZM_UninstallShellExtensionWasLocked "1"') -or
+    -not $nsis.Contains('zm_uninstall_preserve_shell_protocol') -or
+    -not $nsis.Contains('StrCmp "${SUFFIX}" "RESTART" zm_shell_cleanup_delete_legacy_${SUFFIX}') -or
+    -not $nsis.Contains('StrCmp "${SUFFIX}" "RESTART" zm_shell_cleanup_delete_backup_${SUFFIX}') -or
+    -not $nsis.Contains('StrCmp "${SUFFIX}" "RESTART" zm_shell_cleanup_delete_uninstall_pending_${SUFFIX}')) {
+    throw "Potentially loaded shell images must keep their protocol marker across delete-pending and uninstall/reinstall flows."
+}
+if (-not $nsis.Contains("!define ZM_SHELL_ACTION_REQUEST_VERSION $($shellActionManifest.requestVersion)") -or
+    -not $nsis.Contains("!define ZM_MIN_SUPPORTED_SHELL_ACTION_REQUEST_VERSION $($shellActionManifest.minimumSupportedRequestVersion)")) {
+    throw "The NSIS compatibility range must match the Rust shell-action request contract."
+}
+if (-not $nsis.Contains('zm_shell_handler_protocol_compatible') -or
+    -not $nsis.Contains('DetailPrint "The loaded ZManager shell handler is compatible') -or
+    -not $nsis.Contains('IfSilent zm_explorer_restart_now') -or
+    -not $nsis.Contains('MessageBox MB_YESNO')) {
+    throw "Compatible updates must defer Explorer refresh while incompatible updates retain the explicit restart path."
+}
+if (-not $nsis.Contains('IntCmp $ZM_PreviousShellActionRequestVersion ${ZM_MIN_SUPPORTED_SHELL_ACTION_REQUEST_VERSION} zm_shell_handler_protocol_compatible zm_shell_handler_protocol_incompatible zm_shell_handler_check_max') -or
+    -not $nsis.Contains('IntCmp $ZM_InstalledShellActionRequestVersion ${ZM_MIN_SUPPORTED_SHELL_ACTION_REQUEST_VERSION} zm_shell_handler_check_current_max zm_shell_handler_protocol_incompatible zm_shell_handler_check_current_max') -or
+    -not $nsis.Contains('IntCmp $ZM_PreviousShellActionRequestVersion $ZM_InstalledShellActionRequestVersion zm_shell_extension_keep_previous_protocol zm_shell_extension_keep_previous_protocol zm_shell_extension_use_installed_protocol_for_current')) {
+    throw "The minimum protocol version must be inclusive and the oldest loaded protocol must be retained."
+}
+if ($nsis.Contains('Delete /REBOOTOK "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}.old"')) {
+    throw "Shell-handler updates must not schedule a machine reboot."
+}
+if (-not $nsis.Contains('!macro ZM_DELETE_OR_SCHEDULE_LOCKED_FILE PATH SUFFIX') -or
+    -not $nsis.Contains('GetTempFileName $R3 "$INSTDIR"') -or
+    -not $nsis.Contains('StrCpy $R3 "$R3.zmanager-uninstall-pending"') -or
+    -not $nsis.Contains('MoveFileExW(w "$R3", p 0, i 4) i .r2') -or
+    -not $nsis.Contains('WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\RunOnce" "ZManagerShellCleanup"') -or
+    -not $nsis.Contains('FindFirst $R0 $R1 "$INSTDIR\*.zmanager-uninstall-pending"') -or
+    -not $nsis.Contains('!insertmacro ZM_DELETE_OR_SCHEDULE_LOCKED_FILE "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}.old" LEGACY') -or
+    -not $nsis.Contains('FindFirst $R0 $R1 "$INSTDIR\${ZM_SHELL_EXTENSION_NAME}.old.*"') -or
+    -not $nsis.Contains('!macro NSIS_HOOK_POSTUNINSTALL') -or
+    -not $nsis.Contains('MoveFileExW(w "$INSTDIR", p 0, i 4) i .r0') -or
+    -not $nsis.Contains('WriteRegDWORD HKCU "Software\ZManager\ShellIntegration" "PendingLoadedRequestVersion" $ZM_PreviousShellActionRequestVersion')) {
+    throw "Uninstall must queue locked shell DLLs and the remaining install directory for deletion at reboot without NSIS's reboot-required flag."
 }
 if (-not $nsis.Contains('SHCNF_FLUSHNOWAIT (0x2000)') -or
     -not $nsis.Contains("SHChangeNotify(i 0x08000000, i 0x2000") -or
@@ -81,6 +133,9 @@ if (-not (Test-Path $refreshScript)) {
     throw "scripts\refresh-windows-shell-extension.ps1 is missing."
 }
 $refresh = Get-Content -Raw $refreshScript
+if (-not $refresh.Contains('*.zmanager-uninstall-pending')) {
+    throw "The developer refresh check must include DLL paths renamed by uninstall."
+}
 foreach ($guarantee in @(
     @{ Pattern = 'QueryInterface'; Message = "must QueryInterface the registered class for the classic interfaces" },
     @{ Pattern = '000214E8-0000-0000-C000-000000000046'; Message = "must check IShellExtInit" },
@@ -98,6 +153,9 @@ if ($refresh -match 'StartTime\s+-lt\s+\$installedWrite') {
 }
 if (-not $static.Contains('refresh-windows-shell-extension.ps1')) {
     throw "build-windows-static.ps1 must verify the installed shell extension after -Install."
+}
+if (-not $static.Contains('refresh-windows-shell-extension.ps1') -or -not $static.Contains('-SkipRestart')) {
+    throw "The build verification must not interrupt the developer's Explorer session."
 }
 
 if (-not $handler.Contains('#[implement(IExplorerCommand, IContextMenu, IShellExtInit)]')) {

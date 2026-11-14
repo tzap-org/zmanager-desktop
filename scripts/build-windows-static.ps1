@@ -389,11 +389,12 @@ if ($Install) {
         -ProductVersion $tauriConfig.version
     Install-NsisBuild -InstallerPath $installerPath -RequestedInstallDir $InstallDir
 
-    # The installer restarts Explorer itself when it finds the handler DLL
-    # locked. This verifies the result and is a backstop if it did not.
+    # Verify COM activation from this process without restarting the developer's
+    # Explorer session. The live shell picks up compatible handler updates when
+    # it next starts naturally.
     if (-not $SkipShellRefresh) {
         $shellRefresh = Join-Path $PSScriptRoot "refresh-windows-shell-extension.ps1"
-        & powershell -NoProfile -ExecutionPolicy Bypass -File $shellRefresh
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $shellRefresh -SkipRestart
         if ($LASTEXITCODE -ne 0) {
             throw "The installed Windows shell extension failed verification with exit code $LASTEXITCODE."
         }

@@ -21,28 +21,47 @@ The registration mirrors what 7-Zip's `DllRegisterServer` writes:
   `shellex\ContextMenuHandlers\ZManager` pointing at that CLSID. `Drive` is
   deliberately left out, exactly as 7-Zip leaves it out.
 
-Explorer keeps a handler DLL loaded for the lifetime of the process, so
-`ZM_INSTALL_SHELL_EXTENSION_BINARY` moves a locked DLL aside (renaming inside the
-same directory is permitted) before writing the new one. After Explorer restarts,
-the installer tries to remove the stale copy. If it remains locked, it leaves the
-`.old` file in place and retries on a later install; it does not schedule deletion
-at reboot or ask the user to restart Windows.
+Explorer can keep a handler DLL loaded for the lifetime of the process.
+`ZM_INSTALL_SHELL_EXTENSION_BINARY` tries to delete the current file first; if
+that fails, it renames the DLL aside (same-directory rename works for a mapped
+image on Windows) before writing the new one. Windows can also accept deletion
+and remove the name while Explorer keeps the old image mapped. The new app and
+DLL are installed immediately, and the recorded protocol preserves compatibility
+state for that old image. ZManager does not schedule a reboot to replace or delete
+these files.
 
-Replacing the file is not enough on its own: a running Explorer keeps serving the
-image it already mapped. The rename is therefore also the signal that this
-happened, and `ZM_RESTART_EXPLORER_IF_STALE` acts on it:
+The installer records the installed handler version and any potentially loaded older
+handler protocol range in `HKCU\Software\ZManager\ShellIntegration`. The current
+and minimum supported versions come from `manifests/shell-actions.json`; the
+native Rust contract and NSIS include are generated from that source. The app
+currently supports protocol version 1, which is also the compatibility default
+for existing installs that predate this marker. This keeps the first update from
+the released 1.2.7 handler smooth.
 
-- **Fresh install** — nothing was locked, Explorer has no handler mapped, and it
-  picks the new one up on the next context menu. No restart, no prompt.
-- **Upgrade over a running Explorer** — the DLL was locked. A silent install
-  (`/S`, which `scripts/build.bat` uses) restarts Explorer automatically; an
-  interactive install asks first, because the user's open Explorer windows close.
-  Declining leaves the menu on the old handler until Explorer is restarted. The
-  update never requires a Windows reboot.
+`ZM_RESTART_EXPLORER_IF_INCOMPATIBLE` only acts when a prior handler may still be
+loaded and its recorded protocol falls outside the app's supported range. Since
+Windows may unlink a mapped DLL successfully, the installer treats an existing
+DLL as potentially loaded; an incompatible update can therefore restart Explorer
+even when the old DLL happened not to be mapped:
 
-Windows normally relaunches the shell itself, so the hook only starts
-`explorer.exe` manually when `Shell_TrayWnd` has not reappeared. That avoids
-leaving a stray folder window open.
+- **Fresh install** — there is no old handler, so no restart is needed.
+- **Compatible update** — install completes without restarting Explorer. The
+  currently open shell keeps the old menu implementation, which can still send
+  requests the updated app understands. The newly installed handler takes over
+  the next time Explorer naturally starts, such as after sign-in or a user-initiated
+  restart. There is no reboot request.
+- **Incompatible update** — an interactive install asks before restarting
+  Explorer; a silent install restarts it automatically. This path is reserved for
+  a shell-action contract change that makes the old handler unable to communicate
+  with the updated app.
+
+When intentionally changing the shell-action request format, update
+`requestVersion` and the app parser together. Keep
+`minimumSupportedRequestVersion` low while the app accepts old formats; raise it
+only when dropping an old format is necessary. The installer then refreshes a
+still-loaded handler only when its version is outside that window. Static
+context-menu registrations are refreshed immediately with `SHChangeNotify` and
+do not require restarting Explorer.
 
 Folder-background commands have one target and continue to use the quick-action
 CLI contract:
@@ -93,8 +112,9 @@ Release wiring:
    asserts the registration contract and the `build.bat` parity, and runs as part
    of `build-windows-static.ps1`.
 5. After `-Install`, `build-windows-static.ps1` runs
-   `scripts/refresh-windows-shell-extension.ps1`, which verifies the result on
-   the machine: the CLSIDs resolve to an existing DLL with
+   `scripts/refresh-windows-shell-extension.ps1 -SkipRestart`, which verifies
+   the registered DLL from a separate process without closing the user's
+   Explorer windows: the CLSIDs resolve to an existing DLL with
    `ThreadingModel = Apartment`, the three handler keys point at the create root
    CLSID, and `CoCreateInstance` plus `QueryInterface` for `IShellExtInit` and
    `IContextMenu` both succeed. That last check is what distinguishes a current
@@ -102,12 +122,28 @@ Release wiring:
    `-SkipShellRefresh` to skip it, or run the script standalone at any time.
 
 Do not use file timestamps to decide whether Explorer is stale. NSIS `File` and
-`Copy-Item` both preserve the *source* file's modification time, so a freshly
-installed DLL carries its build time and can look older than a shell that started
-after it was installed. The reliable signal is whether the renamed-aside
-`<dll>.old` can be deleted: if it is still locked, some process has the previous
-image mapped. The installer retries removal after Explorer restarts and on later
-installs, without setting NSIS's reboot-required flag.
+`Copy-Item` both preserve the *source* file's modification time. Windows can also
+accept deletion of a mapped DLL, remove its pathname, and keep its image alive
+inside Explorer until that process exits. Therefore, an existing handler DLL is
+treated as potentially loaded before replacement or uninstall; an NSIS delete
+error alone is not a reliable lock test. The installer compares the recorded
+protocol of that potentially loaded handler with the new app's supported range.
+Compatible handlers remain active until their host naturally exits, while an
+incompatible handler uses the explicit restart path. When a DLL cannot be removed
+immediately, uniquely named stale images are retried on later installs and never
+set NSIS's reboot-required flag.
+
+Uninstall removes the shell registrations and tries to delete the current and
+renamed handler DLLs immediately. It retains the protocol marker for any handler
+image that may still be mapped, including when Windows accepted deletion but the
+existing Explorer process still holds the image. If immediate deletion fails,
+the uninstaller renames that DLL to a unique pending-delete path, then tries to
+queue the path with `MoveFileEx(MOVEFILE_DELAY_UNTIL_REBOOT)`. This keeps a
+reinstall from reusing a path that Windows has queued for deletion. If the
+per-user uninstaller lacks permission to write the machine-wide pending-delete
+list, it registers a per-user `RunOnce` cleanup for the next logon instead. A
+reinstall before Explorer exits can therefore still apply the compatibility
+check. No reboot is forced or prompted.
 
 ## Microsoft Store (MSIX)
 

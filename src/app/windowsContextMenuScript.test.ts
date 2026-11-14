@@ -80,14 +80,18 @@ describe("Windows context menu installer hook", () => {
     expect(unregisterMacro).toContain('DeleteRegValue HKLM "${ZM_APPROVED_SHELL_EXTENSIONS_KEY}" "${CLSID}"');
   });
 
-  it("replaces a handler DLL that Explorer still holds open", () => {
+  it("replaces a locked handler and defers compatible shell refreshes", () => {
     const macroStart = script.indexOf("!macro ZM_INSTALL_SHELL_EXTENSION_BINARY");
     const macroEnd = script.indexOf("!macroend", macroStart);
     expect(macroStart).toBeGreaterThan(-1);
     const macro = script.slice(macroStart, macroEnd);
-    expect(macro).toContain('Rename "$INSTDIR\\${ZM_SHELL_EXTENSION_NAME}" "$INSTDIR\\${ZM_SHELL_EXTENSION_NAME}.old"');
-    expect(macro).toContain('Delete /REBOOTOK "$INSTDIR\\${ZM_SHELL_EXTENSION_NAME}.old"');
+    expect(macro).toContain('Rename "$INSTDIR\\${ZM_SHELL_EXTENSION_NAME}" "$INSTDIR\\${ZM_SHELL_EXTENSION_NAME}.old.$ZM_ShellExtensionBackupCounter"');
+    expect(macro).toContain('ReadRegDWORD $ZM_PreviousShellActionRequestVersion HKCU "Software\\ZManager\\ShellIntegration" "PendingLoadedRequestVersion"');
+    expect(macro).toContain('ReadRegDWORD $ZM_InstalledShellActionRequestVersion HKCU "Software\\ZManager\\ShellIntegration" "InstalledRequestVersion"');
+    expect(macro).toContain('StrCpy $ZM_InstalledShellActionRequestVersion "1"');
     expect(macro).toContain('File /oname=${ZM_SHELL_EXTENSION_NAME} "${ZM_SHELL_EXTENSION_SOURCE}"');
+    expect(macro).not.toContain("/REBOOTOK");
+    expect(script).toContain('Delete "$INSTDIR\\${ZM_SHELL_EXTENSION_NAME}.old.*"');
     // A silent install must fail loudly instead of registering a handler that
     // points at a DLL that never got written.
     expect(macro).toContain("Abort ");
@@ -95,7 +99,19 @@ describe("Windows context menu installer hook", () => {
     const postInstallStart = script.indexOf("!macro NSIS_HOOK_POSTINSTALL");
     const postInstall = script.slice(postInstallStart, script.indexOf("!macroend", postInstallStart));
     expect(postInstall).toContain("!insertmacro ZM_INSTALL_SHELL_EXTENSION_BINARY");
+    expect(postInstall).toContain("!insertmacro ZM_RESTART_EXPLORER_IF_INCOMPATIBLE");
+    expect(script).toContain('WriteRegDWORD HKCU "Software\\ZManager\\ShellIntegration" "InstalledRequestVersion" ${ZM_SHELL_ACTION_REQUEST_VERSION}');
+    expect(script).toContain('WriteRegDWORD HKCU "Software\\ZManager\\ShellIntegration" "PendingLoadedRequestVersion" $ZM_PreviousShellActionRequestVersion');
     expect(postInstall).not.toContain('File /oname=${ZM_SHELL_EXTENSION_NAME}');
+
+    const restartStart = script.indexOf("!macro ZM_RESTART_EXPLORER_IF_INCOMPATIBLE");
+    const restartEnd = script.indexOf("!macroend", restartStart);
+    const restart = script.slice(restartStart, restartEnd);
+    expect(restart).toContain("${ZM_MIN_SUPPORTED_SHELL_ACTION_REQUEST_VERSION}");
+    expect(restart).toContain("${ZM_SHELL_ACTION_REQUEST_VERSION}");
+    expect(restart).toContain("zm_shell_handler_protocol_compatible");
+    expect(restart).toContain("IfSilent zm_explorer_restart_now");
+    expect(restart).toContain("MessageBox MB_YESNO");
   });
 
   it("keeps the archive submenu actions in the requested order", () => {

@@ -3,9 +3,10 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 mod generated;
-pub use generated::{SHELL_ACTION_POLICIES, ShellActionKind, ShellActionPolicy, ShellActionWindowDisposition};
-
-pub const SHELL_ACTION_REQUEST_VERSION: u32 = 1;
+pub use generated::{
+    MIN_SUPPORTED_SHELL_ACTION_REQUEST_VERSION, SHELL_ACTION_POLICIES, SHELL_ACTION_REQUEST_VERSION, ShellActionKind, ShellActionPolicy,
+    ShellActionWindowDisposition,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -22,7 +23,7 @@ impl ShellActionRequest {
 
     pub fn from_json(json: &str) -> Result<Self, ShellActionContractError> {
         let request = serde_json::from_str::<Self>(json).map_err(|error| ShellActionContractError::InvalidJson(error.to_string()))?;
-        if request.version != SHELL_ACTION_REQUEST_VERSION {
+        if request.version < MIN_SUPPORTED_SHELL_ACTION_REQUEST_VERSION || request.version > SHELL_ACTION_REQUEST_VERSION {
             return Err(ShellActionContractError::UnsupportedVersion(request.version));
         }
         Ok(request)

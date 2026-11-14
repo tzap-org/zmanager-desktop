@@ -1,6 +1,7 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "requestVersion": 1,
+  "minimumSupportedRequestVersion": 1,
   "nativeSurfaces": [
     "windowsExplorer",
     "linuxDesktop",

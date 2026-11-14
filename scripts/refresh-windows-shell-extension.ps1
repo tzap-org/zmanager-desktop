@@ -6,9 +6,10 @@
 # appears to change nothing. Restarting Explorer is the only reliable way to
 # drop the stale image.
 #
-# This is deliberately a developer-loop step invoked by build-windows-static.ps1
-# after -Install. The shipped NSIS installer does not do it, because killing an
-# end user's Explorer closes all of their open windows.
+# This is a developer-loop verification step invoked by build-windows-static.ps1
+# after -Install with -SkipRestart. It activates the registered class from this
+# PowerShell process, so the freshly installed DLL can be checked without
+# interrupting Explorer. Run without -SkipRestart only to test the live menu.
 
 param(
     [switch]$SkipRestart,
@@ -91,26 +92,38 @@ if (Test-Path -LiteralPath $builtDll) {
 }
 
 # ---------------------------------------------------------------- stale image
-# The installer renames a handler it could not delete to "<dll>.old". Whether
-# that file can now be deleted is the authoritative staleness signal: a file
-# that is still locked means some process has the previous image mapped.
+# The installer renames a handler it could not delete to "<dll>.old" (legacy),
+# "<dll>.old.<n>", or a unique uninstall-pending name. Whether these files can
+# now be deleted is the authoritative staleness signal: a remaining locked file
+# means a process still maps that image.
 #
 # Timestamps cannot be used here. Both NSIS `File` and Copy-Item preserve the
 # source file's mtime, so a freshly installed DLL carries its *build* time and
 # can legitimately look older than a shell that started after it was installed.
-$stalePath = "$installedDll.old"
+$stalePathPattern = "$installedDll.old.*"
+$pendingPathPattern = Join-Path (Split-Path $installedDll -Parent) "*.zmanager-uninstall-pending"
 
 function Test-PreviousImageReleased {
-    if (-not (Test-Path -LiteralPath $stalePath)) { return $true }
-    Remove-Item -LiteralPath $stalePath -Force -ErrorAction SilentlyContinue
-    return -not (Test-Path -LiteralPath $stalePath)
+    $stalePaths = @()
+    $legacyStalePath = "$installedDll.old"
+    if (Test-Path -LiteralPath $legacyStalePath) { $stalePaths += $legacyStalePath }
+    $stalePaths += @(Get-ChildItem -Path $stalePathPattern -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    $stalePaths += @(Get-ChildItem -Path $pendingPathPattern -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    foreach ($stalePath in $stalePaths) {
+        Remove-Item -LiteralPath $stalePath -Force -ErrorAction SilentlyContinue
+    }
+    $remaining = @()
+    if (Test-Path -LiteralPath $legacyStalePath) { $remaining += $legacyStalePath }
+    $remaining += @(Get-ChildItem -Path $stalePathPattern -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    $remaining += @(Get-ChildItem -Path $pendingPathPattern -File -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName })
+    return $remaining.Count -eq 0
 }
 
 $currentSession = (Get-Process -Id $PID).SessionId
 if (Test-PreviousImageReleased) {
     Write-Step "No previous handler image is still mapped; no Explorer restart needed."
 } elseif ($SkipRestart) {
-    Write-Warning "A previous handler image is still mapped ('$stalePath'). Restart Explorer before testing the context menu."
+    Write-Step "A previous handler image is still mapped; live Explorer keeps using it until its next restart."
 } else {
     # Only this session's Explorer: on a multi-session host, another user's
     # shell must never be torn down by a build.
@@ -138,7 +151,7 @@ if (Test-PreviousImageReleased) {
     if (Test-PreviousImageReleased) {
         Write-Step "Previous handler image released and removed."
     } else {
-        Write-Warning "'$stalePath' is still locked by another process; Windows will remove it on the next reboot."
+        Write-Warning "A previous handler image is still locked by another process; a later install will retry cleanup."
     }
 }
 
@@ -178,7 +191,10 @@ try {
     if ($comObject) { [void]$marshal::ReleaseComObject($comObject) }
 }
 
-Write-Host "Windows shell extension refreshed; the ZManager context menu is serving this build."
+Write-Host "Registered Windows shell extension passed COM activation and interface checks."
+if ($SkipRestart -and -not (Test-PreviousImageReleased)) {
+    Write-Host "The current Explorer process may still be serving its previously loaded handler until Explorer next starts."
+}
 if (-not $Quiet) {
     Write-Host "On Windows 11 the entry appears under 'Show more options' (Shift+F10), not the first-level menu."
 }

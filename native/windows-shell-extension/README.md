@@ -37,10 +37,18 @@ sources. Registration is per-user. Folder background commands do not use the DLL
 because they have one unambiguous target; they remain static `%V` registry
 commands.
 
-Explorer keeps this DLL loaded once a context menu has been shown, so a rebuild
-does not take effect until Explorer restarts. The installer handles that itself
-when it finds the DLL locked, and `scripts/refresh-windows-shell-extension.ps1`
-verifies the result (and restarts as a backstop) after `build.bat`.
+Explorer can keep this DLL loaded after a context menu has been shown. Compatible
+app updates therefore leave the existing image running and let Explorer load the
+new DLL on its next natural start. The app and shell extension communicate through
+the versioned `ShellActionRequest` contract; its supported version range is
+defined in `manifests/shell-actions.json`. Only an incompatible protocol change
+requires an immediate Explorer restart.
+
+After `scripts/build.bat` or `scripts/build-windows-static.ps1 -Install`,
+`scripts/refresh-windows-shell-extension.ps1 -SkipRestart` verifies the registered
+DLL by activating its COM class from a separate process without interrupting
+Explorer. Run the refresh script without `-SkipRestart` only when deliberately
+testing the newly installed context menu in the live Explorer process.
 
 The current NSIS registration targets Explorer's classic context menu. A future
 signed package-with-external-location manifest can expose the same CLSIDs in the
