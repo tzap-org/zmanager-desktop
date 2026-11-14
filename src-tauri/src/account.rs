@@ -481,7 +481,15 @@ fn capture_gui_test_hosted_launch(launch_url: &str) {
     let Some(path) = std::env::var_os("TZAP_E2E_HOSTED_LAUNCH_FILE").map(PathBuf::from) else {
         return;
     };
-    if !path.is_absolute() || path.strip_prefix(std::env::temp_dir()).is_err() {
+    let mut temporary_roots = vec![std::env::temp_dir()];
+    temporary_roots.extend(["TEMP", "TMP"].into_iter().filter_map(|name| {
+        std::env::var_os(name).map(PathBuf::from)
+    }));
+    if !path.is_absolute()
+        || !temporary_roots
+            .iter()
+            .any(|root| path.strip_prefix(root).is_ok())
+    {
         return;
     }
     let _ = std::fs::write(path, launch_url);

@@ -195,7 +195,11 @@ if ([string]::IsNullOrWhiteSpace($runId)) {
     $runId = "standalone-$([Guid]::NewGuid().ToString('N'))"
 }
 $safeRunId = [regex]::Replace($runId, '[^A-Za-z0-9_-]', '-')
-$env:TZAP_E2E_HOSTED_LAUNCH_FILE = Join-Path ([IO.Path]::GetTempPath()) "zmanager-hosted-launch-$safeRunId.txt"
+$nodeTemporaryRoot = (& node -p "require('node:os').tmpdir()" | Select-Object -First 1).Trim()
+if ([string]::IsNullOrWhiteSpace($nodeTemporaryRoot)) {
+    throw "Node did not return a temporary directory for hosted launch capture."
+}
+$env:TZAP_E2E_HOSTED_LAUNCH_FILE = Join-Path $nodeTemporaryRoot "zmanager-hosted-launch-$safeRunId.txt"
 Remove-Item -LiteralPath $env:TZAP_E2E_HOSTED_LAUNCH_FILE -Force -ErrorAction SilentlyContinue
 $artifactDirectoryManaged = [string]::IsNullOrWhiteSpace($env:TZAP_E2E_ARTIFACT_DIR)
 $artifactRoot = if (-not $artifactDirectoryManaged) {
