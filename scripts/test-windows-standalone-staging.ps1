@@ -74,6 +74,29 @@ $env:VITE_ENABLE_HOSTED_CERTIFICATE_SECTION = "true"
 $env:ZMANAGER_TZAP_SERVER_BASE_URL = "https://staging.tzap.org"
 $env:TZAP_E2E_ENV = "staging"
 $env:TZAP_E2E_STAGING_CALLBACK_ADAPTER = "1"
+$edgeExecutable = Get-Command "msedge.exe" -ErrorAction SilentlyContinue
+if ($edgeExecutable) {
+    $edgePath = $edgeExecutable.Source
+} else {
+    $edgeAppPathKey = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe"
+    $edgePath = if (Test-Path -LiteralPath $edgeAppPathKey) {
+        [string](Get-Item -LiteralPath $edgeAppPathKey).GetValue("")
+    } else {
+        $null
+    }
+    if ([string]::IsNullOrWhiteSpace($edgePath)) {
+        $edgeCandidates = @(
+            (Join-Path ${env:ProgramFiles(x86)} "Microsoft\Edge\Application\msedge.exe"),
+            (Join-Path $env:ProgramFiles "Microsoft\Edge\Application\msedge.exe")
+        )
+        $edgePath = $edgeCandidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+    }
+}
+if ([string]::IsNullOrWhiteSpace($edgePath) -or -not (Test-Path -LiteralPath $edgePath -PathType Leaf)) {
+    throw "Microsoft Edge is required for the Windows staging GUI E2E browser."
+}
+$env:VITE_ZMANAGER_GUI_TEST_BROWSER = [IO.Path]::GetFullPath($edgePath)
+Write-Host "Windows staging GUI E2E browser: $([IO.Path]::GetFileName($edgePath))"
 Write-Host "Hosted account standalone E2E environment: staging"
 
 function Resolve-TargetArchitecture {

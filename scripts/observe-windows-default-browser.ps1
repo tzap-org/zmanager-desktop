@@ -33,8 +33,6 @@ $script:lastBrowserWindowCount = 0
 $script:lastAddressBarCount = 0
 $script:lastAddressValueCount = 0
 $script:lastExpectedOriginSeen = $false
-$script:browserChoicePromptSeen = $false
-$script:browserChoicePromptHandled = $false
 
 function Register-AddressBar {
     param($AddressBar)
@@ -139,73 +137,6 @@ function Get-BrowserWindows {
     return @($windowsByHandle.Values)
 }
 
-function Resolve-DefaultBrowserChoicePrompt {
-    if ($script:browserChoicePromptHandled) { return }
-
-    $buttonCondition = New-Object System.Windows.Automation.PropertyCondition(
-        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-        [System.Windows.Automation.ControlType]::Button
-    )
-    $windows = $root.FindAll([System.Windows.Automation.TreeScope]::Children, $windowCondition)
-    foreach ($window in $windows) {
-        try {
-            $buttons = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $buttonCondition)
-            $decisions = @($buttons | Where-Object { $_.Current.Name -match "^(Always|Just once)$" })
-            if ($decisions.Count -eq 0) { continue }
-
-            $script:browserChoicePromptSeen = $true
-            $edgeCandidates = @()
-            foreach ($controlType in @(
-                [System.Windows.Automation.ControlType]::Button,
-                [System.Windows.Automation.ControlType]::RadioButton,
-                [System.Windows.Automation.ControlType]::ListItem
-            )) {
-                $condition = New-Object System.Windows.Automation.PropertyCondition(
-                    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-                    $controlType
-                )
-                $controls = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $condition)
-                $edgeCandidates += @($controls | Where-Object { $_.Current.Name -match "^Microsoft Edge(?:$|\s)" })
-            }
-            if ($edgeCandidates.Count -eq 0) { continue }
-
-            foreach ($candidate in $edgeCandidates) {
-                try {
-                    $candidate.GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
-                    break
-                } catch {
-                    try {
-                        $candidate.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-                        break
-                    } catch {
-                        # Try another accessible control for the Edge choice.
-                    }
-                }
-            }
-
-            Start-Sleep -Milliseconds 250
-            $buttons = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $buttonCondition)
-            $always = @($buttons | Where-Object { $_.Current.Name -eq "Always" } | Select-Object -First 1)
-            $choice = if ($always.Count -gt 0) {
-                $always[0]
-            } else {
-                @($buttons | Where-Object { $_.Current.Name -eq "Just once" } | Select-Object -First 1) | Select-Object -First 1
-            }
-            if ($null -ne $choice) {
-                try {
-                    $choice.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
-                    $script:browserChoicePromptHandled = $true
-                    return
-                } catch {
-                    # Keep polling in case the system dialog is still loading.
-                }
-            }
-        } catch {
-            # The system picker can replace its accessibility tree while loading.
-        }
-    }
-}
-
 function Get-BrowserAddressValues {
     $values = @()
     $script:lastBrowserWindowCount = 0
@@ -272,7 +203,6 @@ function Write-Result {
 }
 
 while ([DateTime]::UtcNow -lt $deadline) {
-    Resolve-DefaultBrowserChoicePrompt
     $eventValue = $null
     while ($observedAddressValues.TryDequeue([ref]$eventValue)) {
         $eventUri = $null
@@ -355,6 +285,6 @@ while ([DateTime]::UtcNow -lt $deadline) {
     Start-Sleep -Milliseconds 250
 }
 
-$diagnosticCode = "default_browser_navigation_not_observed;processes=$script:lastBrowserProcessCount;windows=$script:lastBrowserWindowCount;addressBars=$script:lastAddressBarCount;values=$script:lastAddressValueCount;expectedOriginSeen=$script:lastExpectedOriginSeen;choicePromptSeen=$script:browserChoicePromptSeen;choicePromptHandled=$script:browserChoicePromptHandled"
+$diagnosticCode = "default_browser_navigation_not_observed;processes=$script:lastBrowserProcessCount;windows=$script:lastBrowserWindowCount;addressBars=$script:lastAddressBarCount;values=$script:lastAddressValueCount;expectedOriginSeen=$script:lastExpectedOriginSeen"
 Write-Result -Status "timeout" -ErrorCode $diagnosticCode
 exit 1
