@@ -21,10 +21,7 @@ $addressCondition = New-Object System.Windows.Automation.PropertyCondition(
     [System.Windows.Automation.AutomationElement]::AutomationIdProperty,
     "addressEditBox"
 )
-$editCondition = New-Object System.Windows.Automation.PropertyCondition(
-    [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-    [System.Windows.Automation.ControlType]::Edit
-)
+$treeCondition = [System.Windows.Automation.Condition]::TrueCondition
 $baselineUrls = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 $observedAddressValues = [System.Collections.Concurrent.ConcurrentQueue[string]]::new()
 $addressHandlers = @{}
@@ -62,29 +59,37 @@ function Register-AddressBar {
 function Find-AddressBar {
     param($Window)
 
-    $edits = $Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $editCondition)
+    $elements = $Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $treeCondition)
     $candidates = @()
-    foreach ($edit in $edits) {
-        if ($edit.Current.AutomationId -eq "addressEditBox") { $candidates += $edit }
+    foreach ($element in $elements) {
+        if ($element.Current.AutomationId -eq "addressEditBox") { $candidates += $element }
     }
 
     # Edge versions/locales do not expose one stable AutomationId. Prefer the
     # semantic accessible name, then fall back to the first edit whose value
     # is an absolute HTTP(S) URL. Page fields are not URL-shaped and therefore
     # cannot be mistaken for the browser address bar by the fallback.
-    foreach ($edit in $edits) {
-        if ($edit.Current.AutomationId -ne "addressEditBox" -and $edit.Current.Name -match "Address|search|URL|Omnibox") {
-            $candidates += $edit
+    foreach ($element in $elements) {
+        if ($element.Current.AutomationId -ne "addressEditBox" -and
+            $element.Current.ControlType -in @(
+                [System.Windows.Automation.ControlType]::Edit,
+                [System.Windows.Automation.ControlType]::ComboBox
+            ) -and $element.Current.Name -match "Address|search|URL|Omnibox") {
+            $candidates += $element
         }
     }
-    foreach ($edit in $edits) {
-        if ($edit.Current.AutomationId -eq "addressEditBox" -or $edit.Current.Name -match "Address|search|URL|Omnibox") { continue }
+    foreach ($element in $elements) {
+        if ($element.Current.ControlType -notin @(
+                [System.Windows.Automation.ControlType]::Edit,
+                [System.Windows.Automation.ControlType]::ComboBox
+            ) -or $element.Current.AutomationId -eq "addressEditBox" -or
+            $element.Current.Name -match "Address|search|URL|Omnibox") { continue }
         try {
-            $valuePattern = $edit.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
+            $valuePattern = $element.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern)
             $candidate = [string]$valuePattern.Current.Value
             $candidateUri = $null
             if ([Uri]::TryCreate($candidate, [UriKind]::Absolute, [ref]$candidateUri) -and $candidateUri.Scheme -in @("http", "https")) {
-                $candidates += $edit
+                $candidates += $element
             }
         } catch {
             # Controls can disappear while the browser updates its tree.

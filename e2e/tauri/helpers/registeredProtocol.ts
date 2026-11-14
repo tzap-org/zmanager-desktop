@@ -1,5 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { copyFileSync, existsSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
@@ -116,6 +117,7 @@ export async function observeWindowsDefaultBrowserNavigation(
 
     // Baseline collection must finish before the opener can navigate. Starting
     // an observer promise beside the UI click does not establish that ordering.
+    const navigationStartedAtUnixMs = Date.now();
     await triggerNavigation();
     const exitCode = await exit;
     const line = stdout.trim().split(/\r?\n/u).filter(Boolean).at(-1);
@@ -126,6 +128,12 @@ export async function observeWindowsDefaultBrowserNavigation(
       // The sanitized fallback below avoids echoing PowerShell/UIA output.
     }
     if (exitCode !== 0 || result.status !== "observed") {
+      const historyObservation = await observeWindowsBrowserHistoryNavigation(
+        expectedOrigin,
+        navigationStartedAtUnixMs,
+        5,
+      );
+      if (historyObservation) return historyObservation;
       throw new Error(`Default browser navigation was not observed (${result.errorCode ?? "observer_failed"}).`);
     }
     if (stderr.trim()) {
@@ -144,6 +152,100 @@ export async function observeWindowsDefaultBrowserNavigation(
     if (child.exitCode === null && child.signalCode === null) child.kill();
     await exit;
     rmSync(observerDirectory, { recursive: true, force: true });
+  }
+}
+
+type ChromiumHistoryDatabase = Readonly<{ path: string }>;
+type ChromiumHistoryRow = Readonly<{ url: unknown; visit_time: unknown }>;
+type ChromiumHistoryStatement = Readonly<{
+  all: (...parameters: Array<string | number | bigint | null>) => ChromiumHistoryRow[];
+}>;
+type ChromiumHistoryConnection = Readonly<{
+  prepare: (query: string) => ChromiumHistoryStatement;
+  close: () => void;
+}>;
+
+/**
+ * Windows runner images can expose an Edge top-level window without exposing
+ * its address bar through UI Automation. Edge's Chromium history records the
+ * navigation independently, so use a read-only snapshot as a fallback after
+ * the UIA observer has completed. The full URL stays in memory and is returned
+ * only to the existing staging login flow.
+ */
+async function observeWindowsBrowserHistoryNavigation(
+  expectedOrigin: string,
+  navigationStartedAtUnixMs: number,
+  timeoutSeconds: number,
+): Promise<DefaultBrowserObservation | null> {
+  const localAppData = process.env.LOCALAPPDATA;
+  if (!localAppData) return null;
+
+  const userDataRoots = [
+    path.join(localAppData, "Microsoft", "Edge", "User Data"),
+    path.join(localAppData, "Google", "Chrome", "User Data"),
+  ];
+  const databases: ChromiumHistoryDatabase[] = userDataRoots.flatMap((root) => {
+    if (!existsSync(root)) return [];
+    return readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => ({ path: path.join(root, entry.name, "History") }))
+      .filter((database) => existsSync(database.path));
+  });
+  if (databases.length === 0) return null;
+
+  const require = createRequire(import.meta.url);
+  const { DatabaseSync } = require("node:sqlite") as {
+    DatabaseSync: new (location: string) => ChromiumHistoryConnection;
+  };
+  const snapshotDirectory = mkdtempSync(path.join(tmpdir(), "zmanager-browser-history-"));
+  const visitThreshold = navigationStartedAtUnixMs * 1_000 + 11_644_473_600_000_000;
+  const query = "SELECT visits.visit_time AS visit_time, urls.url AS url FROM visits JOIN urls ON urls.id = visits.url WHERE visits.visit_time > ? ORDER BY visits.visit_time DESC LIMIT 100";
+
+  try {
+    const deadline = Date.now() + timeoutSeconds * 1_000;
+    while (Date.now() < deadline) {
+      for (const [index, database] of databases.entries()) {
+        const snapshot = path.join(snapshotDirectory, `${index}-History`);
+        try {
+          for (const suffix of ["", "-wal", "-shm"]) {
+            rmSync(`${snapshot}${suffix}`, { force: true });
+          }
+          copyFileSync(database.path, snapshot);
+          for (const suffix of ["-wal", "-shm"]) {
+            const sidecar = `${database.path}${suffix}`;
+            if (existsSync(sidecar)) copyFileSync(sidecar, `${snapshot}${suffix}`);
+          }
+
+          const connection = new DatabaseSync(snapshot);
+          let rows: ChromiumHistoryRow[];
+          try {
+            rows = connection.prepare(query).all(visitThreshold);
+          } finally {
+            connection.close();
+          }
+          for (const row of rows) {
+            if (typeof row.url !== "string" || typeof row.visit_time !== "number") continue;
+            let parsed: URL;
+            try { parsed = new URL(row.url); } catch { continue; }
+            if (parsed.origin !== expectedOrigin) continue;
+            return {
+              status: "observed",
+              origin: parsed.origin,
+              path: parsed.pathname,
+              queryKeys: [...parsed.searchParams.keys()].sort().join(","),
+              launchUrl: row.url,
+              observedAtUnixMs: Math.floor(row.visit_time / 1_000 - 11_644_473_600_000),
+            };
+          }
+        } catch {
+          // Edge may be writing its database while the point-in-time copy is made.
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return null;
+  } finally {
+    rmSync(snapshotDirectory, { recursive: true, force: true });
   }
 }
 
