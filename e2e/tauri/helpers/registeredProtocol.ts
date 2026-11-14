@@ -115,6 +115,12 @@ export async function observeWindowsDefaultBrowserNavigation(
       throw new Error("Default browser observer did not become ready.");
     }
 
+    const cdpPortText = process.env.TZAP_E2E_EDGE_CDP_PORT;
+    const cdpPort = cdpPortText ? Number.parseInt(cdpPortText, 10) : null;
+    const cdpBaseline = cdpPort && Number.isInteger(cdpPort)
+      ? await readWindowsCdpPages(cdpPort)
+      : null;
+
     // Baseline collection must finish before the opener can navigate. Starting
     // an observer promise beside the UI click does not establish that ordering.
     const navigationStartedAtUnixMs = Date.now();
@@ -128,6 +134,15 @@ export async function observeWindowsDefaultBrowserNavigation(
       // The sanitized fallback below avoids echoing PowerShell/UIA output.
     }
     if (exitCode !== 0 || result.status !== "observed") {
+      if (cdpPort && cdpBaseline) {
+        const cdpObservation = await observeWindowsCdpNavigation(
+          expectedOrigin,
+          cdpPort,
+          cdpBaseline,
+          5,
+        );
+        if (cdpObservation) return cdpObservation;
+      }
       const historyObservation = await observeWindowsBrowserHistoryNavigation(
         expectedOrigin,
         navigationStartedAtUnixMs,
@@ -153,6 +168,54 @@ export async function observeWindowsDefaultBrowserNavigation(
     await exit;
     rmSync(observerDirectory, { recursive: true, force: true });
   }
+}
+
+type WindowsCdpPage = Readonly<{ id: string; type: string; url: string }>;
+
+async function readWindowsCdpPages(port: number): Promise<WindowsCdpPage[] | null> {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(1_000) });
+    if (!response.ok) return null;
+    const targets: unknown = await response.json();
+    if (!Array.isArray(targets)) return null;
+    return targets.filter((target): target is WindowsCdpPage =>
+      typeof target === "object" && target !== null &&
+      typeof (target as WindowsCdpPage).id === "string" &&
+      typeof (target as WindowsCdpPage).type === "string" &&
+      typeof (target as WindowsCdpPage).url === "string",
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function observeWindowsCdpNavigation(
+  expectedOrigin: string,
+  port: number,
+  baseline: WindowsCdpPage[],
+  timeoutSeconds: number,
+): Promise<DefaultBrowserObservation | null> {
+  const baselineUrls = new Map(baseline.map((target) => [target.id, target.url]));
+  const deadline = Date.now() + timeoutSeconds * 1_000;
+  while (Date.now() < deadline) {
+    const targets = await readWindowsCdpPages(port);
+    for (const target of targets ?? []) {
+      if (target.type !== "page" || baselineUrls.get(target.id) === target.url) continue;
+      let parsed: URL;
+      try { parsed = new URL(target.url); } catch { continue; }
+      if (parsed.origin !== expectedOrigin) continue;
+      return {
+        status: "observed",
+        origin: parsed.origin,
+        path: parsed.pathname,
+        queryKeys: [...parsed.searchParams.keys()].sort().join(","),
+        launchUrl: target.url,
+        observedAtUnixMs: Date.now(),
+      };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return null;
 }
 
 type ChromiumHistoryDatabase = Readonly<{ path: string }>;

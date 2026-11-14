@@ -98,6 +98,11 @@ if ([string]::IsNullOrWhiteSpace($edgePath) -or -not (Test-Path -LiteralPath $ed
 $edgeDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($edgePath))
 $env:PATH = "$edgeDirectory;$env:PATH"
 $env:VITE_ZMANAGER_GUI_TEST_BROWSER = [IO.Path]::GetFullPath($edgePath)
+$edgeCdpPort = 9222
+$edgeCdpHarnessEnabled = $env:GITHUB_ACTIONS -eq "true"
+if ($edgeCdpHarnessEnabled) {
+    $env:TZAP_E2E_EDGE_CDP_PORT = [string]$edgeCdpPort
+}
 Write-Host "Windows staging GUI E2E browser: $([IO.Path]::GetFileName($edgePath))"
 Write-Host "Hosted account standalone E2E environment: staging"
 
@@ -289,6 +294,38 @@ try {
         installedFileVersion = $installedVersion
     } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $artifactRoot "artifact-metadata.json")
 
+    if ($edgeCdpHarnessEnabled) {
+        $existingEdge = @(Get-Process -Name "msedge" -ErrorAction SilentlyContinue)
+        if ($existingEdge.Count -gt 0) {
+            $existingEdge | Stop-Process -Force -ErrorAction SilentlyContinue
+            foreach ($process in $existingEdge) {
+                try { $process.WaitForExit(5000) | Out-Null } catch { }
+            }
+        }
+        $portListener = Get-NetTCPConnection -LocalPort $edgeCdpPort -State Listen -ErrorAction SilentlyContinue
+        if ($portListener) {
+            throw "Edge DevTools port $edgeCdpPort is already in use."
+        }
+        Write-Host "Starting isolated Edge observation endpoint on 127.0.0.1:$edgeCdpPort"
+        Start-Process `
+            -FilePath ([IO.Path]::GetFullPath($edgePath)) `
+            -ArgumentList @("--remote-debugging-port=$edgeCdpPort", "--no-first-run", "about:blank") `
+            -WindowStyle Normal | Out-Null
+        $edgeReady = $false
+        $edgeDeadline = [DateTime]::UtcNow.AddSeconds(20)
+        while (-not $edgeReady -and [DateTime]::UtcNow -lt $edgeDeadline) {
+            try {
+                $version = Invoke-RestMethod -Uri "http://127.0.0.1:$edgeCdpPort/json/version" -TimeoutSec 2
+                $edgeReady = -not [string]::IsNullOrWhiteSpace([string]$version.Browser)
+            } catch {
+                Start-Sleep -Milliseconds 250
+            }
+        }
+        if (-not $edgeReady) {
+            throw "Edge did not expose the local DevTools endpoint on port $edgeCdpPort."
+        }
+    }
+
     $env:ZMANAGER_GUI_APP_PATH = (Resolve-Path -LiteralPath $installedExe).Path
     Write-Host "Running staging $configuration standalone E2E against installed application: $env:ZMANAGER_GUI_APP_PATH"
     $npm = Get-Command "npm.cmd" -ErrorAction Stop
@@ -317,6 +354,10 @@ try {
 } finally {
     if (Test-Path -LiteralPath $installedExe -PathType Leaf) {
         Stop-InstalledAppProcesses -ExecutablePath $installedExe
+    }
+    if ($edgeCdpHarnessEnabled) {
+        Get-Process -Name "msedge" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Remove-Item -Path "env:TZAP_E2E_EDGE_CDP_PORT" -ErrorAction SilentlyContinue
     }
     $diagnosticLogPath = Join-Path $installDir "logs\zmanager-diagnostics.log"
     if (Test-Path -LiteralPath $diagnosticLogPath -PathType Leaf) {
