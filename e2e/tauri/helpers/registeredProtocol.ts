@@ -160,7 +160,13 @@ async function observeWindowsCapturedHostedLaunch(
 ): Promise<DefaultBrowserObservation> {
   const resolvedLaunchPath = path.resolve(launchPath);
   const temporaryRoot = path.resolve(tmpdir());
-  const relativePath = path.relative(temporaryRoot, resolvedLaunchPath);
+  const pathForComparison = process.platform === "win32"
+    ? (value: string) => value.toLocaleLowerCase("en-US")
+    : (value: string) => value;
+  const relativePath = path.relative(
+    pathForComparison(temporaryRoot),
+    pathForComparison(resolvedLaunchPath),
+  );
   if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
     throw new Error("The hosted launch capture path must stay under the system temporary directory.");
   }
