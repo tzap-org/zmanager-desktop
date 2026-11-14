@@ -15,7 +15,15 @@ test("the product defaults to the local profile and exposes online explicitly", 
 
 test("the opener capability includes a scoped default URL permission", () => {
   const capability = JSON.parse(readFileSync(resolve(repositoryRoot, "src-tauri/capabilities/default.json"), "utf8"));
-  assert.ok(capability.permissions.includes("opener:allow-open-url"), "the app must authorize the opener open_url command");
+  const openUrlPermission = capability.permissions.find((permission) =>
+    typeof permission === "string"
+      ? permission === "opener:allow-open-url"
+      : permission.identifier === "opener:allow-open-url",
+  );
+  assert.deepEqual(openUrlPermission, {
+    identifier: "opener:allow-open-url",
+    allow: [{ url: "https://staging.tzap.org/*", app: "msedge" }],
+  }, "the app must authorize only the staging URL opened with Edge");
   assert.ok(capability.permissions.includes("opener:allow-default-urls"), "the app must allow the system browser URL scope");
 });
 
