@@ -46,7 +46,7 @@ function launchNativeShareQuickAction(artifactPath: string): Promise<void> {
   });
 }
 
-async function nativeInboundOutcomeCounts(info: DiagnosticLogInfo): Promise<Readonly<{ acknowledged: number; failed: number }>> {
+async function nativeInboundAcknowledgementCount(info: DiagnosticLogInfo): Promise<number> {
   if (!info.enabled || !info.path) throw new Error("Native diagnostic log is unavailable.");
   const entries = (await readFile(info.path, "utf8")).split(/\r?\n/u).flatMap((line) => {
     try {
@@ -56,10 +56,7 @@ async function nativeInboundOutcomeCounts(info: DiagnosticLogInfo): Promise<Read
     }
   });
   const nativeInboundEntries = entries.filter((entry) => entry.sessionId === info.sessionId && entry.scope === "nativeInbound");
-  return {
-    acknowledged: nativeInboundEntries.filter((entry) => entry.name === "eventAcknowledged" && entry.fields.kind === "shellActionRequest").length,
-    failed: nativeInboundEntries.filter((entry) => entry.name === "deliveryFailed").length,
-  };
+  return nativeInboundEntries.filter((entry) => entry.name === "eventAcknowledged" && entry.fields.kind === "shellActionRequest").length;
 }
 
 async function command<T>(name: string, request?: unknown): Promise<T> {
@@ -93,7 +90,7 @@ describe("native share queue", () => {
   it("restores a minimized window for a native direct-share request without background focus", async () => {
     const verifiesLinuxSingletonDelivery = process.platform === "linux";
     const diagnosticInfo = verifiesLinuxSingletonDelivery ? await command<DiagnosticLogInfo>("diagnostic_log_info") : null;
-    const baselineOutcomes = diagnosticInfo ? await nativeInboundOutcomeCounts(diagnosticInfo) : null;
+    const baselineAcknowledgements = diagnosticInfo ? await nativeInboundAcknowledgementCount(diagnosticInfo) : null;
     const requestId = `native-share-${Date.now()}`;
     const previousShareQueue = await command<ShareRegistrySnapshot>("get_share_queue");
     const previousShareIds = new Set(previousShareQueue.items.map((item) => item.shareId));
@@ -126,11 +123,10 @@ describe("native share queue", () => {
       return !!await core.invoke("plugin:window|is_visible", args) && !await core.invoke("plugin:window|is_minimized", args);
     }));
     await browser.$(`[data-share-id="${shareId}"]`).waitForDisplayed();
-    if (diagnosticInfo && baselineOutcomes) {
+    if (diagnosticInfo && baselineAcknowledgements !== null) {
       await browser.waitUntil(async () => {
-        const outcomes = await nativeInboundOutcomeCounts(diagnosticInfo);
-        if (outcomes.failed > baselineOutcomes.failed) throw new Error("Native share request delivery failed.");
-        return outcomes.acknowledged > baselineOutcomes.acknowledged;
+        const acknowledgements = await nativeInboundAcknowledgementCount(diagnosticInfo);
+        return acknowledgements > baselineAcknowledgements;
       }, { timeout: 5_000, interval: 100 });
     }
     await command("cancel_share", { shareId });

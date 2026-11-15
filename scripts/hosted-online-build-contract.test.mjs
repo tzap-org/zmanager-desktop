@@ -24,9 +24,12 @@ test("the opener capability includes a scoped default URL permission", () => {
     identifier: "opener:allow-open-url",
     allow: [{
       url: "https://staging.tzap.org/*",
-      app: "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+      app: "msedge.exe",
     }],
   }, "the app must authorize only the staging URL opened with Edge");
+  const standaloneRunner = readFileSync(resolve(repositoryRoot, "scripts/test-windows-standalone-staging.ps1"), "utf8");
+  assert.match(standaloneRunner, /VITE_ZMANAGER_GUI_TEST_BROWSER = "msedge\.exe"/u);
+  assert.match(standaloneRunner, /\$env:PATH = "\$edgeDirectory;\$env:PATH"/u);
   assert.ok(capability.permissions.includes("opener:allow-default-urls"), "the app must allow the system browser URL scope");
 });
 
