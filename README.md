@@ -15,7 +15,7 @@ If someone sends you an archive and you are not sure which tool to use, start
 with ZManager. It can open a very broad range of existing files, while keeping
 new archive creation focused on formats that are fast, compatible, or secure.
 
-## Latest release: 1.2.8
+## Latest release: 1.2.7
 
 The latest release packages the cross-platform desktop app for macOS arm64 and
 x86_64, Windows x64 and ARM64, and Linux x64 and ARM64. Release assets include
@@ -23,14 +23,7 @@ macOS DMG and ZIP packages, Windows installer and portable binaries, Linux DEB
 and RPM packages, a generated third-party license bundle, and SHA256 checksums
 for verification.
 
-### What's new in 1.2.8
-
-- Updated the archive engine to ZManager 2.2.1 and TZAP to 0.2.9.
-- Improved Windows Explorer integration, sharing, and hosted sign-in browser handling.
-- Validate preview and job output paths before opening them outside the app.
-- Updated audited dependencies and standardized release builds on patched OpenSSL 3.5.9.
-
-See the [full release notes](https://github.com/tzap-org/zmanager-desktop/releases/tag/v1.2.8)
+See the [full release notes](https://github.com/tzap-org/zmanager-desktop/releases/tag/v1.2.7)
 and download the installers from [GitHub Releases](https://github.com/tzap-org/zmanager-desktop/releases/latest).
 
 ## What can I do with it?
