@@ -23,7 +23,7 @@ Release baseline:
   names, including nautilus-python for the GNOME Files extension host.
 
 Fedora prerequisites:
-  sudo dnf install ca-certificates cmake curl file gcc gcc-c++ make pkgconf-pkg-config openssl-devel webkit2gtk4.1-devel libsoup3-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel libxdo-devel bzip2-devel expat-devel libacl-devel lz4-devel xz-devel libzstd-devel zlib-devel libxml2-devel rpm-build patchelf nautilus-python perl-IPC-Cmd
+  sudo dnf install ca-certificates cmake curl file gcc gcc-c++ make pkgconf-pkg-config openssl-devel webkit2gtk4.1-devel libsoup3-devel gtk3-devel libappindicator-gtk3-devel librsvg2-devel libxdo-devel bzip2-devel expat-devel libacl-devel lz4-devel xz-devel libzstd-devel zlib-devel libxml2-devel rpm-build patchelf nautilus-python perl-FindBin perl-IPC-Cmd
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
   curl -fsSL https://rpm.nodesource.com/setup_24.x | sudo -E bash -
   sudo dnf install nodejs
@@ -133,6 +133,7 @@ fedora_packages=(
   rpm-build
   patchelf
   nautilus-python
+  perl-FindBin
   perl-IPC-Cmd
   python3
 )

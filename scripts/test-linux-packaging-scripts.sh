@@ -278,6 +278,10 @@ for package_name in "${fedora_libarchive_packages[@]}"; do
     exit 1
   fi
 done
+if [[ " $fedora_install_line " != *" perl-FindBin "* ]]; then
+  echo "Expected --install-deps to install Fedora's Perl FindBin module for the pinned OpenSSL build." >&2
+  exit 1
+fi
 
 if [[ " $fedora_install_line " == *" nodejs "* ]]; then
   echo "Expected nodejs not to be in default Fedora build package list (handled via NodeSource)." >&2
