@@ -251,7 +251,7 @@ jobs:
         if: matrix.flavor == 'linux-rpm'
         shell: bash
         run: |
-          dnf install -y python3 git ripgrep ca-certificates rust cargo perl-FindBin
+          dnf install -y python3 git ripgrep ca-certificates rust cargo perl
           npm ci
           scripts/ensure-sibling-repos.sh
 
@@ -410,7 +410,7 @@ jobs:
         if: matrix.flavor == 'linux-rpm'
         shell: bash
         run: |
-          dnf install -y python3 git ripgrep ca-certificates rust cargo perl-FindBin
+          dnf install -y python3 git ripgrep ca-certificates rust cargo perl
           npm ci
           scripts/ensure-sibling-repos.sh
 
