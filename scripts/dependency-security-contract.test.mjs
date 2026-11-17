@@ -152,6 +152,9 @@ test("release pins the released sibling cores and bootstraps reject lockfile dri
   assert.match(opensslSetup, /OPENSSL_STATIC=1/);
   assert.match(opensslSetup, /OPENSSL_NO_VENDOR=1/);
   assert.match(opensslSetup, /e08c7ad5e3f31488eb622515da4434a858038873b07fa1f021271c98bed8e2fe/);
-  assert.match(read("scripts/setup-windows-static-env.ps1"), /3\.5\.9/);
+  const windowsOpenSslSetup = read("scripts/setup-windows-static-env.ps1");
+  assert.match(windowsOpenSslSetup, /3\.5\.9/);
+  assert.match(windowsOpenSslSetup, /cargo\\s\+\(test\|check\|build\|clippy\)/);
+  assert.match(read("scripts/test-windows-standalone-staging.ps1"), /-Run "tauri build"/);
   assert.match(read("scripts/generate-third-party-notices.py"), /collect_pinned_openssl_notice/);
 });

@@ -173,7 +173,8 @@ if ($LASTEXITCODE -ne 0) {
     -PerlBin $PerlBin `
     -Architecture $resolvedArchitecture `
     -Triplet $Triplet `
-    -InstallClang:$InstallMissing
+    -InstallClang:$InstallMissing `
+    -Run "tauri build"
 
 $shellExtensionBuild = Join-Path $PSScriptRoot "build-windows-shell-extension.ps1"
 & powershell -ExecutionPolicy Bypass -File $shellExtensionBuild -Architecture $resolvedArchitecture

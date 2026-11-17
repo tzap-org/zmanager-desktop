@@ -354,7 +354,7 @@ $env:OPENSSL_DIR = Join-Path $VcpkgRoot "installed\$Triplet"
 $env:OPENSSL_STATIC = "1"
 $env:OPENSSL_NO_VENDOR = "1"
 
-if ($Run -match "(?i)(src-tauri[\\/]Cargo\.toml|tauri\.js|tauri build)") {
+if ($Run -match "(?i)(src-tauri[\\/]Cargo\.toml|tauri\.js|tauri build|cargo\s+(test|check|build|clippy))") {
     $opensslTarget = if ($resolvedArchitecture -eq "arm64") { "aarch64-pc-windows-msvc" } else { "x86_64-pc-windows-msvc" }
     $opensslBuilder = Join-Path (Split-Path $PSScriptRoot -Parent) "..\zmanager\scripts\build-openssl.py"
     if (-not (Test-Path -LiteralPath $opensslBuilder -PathType Leaf)) {
