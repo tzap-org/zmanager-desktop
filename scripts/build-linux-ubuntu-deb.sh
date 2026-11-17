@@ -24,7 +24,7 @@ Release baseline:
 
 Ubuntu prerequisites:
   sudo apt-get update
-  sudo apt-get install build-essential ca-certificates cmake curl file gnupg libacl1-dev libayatana-appindicator3-dev libbz2-dev libexpat1-dev libgtk-3-dev liblz4-dev liblzma-dev libxml2-dev libsoup-3.0-dev librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev libzstd-dev patchelf pkg-config zlib1g-dev
+  sudo apt-get install build-essential ca-certificates cmake curl file gnupg libacl1-dev libayatana-appindicator3-dev libbz2-dev libexpat1-dev libgtk-3-dev liblz4-dev liblzma-dev libxml2-dev libsoup-3.0-dev librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev libzstd-dev patchelf perl pkg-config zlib1g-dev
   curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
   curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
   sudo apt-get install nodejs
@@ -134,6 +134,7 @@ ubuntu_packages=(
   libxdo-dev
   libzstd-dev
   patchelf
+  perl
   pkg-config
   ripgrep
   zlib1g-dev
@@ -197,7 +198,7 @@ npm_install_required() {
 collect_missing_commands() {
   local command_name
   missing_commands=()
-  required_commands=(git node npm cargo rustc pkg-config dpkg-deb cmake)
+  required_commands=(git node npm cargo rustc pkg-config dpkg-deb cmake perl)
   if ((install_package)); then
     required_commands+=(apt-get)
     if ((EUID != 0)); then
@@ -298,8 +299,8 @@ fi
 
 rust_major="$(version_major rustc)"
 rust_minor="$(version_minor rustc)"
-if ((rust_major < 1 || (rust_major == 1 && rust_minor < 85))); then
-  echo "Rust 1.85 or newer is required for the Rust 2024 edition used by src-tauri/Cargo.toml." >&2
+if ((rust_major < 1 || (rust_major == 1 && rust_minor < 93))); then
+  echo "Rust 1.93 or newer is required by the pinned ZManager core." >&2
   echo "Current rustc: $(rustc --version)" >&2
   echo "Install or select a current toolchain, for example: rustup update stable" >&2
   exit 1
@@ -324,6 +325,9 @@ if ((deps_only)); then
   echo "Dependencies installed and sibling repos synced; skipping tests and build (--deps-only)."
   exit 0
 fi
+
+source scripts/pinned-openssl.sh
+zmanager_configure_pinned_openssl
 
 if ((!skip_tests)); then
   npm run test:frontend

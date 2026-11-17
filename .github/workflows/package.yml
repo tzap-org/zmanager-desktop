@@ -83,6 +83,8 @@ jobs:
           npx playwright install --with-deps chromium
           scripts/ensure-sibling-repos.sh
           scripts/sync-uniffi-swift-bindings.sh
+          source scripts/pinned-openssl.sh
+          zmanager_configure_pinned_openssl "${{ matrix.arch == 'arm64' && 'aarch64-apple-darwin' || 'x86_64-apple-darwin' }}"
 
       - name: Run macOS migration, E2E visual scans, and contract tests
         if: matrix.flavor == 'macos'
@@ -207,6 +209,8 @@ jobs:
         if: matrix.flavor == 'linux-deb'
         shell: bash
         run: |
+          source scripts/pinned-openssl.sh
+          zmanager_configure_pinned_openssl
           npm run test:frontend
           (cd src-tauri && cargo fmt --check)
           (cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings)

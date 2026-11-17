@@ -69,18 +69,21 @@ jobs:
           node <<'NODE'
           const fs = require('node:fs');
           const source = fs.readFileSync('.github/workflows/release.yml', 'utf8');
-          const revision = source.match(/^  ZMANAGER_ZMANAGER_REF: ([0-9a-f]{40})$/m)?.[1];
-          if (!revision) throw new Error('Release must pin a reviewed core commit');
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `revision=${revision}\n`);
+          const coreRevision = source.match(/^  ZMANAGER_ZMANAGER_REF: ([0-9a-f]{40})$/m)?.[1];
+          const tzapRevision = source.match(/^  ZMANAGER_TZAP_REF: ([0-9a-f]{40})$/m)?.[1];
+          if (!coreRevision || !tzapRevision) throw new Error('Release must pin reviewed ZManager and TZAP commits');
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `core_revision=${coreRevision}\ntzap_revision=${tzapRevision}\n`);
           NODE
       - uses: actions/checkout@v6
         with:
           repository: tzap-org/zmanager
-          ref: ${{ steps.core.outputs.revision }}
+          ref: ${{ steps.core.outputs.core_revision }}
           path: .audit/core
-      - name: Clone sibling TZAP dependency
-        working-directory: .audit/core
-        run: git clone https://github.com/tzap-org/tzap.git ../tzap
+      - uses: actions/checkout@v6
+        with:
+          repository: tzap-org/tzap
+          ref: ${{ steps.core.outputs.tzap_revision }}
+          path: .audit/tzap
       - name: Clone core's pinned sibling repositories
         working-directory: .audit/core
         run: |

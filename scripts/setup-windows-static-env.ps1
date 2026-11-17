@@ -340,7 +340,7 @@ if (-not (Test-Path $toolchainFile)) {
 
 if ((-not (Test-Path $include)) -or (-not (Test-Path $debugLib)) -or (-not (Test-Path $releaseLib))) {
     $vcpkgExe = Join-Path $VcpkgRoot "vcpkg.exe"
-    throw "vcpkg dependencies were not found for triplet '$Triplet'. Run: $vcpkgExe install zlib bzip2 liblzma zstd lz4 openssl --triplet $Triplet"
+    throw "vcpkg dependencies were not found for triplet '$Triplet'. Run: $vcpkgExe install zlib bzip2 liblzma zstd lz4 --triplet $Triplet"
 }
 
 $env:VCPKG_INSTALLATION_ROOT = $VcpkgRoot
@@ -348,11 +348,36 @@ $env:VCPKG_ROOT = $VcpkgRoot
 $env:CMAKE_TOOLCHAIN_FILE = $toolchainFile
 $env:VCPKG_DEFAULT_TRIPLET = $Triplet
 $env:VCPKG_TARGET_TRIPLET = $Triplet
-# Point openssl-sys to the vcpkg-installed OpenSSL so it doesn't try to
-# build from source (which is unreliable on ARM64 Windows).
+# Seed a fallback for tools that use the Windows static environment without
+# compiling the desktop. Desktop Cargo builds replace it with pinned OpenSSL.
 $env:OPENSSL_DIR = Join-Path $VcpkgRoot "installed\$Triplet"
 $env:OPENSSL_STATIC = "1"
 $env:OPENSSL_NO_VENDOR = "1"
+
+if ($Run -match "(?i)(src-tauri[\\/]Cargo\.toml|tauri\.js|tauri build)") {
+    $opensslTarget = if ($resolvedArchitecture -eq "arm64") { "aarch64-pc-windows-msvc" } else { "x86_64-pc-windows-msvc" }
+    $opensslBuilder = Join-Path (Split-Path $PSScriptRoot -Parent) "..\zmanager\scripts\build-openssl.py"
+    if (-not (Test-Path -LiteralPath $opensslBuilder -PathType Leaf)) {
+        throw "Pinned ZManager OpenSSL builder is missing: $opensslBuilder. Run scripts/ensure-sibling-repos.ps1 first."
+    }
+    $opensslBuilder = (Resolve-Path -LiteralPath $opensslBuilder).Path
+    $opensslDir = & python $opensslBuilder $opensslTarget
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($opensslDir)) {
+        throw "Could not provision patched OpenSSL 3.5.9 for $opensslTarget."
+    }
+    $opensslNotice = Join-Path $opensslDir "THIRD-PARTY-NOTICES.txt"
+    if (-not (Test-Path -LiteralPath $opensslNotice -PathType Leaf) -or
+        -not (Select-String -LiteralPath $opensslNotice -Pattern "e08c7ad5e3f31488eb622515da4434a858038873b07fa1f021271c98bed8e2fe" -Quiet)) {
+        throw "The OpenSSL installation does not include the expected RSA-PSS provider alias patch: $opensslDir"
+    }
+    $env:OPENSSL_DIR = $opensslDir.Trim()
+    $env:OPENSSL_STATIC = "1"
+    $env:OPENSSL_NO_VENDOR = "1"
+    if ($env:GITHUB_ENV) {
+        @("OPENSSL_DIR=$($env:OPENSSL_DIR)", "OPENSSL_STATIC=1", "OPENSSL_NO_VENDOR=1") | Add-Content -LiteralPath $env:GITHUB_ENV
+    }
+}
+
 $env:LIB = "$debugLib;$releaseLib;" + $env:LIB
 $env:INCLUDE = "$include;" + $env:INCLUDE
 

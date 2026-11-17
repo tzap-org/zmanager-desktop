@@ -88,12 +88,12 @@ with the WDIO bridge before Tauri embeds the assets.
 
 ## Linux build prerequisites
 
-Ubuntu/Debian builds need Rust 1.85+ and native dependencies for the Tauri and
-archiving stack.
+Ubuntu/Debian builds need Rust 1.93+ for the pinned ZManager core and native
+dependencies for the Tauri and archiving stack.
 
 ```sh
 sudo apt-get update
-sudo apt-get install build-essential ca-certificates cmake curl file gnupg libacl1-dev libayatana-appindicator3-dev libbz2-dev libexpat1-dev libgtk-3-dev liblz4-dev liblzma-dev libxml2-dev libsoup-3.0-dev librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev libzstd-dev patchelf pkg-config zlib1g-dev
+sudo apt-get install build-essential ca-certificates cmake curl file gnupg libacl1-dev libayatana-appindicator3-dev libbz2-dev libexpat1-dev libgtk-3-dev liblz4-dev liblzma-dev libxml2-dev libsoup-3.0-dev librsvg2-dev libssl-dev libwebkit2gtk-4.1-dev libxdo-dev libzstd-dev patchelf perl pkg-config zlib1g-dev
 ```
 
 These packages provide `cmake` for the bundled libarchive build, every enabled

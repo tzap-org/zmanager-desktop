@@ -309,8 +309,8 @@ fi
 
 rust_major="$(version_major rustc)"
 rust_minor="$(version_minor rustc)"
-if ((rust_major < 1 || (rust_major == 1 && rust_minor < 85))); then
-  echo "Rust 1.85 or newer is required. Current rustc: $(rustc --version)" >&2
+if ((rust_major < 1 || (rust_major == 1 && rust_minor < 93))); then
+  echo "Rust 1.93 or newer is required by the pinned ZManager core. Current rustc: $(rustc --version)" >&2
   echo "Update the stable toolchain with: rustup update stable" >&2
   exit 1
 fi
@@ -328,6 +328,8 @@ fi
 
 scripts/ensure-sibling-repos.sh
 scripts/sync-uniffi-swift-bindings.sh
+source scripts/pinned-openssl.sh
+zmanager_configure_pinned_openssl "$rust_triple"
 
 if ((!skip_tests)); then
   npm run test:frontend

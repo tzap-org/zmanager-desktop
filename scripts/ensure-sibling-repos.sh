@@ -13,9 +13,9 @@ set -euo pipefail
 #
 # Override defaults via environment variables:
 #   ZMANAGER_TZAP_REPO                 – tzap repository URL
-#   ZMANAGER_TZAP_REF                  – branch or tag to check out (default: main)
+#   ZMANAGER_TZAP_REF                  – branch, tag or commit to check out (default: reviewed release commit)
 #   ZMANAGER_ZMANAGER_REPO             – zmanager repository URL
-#   ZMANAGER_ZMANAGER_REF              – branch, tag or commit (default: reviewed security commit)
+#   ZMANAGER_ZMANAGER_REF              – branch, tag or commit (default: reviewed release commit)
 #   ZMANAGER_LOCALSEND_REPO            – localsend-rs repository URL
 #   ZMANAGER_LOCALSEND_REF             – branch or tag to check out (default: main)
 #   ZMANAGER_LOCALSEND_DIR             – absolute path for localsend-rs clone
@@ -31,11 +31,11 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 parent_dir="$(cd "$repo_root/.." && pwd)"
 
 tzap_repo="${ZMANAGER_TZAP_REPO:-https://github.com/tzap-org/tzap}"
-tzap_ref="${ZMANAGER_TZAP_REF:-main}"
+tzap_ref="${ZMANAGER_TZAP_REF:-69f53d71ad13876cbf74fac38f5f3aa2cf412920}"
 tzap_dir="${ZMANAGER_TZAP_DIR:-$parent_dir/tzap}"
 
 zmanager_repo="${ZMANAGER_ZMANAGER_REPO:-https://github.com/tzap-org/zmanager}"
-zmanager_ref="${ZMANAGER_ZMANAGER_REF:-59443d1acb34dc12fc1057d1f56a8b882b6dc968}"
+zmanager_ref="${ZMANAGER_ZMANAGER_REF:-fdbc6ec84c1a56d5af7fc9bfd1edf296bab78ca8}"
 zmanager_dir="${ZMANAGER_ZMANAGER_DIR:-$parent_dir/zmanager}"
 
 localsend_repo="${ZMANAGER_LOCALSEND_REPO:-https://github.com/frankmanzhu/localsend-rs}"

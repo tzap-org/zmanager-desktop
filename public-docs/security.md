@@ -23,12 +23,18 @@ checks; artifact workflows enforce their own dependency on the gate.
 
 Both sibling bootstraps validate Cargo resolution with `--locked` before
 packaging, so a stale sibling manifest cannot silently replace audited
-dependencies. Releases pin the reviewed core source revision
-`59443d1acb34dc12fc1057d1f56a8b882b6dc968`, which includes the `async-executor`
-1.14.1 refresh and the `v2.2.0` release changes. The release security job audits
-this exact source revision's resolved core dependency graph before packaging.
-The shell and PowerShell bootstraps use the same pin by default. Developers
-can explicitly override `ZMANAGER_ZMANAGER_REF` while working on core changes.
+dependencies. Releases pin the released TZAP `v0.2.9` source revision
+`69f53d71ad13876cbf74fac38f5f3aa2cf412920` and ZManager `v2.2.1` source
+revision `fdbc6ec84c1a56d5af7fc9bfd1edf296bab78ca8`. The release security job
+audits the resolved core graph using those exact sibling commits before
+packaging. The shell and PowerShell bootstraps use the same pins by default.
+Developers can explicitly override `ZMANAGER_TZAP_REF` and
+`ZMANAGER_ZMANAGER_REF` while working on sibling changes.
+
+Desktop builds use the ZManager OpenSSL provisioning script. It builds OpenSSL
+3.5.9 with the shared RSA-PSS provider alias patch and verifies the patch hash
+before Cargo links TZAP key-wrap and signing support. The provisioner also
+writes the upstream license and patched-source notice into the install tree.
 
 ## Temporary forensic codec forks
 

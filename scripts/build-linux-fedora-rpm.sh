@@ -305,8 +305,8 @@ fi
 
 rust_major="$(version_major rustc)"
 rust_minor="$(version_minor rustc)"
-if ((rust_major < 1 || (rust_major == 1 && rust_minor < 85))); then
-  echo "Rust 1.85 or newer is required for the Rust 2024 edition used by src-tauri/Cargo.toml." >&2
+if ((rust_major < 1 || (rust_major == 1 && rust_minor < 93))); then
+  echo "Rust 1.93 or newer is required by the pinned ZManager core." >&2
   echo "Current rustc: $(rustc --version)" >&2
   echo "Install or select a current toolchain, for example: rustup update stable" >&2
   exit 1
@@ -335,6 +335,8 @@ if npm_install_required; then
 fi
 
 scripts/ensure-sibling-repos.sh
+source scripts/pinned-openssl.sh
+zmanager_configure_pinned_openssl
 
 cargo_target_dir="${CARGO_TARGET_DIR:-$repo_root/src-tauri/target}"
 if [[ -e "$cargo_target_dir" && ! -w "$cargo_target_dir" ]]; then

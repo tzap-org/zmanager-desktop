@@ -106,8 +106,7 @@ is `cmake` not installed?
 You can also run `scripts/build-linux-ubuntu-deb.sh --install-deps`, but it
 requires an interactive sudo session. The script installs missing Node.js 24
 and Rust through rustup, then reloads Cargo's environment before checking
-versions. The script expects Rust 1.85 or newer because the Tauri crate uses the
-Rust 2024 edition.
+versions. The script expects Rust 1.93 or newer for the pinned ZManager core.
 
 Fresh Fedora builders must install Tauri's native GTK/WebKit dependencies,
 RPM build tooling, and native archive/link dependencies:

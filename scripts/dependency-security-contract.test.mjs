@@ -18,8 +18,9 @@ test("security workflow audits npm and every desktop Rust lockfile without advis
   }
   assert.match(workflow, /cargo audit --deny yanked --file/);
   assert.match(workflow, /repository: tzap-org\/zmanager/);
-  assert.match(workflow, /ref: \$\{\{ steps\.core\.outputs\.revision \}\}/);
-  assert.ok(workflow.includes("git clone https://github.com/tzap-org/tzap.git"));
+  assert.match(workflow, /ref: \$\{\{ steps\.core\.outputs\.core_revision \}\}/);
+  assert.match(workflow, /repository: tzap-org\/tzap/);
+  assert.match(workflow, /tzap_revision/);
   assert.ok(workflow.includes("checkout-forensic-forks.mjs .audit"));
   assert.ok(workflow.includes("cargo update --package tzap-core"));
   assert.ok(workflow.includes("cargo update --package crypto-bigint"));
@@ -116,7 +117,11 @@ test("the product lockfile uses the reviewed codec sources and excludes yanked c
   const versions = (name) => packageEntries(name).map((entry) => entry.match(/^version = "([^"]+)"/m)?.[1]);
 
   assert.deepEqual(versions("backhand"), ["0.25.5"]);
-  assert.deepEqual(versions("tzap-core"), ["0.2.8"]);
+  assert.deepEqual(versions("tzap-core"), ["0.2.9"]);
+  assert.deepEqual(versions("tzap-plugin-keywrap"), ["0.2.9"]);
+  assert.deepEqual(versions("tzap-plugin-signing"), ["0.2.9"]);
+  assert.deepEqual(versions("openssl"), ["0.10.82"]);
+  assert.deepEqual(versions("openssl-sys"), ["0.9.118"]);
   assert.doesNotMatch(packageEntries("tzap-core")[0], /source =|checksum =/,
     "tzap-core must resolve to the local patch provisioned by the sibling bootstrap");
   assert.deepEqual(versions("zstd"), ["0.14.3"]);
@@ -124,16 +129,29 @@ test("the product lockfile uses the reviewed codec sources and excludes yanked c
   assert.deepEqual(versions("crypto-bigint"), ["0.7.10"]);
 });
 
-test("release pins the fixed core and bootstraps reject lockfile drift", () => {
+test("release pins the released sibling cores and bootstraps reject lockfile drift", () => {
   const reviewedCoreRevision = read(".github/workflows/release.yml").match(/ZMANAGER_ZMANAGER_REF: ([0-9a-f]{40})/)?.[1];
+  const reviewedTzapRevision = read(".github/workflows/release.yml").match(/ZMANAGER_TZAP_REF: ([0-9a-f]{40})/)?.[1];
   assert.ok(reviewedCoreRevision, "release must pin the reviewed core commit");
+  assert.ok(reviewedTzapRevision, "release must pin the reviewed TZAP commit");
   assert.ok(read(".github/workflows/release.yml").includes(`ZMANAGER_ZMANAGER_REF: ${reviewedCoreRevision}`));
+  assert.ok(read(".github/workflows/release.yml").includes(`ZMANAGER_TZAP_REF: ${reviewedTzapRevision}`));
   assert.match(read("scripts/ensure-sibling-repos.sh"), /cargo tree --locked --all-features --target all/);
   assert.match(read("scripts/ensure-sibling-repos.ps1"), /"tree", "--locked", "--all-features", "--target", "all"/);
   for (const path of ["scripts/ensure-sibling-repos.sh", "scripts/ensure-sibling-repos.ps1"]) {
     assert.ok(read(path).includes("400c3d719c4afe354b3d21d67f71c39092059eee"));
     const coreRevision = read(".github/workflows/release.yml").match(/ZMANAGER_ZMANAGER_REF: ([0-9a-f]{40})/)?.[1];
+    const tzapRevision = read(".github/workflows/release.yml").match(/ZMANAGER_TZAP_REF: ([0-9a-f]{40})/)?.[1];
     assert.ok(coreRevision && read(path).includes(coreRevision), `${path} must use the audited core revision`);
-    assert.equal(coreRevision, "59443d1acb34dc12fc1057d1f56a8b882b6dc968");
+    assert.ok(tzapRevision && read(path).includes(tzapRevision), `${path} must use the audited TZAP revision`);
+    assert.equal(coreRevision, "fdbc6ec84c1a56d5af7fc9bfd1edf296bab78ca8");
+    assert.equal(tzapRevision, "69f53d71ad13876cbf74fac38f5f3aa2cf412920");
   }
+  const opensslSetup = read("scripts/pinned-openssl.sh");
+  assert.match(opensslSetup, /zmanager\/scripts\/build-openssl\.py/);
+  assert.match(opensslSetup, /OPENSSL_STATIC=1/);
+  assert.match(opensslSetup, /OPENSSL_NO_VENDOR=1/);
+  assert.match(opensslSetup, /e08c7ad5e3f31488eb622515da4434a858038873b07fa1f021271c98bed8e2fe/);
+  assert.match(read("scripts/setup-windows-static-env.ps1"), /3\.5\.9/);
+  assert.match(read("scripts/generate-third-party-notices.py"), /collect_pinned_openssl_notice/);
 });

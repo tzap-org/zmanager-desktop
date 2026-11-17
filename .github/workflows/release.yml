@@ -18,8 +18,9 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Pin the core commit that carries the hosted CLI auth and device readiness flow.
-  ZMANAGER_ZMANAGER_REF: 59443d1acb34dc12fc1057d1f56a8b882b6dc968
+  # Pin the released sibling commits used to resolve the desktop's Cargo path dependencies.
+  ZMANAGER_TZAP_REF: 69f53d71ad13876cbf74fac38f5f3aa2cf412920
+  ZMANAGER_ZMANAGER_REF: fdbc6ec84c1a56d5af7fc9bfd1edf296bab78ca8
 
 jobs:
   security:
@@ -63,6 +64,8 @@ jobs:
           npx playwright install --with-deps chromium
           scripts/ensure-sibling-repos.sh
           scripts/sync-uniffi-swift-bindings.sh
+          source scripts/pinned-openssl.sh
+          zmanager_configure_pinned_openssl "${{ matrix.arch == 'arm64' && 'aarch64-apple-darwin' || 'x86_64-apple-darwin' }}"
 
       - name: Run release verification tests
         if: matrix.profile == 'local'

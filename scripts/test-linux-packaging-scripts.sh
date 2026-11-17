@@ -20,7 +20,10 @@ trap cleanup EXIT
 bin_dir="$test_root/bin"
 log_file="$test_root/commands.log"
 stage_dir="$test_root/stage"
+openssl_dir="$test_root/openssl"
 mkdir -p "$bin_dir"
+mkdir -p "$openssl_dir"
+printf '%s\n' "OpenSSL 3.5.9" "Patch SHA-256: e08c7ad5e3f31488eb622515da4434a858038873b07fa1f021271c98bed8e2fe" >"$openssl_dir/THIRD-PARTY-NOTICES.txt"
 if [[ ! -d node_modules ]]; then
   mkdir -p node_modules
   created_node_modules=1
@@ -88,13 +91,28 @@ EOF
 write_stub rustc <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-echo "rustc 1.85.0 (test)"
+if [[ "${1:-}" == "-vV" ]]; then
+  echo "host: x86_64-unknown-linux-gnu"
+  exit 0
+fi
+echo "rustc 1.93.0 (test)"
 EOF
 
 write_stub cargo <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-echo "cargo 1.85.0 (test)"
+echo "cargo 1.93.0 (test)"
+EOF
+
+write_stub python3 <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [[ "${1:-}" == *"build-openssl.py" ]]; then
+  echo "${ZMANAGER_TEST_OPENSSL_DIR:?}"
+  exit 0
+fi
+echo "Unexpected python3 invocation: $*" >&2
+exit 91
 EOF
 
 write_stub pkg-config <<'EOF'
@@ -156,6 +174,7 @@ PATH="$bin_dir:$PATH" \
 HOME="$test_root/home" \
 ZMANAGER_PACKAGING_TEST_LOG="$log_file" \
 ZMANAGER_TEST_PRODUCT_VERSION="$product_version" \
+ZMANAGER_TEST_OPENSSL_DIR="$openssl_dir" \
 ZMANAGER_DEB_STAGE_DIR="$stage_dir" \
   bash scripts/build-linux-ubuntu-deb.sh --install-deps --skip-tests --no-install
 
@@ -238,6 +257,7 @@ HOME="$test_root/home" \
 CARGO_TARGET_DIR="$fedora_target_dir" \
 ZMANAGER_PACKAGING_TEST_LOG="$log_file" \
 ZMANAGER_TEST_PRODUCT_VERSION="$product_version" \
+ZMANAGER_TEST_OPENSSL_DIR="$openssl_dir" \
   bash scripts/build-linux-fedora-rpm.sh --install-deps --skip-tests --no-install
 
 fedora_install_line="$(grep '^dnf install -y ' "$log_file")"
@@ -303,6 +323,7 @@ HOME="$test_root/home" \
 CARGO_TARGET_DIR="$fedora_target_dir" \
 ZMANAGER_PACKAGING_TEST_LOG="$log_file" \
 ZMANAGER_TEST_PRODUCT_VERSION="$product_version" \
+ZMANAGER_TEST_OPENSSL_DIR="$openssl_dir" \
 ZMANAGER_TEST_NODE_UPGRADED="$node_upgrade_marker" \
   bash scripts/build-linux-fedora-rpm.sh --install-deps --skip-tests --no-install
 

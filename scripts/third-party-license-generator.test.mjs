@@ -14,11 +14,13 @@ test("third-party license generator copies Rust and production npm license files
   const registryRoot = path.join(workspace, "registry", "demo-crate-1.0.0");
   const pathPackageRoot = path.join(workspace, "path-package");
   const npmRoot = path.join(workspace, "node_modules", "demo-package");
+  const opensslRoot = path.join(workspace, "openssl");
   await mkdir(path.join(workspace, "src-tauri"), { recursive: true });
   await mkdir(bin, { recursive: true });
   await mkdir(registryRoot, { recursive: true });
   await mkdir(pathPackageRoot, { recursive: true });
   await mkdir(npmRoot, { recursive: true });
+  await mkdir(opensslRoot, { recursive: true });
 
   const workspaceId = "path+file:///workspace#zmanager-desktop@1.0.0";
   const registryId = "registry+https://github.com/rust-lang/crates.io-index#demo-crate@1.0.0";
@@ -29,6 +31,8 @@ test("third-party license generator copies Rust and production npm license files
   await writeFile(path.join(pathPackageRoot, "COPYRIGHT"), "Upstream authors\n");
   await writeFile(path.join(npmRoot, "package.json"), JSON.stringify({ name: "demo-package", version: "2.0.0" }));
   await writeFile(path.join(npmRoot, "LICENSE"), "demo npm license\n");
+  await writeFile(path.join(opensslRoot, "OPENSSL-LICENSE.txt"), "OpenSSL license\n");
+  await writeFile(path.join(opensslRoot, "THIRD-PARTY-NOTICES.txt"), "OpenSSL 3.5.9\nPatch SHA-256: e08c7ad5e3f31488eb622515da4434a858038873b07fa1f021271c98bed8e2fe\n");
   await writeFile(path.join(workspace, "package-lock.json"), JSON.stringify({
     lockfileVersion: 3,
     packages: {
@@ -56,7 +60,7 @@ test("third-party license generator copies Rust and production npm license files
   const licenses = path.join(workspace, "third-party-licenses");
   const result = spawnSync("python3", [generator, "--workspace", workspace, "--out-notices", output, "--license-dir", licenses, "--check-npm"], {
     encoding: "utf8",
-    env: { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}` },
+    env: { ...process.env, OPENSSL_DIR: opensslRoot, PATH: `${bin}${path.delimiter}${process.env.PATH}` },
   });
 
   assert.equal(result.status, 0, result.stderr);
@@ -64,9 +68,13 @@ test("third-party license generator copies Rust and production npm license files
   assert.match(notice, /demo-crate/);
   assert.match(notice, /licensed-path/);
   assert.match(notice, /demo-package/);
+  assert.match(notice, /OpenSSL 3\.5\.9/);
+  assert.match(notice, /e08c7ad5e3f31488eb622515da4434a858038873b07fa1f021271c98bed8e2fe/);
   await access(path.join(licenses, "rust", "demo-crate-1.0.0", "LICENSE"));
   await access(path.join(licenses, "rust", "licensed-path-1.0.0", "COPYRIGHT"));
   await access(path.join(licenses, "npm", "demo-package-2.0.0", "LICENSE"));
+  await access(path.join(licenses, "native", "openssl", "OPENSSL-LICENSE.txt"));
+  await access(path.join(licenses, "native", "openssl", "THIRD-PARTY-NOTICES.txt"));
 });
 
 test("release workflow requires and publishes the generated license bundle", async () => {
