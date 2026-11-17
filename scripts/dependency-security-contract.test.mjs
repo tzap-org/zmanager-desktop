@@ -6,13 +6,19 @@ import test from "node:test";
 const root = resolve(import.meta.dirname, "..");
 const read = (path) => readFileSync(resolve(root, path), "utf8").replace(/\r\n/g, "\n");
 
-test("security workflow audits npm and every desktop Rust lockfile without advisory exceptions", () => {
+test("security workflow audits npm with one scoped advisory exception and every desktop Rust lockfile", () => {
   const workflow = read(".github/workflows/security-audit.yml");
   for (const trigger of ["push:", "pull_request:", "schedule:", "workflow_dispatch:"]) {
     assert.ok(workflow.includes(trigger), `missing ${trigger}`);
   }
   assert.match(workflow, /contents: read/);
-  assert.match(workflow, /npm audit --audit-level=low/);
+  assert.match(workflow, /node scripts\/npm-audit-gate\.mjs/);
+  assert.match(workflow, /Every other npm advisory remains blocking/);
+  const npmAuditGate = read("scripts/npm-audit-gate.mjs");
+  assert.match(npmAuditGate, /GHSA-fc5q-39xc-vjpf/);
+  assert.match(npmAuditGate, /EXPECTED_PICOMATCH_VERSION = "4\.0\.7"/);
+  assert.match(npmAuditGate, /unrelated npm advisory found/);
+  assert.match(npmAuditGate, /independent or out-of-scope advisory found/);
   for (const lockfile of ["src-tauri/Cargo.lock", "native/windows-shell-extension/Cargo.lock", "crates/zmanager-shell-contract/Cargo.lock", "vendor/glib/Cargo.lock"]) {
     assert.ok(workflow.includes(lockfile), `missing ${lockfile}`);
   }
@@ -26,6 +32,7 @@ test("security workflow audits npm and every desktop Rust lockfile without advis
   assert.ok(workflow.includes("cargo update --package crypto-bigint"));
   assert.ok(workflow.includes("cargo audit --deny yanked --file Cargo.lock"));
   assert.doesNotMatch(workflow, /continue-on-error|--ignore|\|\| true/);
+  assert.doesNotMatch(npmAuditGate, /--ignore|audit-level=high/);
   assert.doesNotMatch(workflow, /docs\/|ensure-sibling-repos|secrets\./);
 });
 
