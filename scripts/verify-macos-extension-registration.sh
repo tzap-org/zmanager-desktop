@@ -10,6 +10,7 @@ set -euo pipefail
 # second Finder Sync provider alongside the installed application.
 #
 # This gate asserts the end state the install step is supposed to produce:
+#   * exactly one LaunchServices app registration exists for ZManager, and
 #   * exactly one registered bundle carries the Finder Sync extension, and
 #   * that bundle is the installed application, and
 #   * PlugInKit has it in its registry.
@@ -35,10 +36,51 @@ pluginkit="${ZMANAGER_PLUGINKIT:-/usr/bin/pluginkit}"
 finder_bundle_id=$(/usr/bin/python3 -c \
   "import json,sys; print(json.load(open(sys.argv[1]))['finderExtensionBundleIdentifier'])" \
   "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/packaging/macos/product-identity.json")
+main_bundle_id=$(/usr/bin/python3 -c \
+  "import json,sys; print(json.load(open(sys.argv[1]))['mainBundleIdentifier'])" \
+  "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/packaging/macos/product-identity.json")
 
 # Resolve to a physical path so the comparison below is not defeated by a
 # symlinked install directory.
 canonical_application=$(cd "$application" && pwd -P)
+
+# Count LaunchServices bundle records without de-duplicating paths. Repeated
+# records for one path can duplicate NSServices menu entries just like records
+# for two different ZManager.app paths.
+registered_applications=()
+while IFS= read -r bundle; do
+  [[ -n "$bundle" ]] || continue
+  registered_applications+=("$bundle")
+done < <(
+  "$lsregister" -dump 2>/dev/null | /usr/bin/python3 -c '
+import re
+import sys
+
+bundle_id = re.escape(sys.argv[1])
+dump = sys.stdin.read()
+for section in re.split(r"\n-{20,}\n", dump):
+    if not re.search(r"^bundle id:\s+ZManager \(", section, re.MULTILINE):
+        continue
+    if not re.search(r"^identifier:\s+" + bundle_id + r"$", section, re.MULTILINE):
+        continue
+    match = re.search(r"^path:\s+(.+?)\s+\(0x[0-9a-fA-F]+\)$", section, re.MULTILINE)
+    if match:
+        print(match.group(1))
+' "$main_bundle_id"
+)
+
+if ((${#registered_applications[@]} != 1)); then
+  echo "Expected exactly one LaunchServices registration for $main_bundle_id." >&2
+  printf '  %s\n' "${registered_applications[@]}" >&2
+  exit 1
+fi
+
+if [[ ${registered_applications[0]} != "$canonical_application" ]]; then
+  echo "The registered ZManager application is not the installed application." >&2
+  echo "  registered: ${registered_applications[0]}" >&2
+  echo "  installed:  $canonical_application" >&2
+  exit 1
+fi
 
 # Every registered bundle that contains a Finder Sync appex. Trailing bundle
 # paths are reported by lsregister for the appexes themselves, so reduce each

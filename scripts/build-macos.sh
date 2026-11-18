@@ -512,14 +512,39 @@ if ((install_application)); then
   # any accessible location, so the build's intermediate bundles have to be
   # retired explicitly; only the installed bundle may remain registered.
   installed_physical_path=$(cd "$destination" && pwd -P)
+  unregister_launch_services_path() {
+    local bundle_path="$1"
+    local registration_count
+    while :; do
+      registration_count=$("$lsregister" -dump 2>/dev/null | awk -v target="$bundle_path" '
+        $1 == "path:" {
+          path = $0
+          sub(/^[^:]+:[[:space:]]*/, "", path)
+          sub(/[[:space:]]+\(0x[[:xdigit:]]+\)$/, "", path)
+          if (path == target) count++
+        }
+        END { print count + 0 }
+      ')
+      ((registration_count > 0)) || break
+      "$lsregister" -u "$bundle_path" 2>/dev/null || break
+    done
+  }
   for stale_bundle in \
     "$application" \
     "$staged_app" \
     "$stage_dir"/ZManager-*-"$architecture".app; do
     [[ -d "$stale_bundle" ]] || continue
     [[ $(cd "$stale_bundle" && pwd -P) != "$installed_physical_path" ]] || continue
-    "$lsregister" -u "$stale_bundle" 2>/dev/null || true
+    unregister_launch_services_path "$stale_bundle"
   done
+
+  # A downloaded release DMG can leave its app and NSServices entry in the
+  # LaunchServices database after the user copies ZManager.app to Applications
+  # and ejects the image. That stale registration adds a second ZManager group
+  # to Finder's context menu even though PlugInKit reports only one Finder Sync
+  # provider. Remove every registration for the standard release-image path.
+  stale_release_image_app="/Volumes/ZManager/ZManager.app"
+  unregister_launch_services_path "$stale_release_image_app"
   "$lsregister" -f "$destination"
 
   # PlugInKit registers an appex only once its parent app has been run on this
@@ -533,6 +558,23 @@ if ((install_application)); then
     echo "Postinstall registration failed for $destination" >&2
     exit 1
   fi
+  # The unsigned Tauri bundle is only a staging source. Keeping it under the
+  # indexed project tree lets LaunchServices rediscover it after an unregister
+  # and adds a second ZManager app registration. The prepared copy is already
+  # installed, so retire the intermediate bundle before the final registry gate.
+  rm -rf "$application"
+  unregister_launch_services_path "$application"
+  # The postinstall launch can trigger LaunchServices discovery again. Prune
+  # intermediate bundles a second time before asserting the final registry.
+  for stale_bundle in \
+    "$application" \
+    "$staged_app" \
+    "$stage_dir"/ZManager-*-"$architecture".app; do
+    [[ -d "$stale_bundle" ]] || continue
+    [[ $(cd "$stale_bundle" && pwd -P) != "$installed_physical_path" ]] || continue
+    unregister_launch_services_path "$stale_bundle"
+  done
+  unregister_launch_services_path "$stale_release_image_app"
   scripts/verify-macos-extension-registration.sh "$destination"
   echo "Postinstall completed for $destination"
 else

@@ -147,7 +147,8 @@ test("macOS installation registers exactly one extension provider", () => {
   // installed one. LaunchServices indexes apps from almost any location, and a
   // second registered bundle carrying the extensions is what produces duplicate
   // Finder context-menu entries.
-  assert.match(build, /"\$lsregister" -u "\$stale_bundle"/);
+  assert.match(build, /unregister_launch_services_path "\$stale_bundle"/);
+  assert.match(build, /rm -rf "\$application"[\s\S]*?unregister_launch_services_path "\$application"/);
   assert.match(build, /"\$lsregister" -f "\$destination"/);
 
   // Run the installed app once so PlugInKit discovers its appexes.
@@ -167,8 +168,18 @@ test("macOS installation registers exactly one extension provider", () => {
   assert.doesNotMatch(executableBuild, /macos-register-bundle/);
 });
 
+test("macOS installation removes stale release-DMG LaunchServices entries", () => {
+  const build = readFileSync(resolve(root, "scripts/build-macos.sh"), "utf8");
+  assert.match(build, /stale_release_image_app="\/Volumes\/ZManager\/ZManager\.app"/);
+  assert.match(build, /unregister_launch_services_path "\$stale_release_image_app"/);
+  assert.match(build, /registration_count=\$\("\$lsregister" -dump/);
+  assert.match(build, /\(\(registration_count > 0\)\)/);
+});
+
 test("macOS registration verifier asserts a single provider without touching user state", () => {
   const verifier = readFileSync(resolve(root, "scripts/verify-macos-extension-registration.sh"), "utf8");
+  assert.match(verifier, /Expected exactly one LaunchServices registration/);
+  assert.match(verifier, /without de-duplicating paths/);
   assert.match(verifier, /More than one registered bundle carries the Finder Sync extension/);
   // Read-only probes of pluginkit are fine; mutating registration or the user's
   // enabled/disabled choice is not.
