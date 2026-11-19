@@ -156,6 +156,24 @@ function Resolve-GitCommand {
     throw "Git was not found. Install Git for Windows, or put git.exe on PATH."
 }
 
+function Ensure-Git {
+    $git = $null
+    try {
+        $git = Resolve-GitCommand
+    } catch {
+        if (-not $InstallMissing) {
+            throw "Git was not found. Install Git for Windows, or rerun with -InstallMissing to try winget."
+        }
+        Install-WingetPackage -PackageId "Git.Git" -ExtraArguments @("--silent")
+        $git = Resolve-GitCommand
+    }
+
+    $gitDir = Split-Path $git -Parent
+    $env:PATH = "$gitDir;$env:PATH"
+    Write-Host "Git found: $git"
+    return $git
+}
+
 function Resolve-WingetCommand {
     $winget = Resolve-OptionalCommand -Names @("winget.exe", "winget")
     if ($winget) {
@@ -195,6 +213,59 @@ function Test-Node24 {
     } catch {
         return $false
     }
+}
+
+function Resolve-PythonCommand {
+    $candidates = @()
+
+    $python = Resolve-OptionalCommand -Names @("python.exe", "python")
+    if ($python -and $python -notmatch "\\WindowsApps\\python(?:3)?\.exe$") {
+        $candidates += $python
+    }
+
+    $pythonRoots = @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Python"),
+        $env:ProgramFiles,
+        ${env:ProgramFiles(x86)}
+    ) | Where-Object { $_ -and (Test-Path $_) }
+    foreach ($root in $pythonRoots) {
+        $candidates += Get-ChildItem -LiteralPath $root -Directory -Filter "Python3*" -ErrorAction SilentlyContinue |
+            ForEach-Object { Join-Path $_.FullName "python.exe" }
+    }
+
+    foreach ($candidate in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
+        try {
+            $version = (& $candidate --version 2>$null | Select-Object -First 1).Trim()
+            if ($version -match '^Python 3\.(1[0-9]|[0-9]{2,})\.') {
+                return (Resolve-Path $candidate).Path
+            }
+        } catch {
+            # Ignore unusable commands, including the Microsoft Store alias.
+        }
+    }
+
+    return $null
+}
+
+function Ensure-Python {
+    $python = Resolve-PythonCommand
+    if (-not $python) {
+        if (-not $InstallMissing) {
+            throw "Python 3.10 or newer was not found. Install Python, or rerun with -InstallMissing to try winget."
+        }
+
+        Install-WingetPackage -PackageId "Python.Python.3.13" -ExtraArguments @("--silent")
+        $python = Resolve-PythonCommand
+    }
+
+    if (-not $python) {
+        throw "Python installation completed, but a usable python.exe was not found. Reopen PowerShell and rerun setup."
+    }
+
+    $pythonDir = Split-Path $python -Parent
+    $env:PATH = "$pythonDir;$env:PATH"
+    Write-Host "Python found: $python"
+    return $python
 }
 
 function Resolve-NodeCommand {
@@ -403,7 +474,7 @@ function Ensure-Vcpkg {
             throw "vcpkg toolchain file was not found: $toolchainFile. Install vcpkg, or rerun with -InstallMissing to clone and bootstrap it."
         }
 
-        $git = Resolve-GitCommand
+        $git = Ensure-Git
         if (-not (Test-Path $RequestedVcpkgRoot)) {
             Invoke-Native -FilePath $git -Arguments @("clone", "https://github.com/microsoft/vcpkg", $RequestedVcpkgRoot)
         }
@@ -460,7 +531,12 @@ Invoke-Step "Check Node.js" {
     Write-Host "npm found: $script:npmCommand"
 }
 
-Invoke-Step "Prepare Perl and vcpkg" {
+Invoke-Step "Check Python for pinned OpenSSL" {
+    $script:resolvedPythonPath = Ensure-Python
+}
+
+Invoke-Step "Prepare Git, Perl, and vcpkg" {
+    $script:resolvedGit = Ensure-Git
     $script:resolvedPerlBin = Ensure-StrawberryPerl -RequestedPerlBin $PerlBin
     Ensure-Vcpkg -RequestedVcpkgRoot $VcpkgRoot -ResolvedTriplet $resolvedTriplet
 }

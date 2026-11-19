@@ -92,6 +92,40 @@ function Resolve-CargoBin {
     throw "Rust Cargo was not found on PATH or at $defaultCargo. Install Rust with the MSVC toolchain, then reopen the shell."
 }
 
+function Resolve-PythonExecutable {
+    $candidates = @()
+    $python = Get-Command "python.exe" -ErrorAction SilentlyContinue
+    if (-not $python) {
+        $python = Get-Command "python" -ErrorAction SilentlyContinue
+    }
+    if ($python -and $python.Source -notmatch "\\WindowsApps\\python(?:3)?\.exe$") {
+        $candidates += $python.Source
+    }
+
+    $pythonRoots = @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Python"),
+        $env:ProgramFiles,
+        ${env:ProgramFiles(x86)}
+    ) | Where-Object { $_ -and (Test-Path $_) }
+    foreach ($root in $pythonRoots) {
+        $candidates += Get-ChildItem -LiteralPath $root -Directory -Filter "Python3*" -ErrorAction SilentlyContinue |
+            ForEach-Object { Join-Path $_.FullName "python.exe" }
+    }
+
+    foreach ($candidate in ($candidates | Where-Object { $_ } | Select-Object -Unique)) {
+        try {
+            $version = (& $candidate --version 2>$null | Select-Object -First 1).Trim()
+            if ($version -match '^Python 3\.(1[0-9]|[0-9]{2,})\.') {
+                return (Resolve-Path $candidate).Path
+            }
+        } catch {
+            # Ignore unusable commands, including the Microsoft Store alias.
+        }
+    }
+
+    return $null
+}
+
 function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -361,7 +395,11 @@ if ($Run -match "(?i)(src-tauri[\\/]Cargo\.toml|tauri\.js|tauri build|cargo\s+(t
         throw "Pinned ZManager OpenSSL builder is missing: $opensslBuilder. Run scripts/ensure-sibling-repos.ps1 first."
     }
     $opensslBuilder = (Resolve-Path -LiteralPath $opensslBuilder).Path
-    $opensslDir = & python $opensslBuilder $opensslTarget
+    $pythonExe = Resolve-PythonExecutable
+    if (-not $pythonExe) {
+        throw "Python 3.10 or newer was not found. Run scripts\build.bat or install Python and add it to PATH."
+    }
+    $opensslDir = & $pythonExe $opensslBuilder $opensslTarget
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($opensslDir)) {
         throw "Could not provision patched OpenSSL 3.5.9 for $opensslTarget."
     }
