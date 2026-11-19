@@ -294,7 +294,7 @@ fn group_promises(items: &[NativeFileDragItem]) -> Result<HashMap<String, Vec<Na
     }
     let mut promises = HashMap::new();
     for (_, (root, members)) in normalized_promises {
-        if members.len() > 1 && members.iter().any(|member| member.display_path == root) {
+        if members.len() > 1 && members.iter().any(|member| member.display_path == root && member.kind == NativeFileDragItemKind::File) {
             return Err(NativeFileDragError::invalid_request(format!("promised name is both a file and directory: {root}")));
         }
         promises.insert(root, members);
@@ -332,6 +332,9 @@ fn write_directory_promise(
     let result = (|| {
         let mut total = 0_u64;
         for member in members {
+            if member.display_path == promise_path && member.kind == NativeFileDragItemKind::Directory {
+                continue;
+            }
             let relative = member
                 .display_path
                 .strip_prefix(promise_path)
@@ -530,6 +533,36 @@ mod tests {
         assert_eq!(calls.lock().unwrap().len(), 2);
         assert_eq!(registry.take_completed_summary(&id), Some((2, 27)));
         assert_eq!(registry.count(), 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn includes_selected_top_level_folder_with_its_contents_in_one_promise() {
+        let directory = NativeFileDragItem {
+            entry_path: "docs".to_string(),
+            display_path: "docs".to_string(),
+            kind: NativeFileDragItemKind::Directory,
+            size: None,
+            modified_unix_seconds: None,
+        };
+        let provider: NativeFileDragStreamProvider = Arc::new(|_, writer| {
+            writer.write_all(b"data").unwrap();
+            Ok(4)
+        });
+        let items = vec![directory, item("docs/readme.txt")];
+        let descriptor = NativeDragSessionRegistry::descriptors(&items).unwrap();
+        assert_eq!(descriptor.len(), 1);
+        assert!(descriptor[0].is_directory);
+
+        let registry = NativeDragSessionRegistry::new();
+        let id = registry.create(&items, provider).unwrap();
+        let root = std::env::temp_dir().join(format!("zmanager-promise-folder-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let destination = root.join("docs");
+        assert_eq!(registry.write_promise(&id, "docs", &destination).unwrap(), 4);
+        assert_eq!(fs::read(destination.join("readme.txt")).unwrap(), b"data");
+        assert_eq!(registry.take_completed_summary(&id), Some((2, 4)));
         let _ = fs::remove_dir_all(root);
     }
 

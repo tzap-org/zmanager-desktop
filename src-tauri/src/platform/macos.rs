@@ -1,8 +1,8 @@
 use std::ffi::c_void;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
@@ -13,7 +13,7 @@ use super::{
     CapabilityInspector, DefaultHandlerController, DefaultHandlerEntry, DefaultHandlerRequest, DiagnosticLogPolicy, MainWindowConfigurator,
     NativeCapabilityOperationError, NativeFileDragAdapter, NativeFileDragCandidate, NativeFileDragError, NativeFileDragItem, NativeFileDragJobContext,
     NativeFileDragStart, NativeFileDragStreamProvider, SecureFileProtector, SystemFileIconProvider,
-    staged_file_drag::{PosixDragPathPolicy, prepare_posix_drag_items},
+    staged_file_drag::{PosixDragPathPolicy, StagedFileDrag, prepare_posix_drag_items},
 };
 use crate::dto::{SystemFileIconDto, SystemFileIconRequestEntry};
 use crate::job_dto::{JobEventDto, JobKindDto, JobTerminalSummaryDto};
@@ -789,7 +789,24 @@ fn start_macos_file_promise_drag(
     context: NativeFileDragJobContext<'_>,
 ) -> Result<NativeFileDragStart, NativeFileDragError> {
     let descriptors = NativeDragSessionRegistry::descriptors(items)?;
-    let session_id = context.registry.create_with_job_token(context.job_id, items, stream_provider, context.cancellation)?;
+    let staged_items = items.to_vec();
+    let staged_once = OnceLock::<Result<StagedFileDrag, NativeFileDragError>>::new();
+    let batch_provider = context.batch_provider;
+    let promise_stream_provider: NativeFileDragStreamProvider = Arc::new(move |entry_path, output| {
+        let staged_result = staged_once.get_or_init(|| StagedFileDrag::create("macOS", &staged_items, batch_provider.clone(), stream_provider.clone()));
+        let staged = match staged_result {
+            Ok(staged) => staged,
+            Err(error) => return Err(NativeFileDragError::new(error.message.clone(), error.hint.clone())),
+        };
+        let item = staged_items
+            .iter()
+            .find(|item| item.entry_path == entry_path && item.kind == super::NativeFileDragItemKind::File)
+            .ok_or_else(|| NativeFileDragError::invalid_request("Promised archive entry is unavailable"))?;
+        let mut file = std::fs::File::open(staged.root_path().join(&item.display_path))
+            .map_err(|error| NativeFileDragError::new(format!("Unable to read staged Finder item: {error}"), None::<String>))?;
+        std::io::copy(&mut file, output).map_err(|error| NativeFileDragError::new(format!("Unable to write promised Finder item: {error}"), None::<String>))
+    });
+    let session_id = context.registry.create_with_job_token(context.job_id, items, promise_stream_provider, context.cancellation)?;
     let promise_items = descriptors
         .into_iter()
         .map(|descriptor| PromiseDragItemDto {

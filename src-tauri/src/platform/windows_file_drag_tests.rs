@@ -96,7 +96,7 @@ fn counting_notifier() -> (DestinationNotifier, Arc<AtomicUsize>) {
 fn new_payload(provider: NativeFileDragStreamProvider, notify: DestinationNotifier) -> Arc<DragPayload> {
     let items = fixture_items();
     let staged = StagedFileDrag::prepare("Windows", &items).expect("prepare drag root");
-    Arc::new(DragPayload::new(staged, items, provider, notify))
+    Arc::new(DragPayload::new(staged, items, provider, None, notify))
 }
 
 fn staged_root(payload: &DragPayload) -> PathBuf {
@@ -514,7 +514,7 @@ fn run_interactive_drag(ui: &UiThread, source_rect: ScreenRect, drop_point: (i32
     thread::sleep(Duration::from_millis(200));
     send_mouse(MOUSEEVENTF_LEFTDOWN, start);
     thread::sleep(Duration::from_millis(100));
-    let drag = thread::spawn(move || start_drag(Some(ui_thread_id), Some(ui_source as isize), staged, items, provider, notify));
+    let drag = thread::spawn(move || start_drag(Some(ui_thread_id), Some(ui_source as isize), staged, items, provider, None, notify));
     thread::sleep(Duration::from_millis(300));
     glide(start, drop_point);
     thread::sleep(Duration::from_millis(700));
@@ -590,7 +590,7 @@ fn interactive_drag_released_back_onto_the_source_window_is_not_a_drop() {
     thread::sleep(Duration::from_millis(200));
     send_mouse(MOUSEEVENTF_LEFTDOWN, start);
     thread::sleep(Duration::from_millis(100));
-    let drag = thread::spawn(move || start_drag(Some(ui_thread_id), Some(ui_source as isize), staged, items, provider, notify));
+    let drag = thread::spawn(move || start_drag(Some(ui_thread_id), Some(ui_source as isize), staged, items, provider, None, notify));
     thread::sleep(Duration::from_millis(300));
     glide(start, release_point);
     thread::sleep(Duration::from_millis(200));

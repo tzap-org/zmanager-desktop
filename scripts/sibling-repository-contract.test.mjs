@@ -49,13 +49,18 @@ function createSiblingUpdateFixture() {
   const script = join(workspace, "scripts", "ensure-sibling-repos.sh");
 
   mkdirSync(join(workspace, "scripts"), { recursive: true });
+  mkdirSync(join(workspace, "src-tauri"), { recursive: true });
   cpSync(join(scriptsDirectory, "ensure-sibling-repos.sh"), script);
   cpSync(join(scriptsDirectory, "checkout-forensic-forks.mjs"), join(workspace, "scripts", "checkout-forensic-forks.mjs"));
+  cpSync(join(scriptsDirectory, "check-shared-dependency-locks.mjs"), join(workspace, "scripts", "check-shared-dependency-locks.mjs"));
+  const lockfile = readFileSync(join(repositoryRoot, "src-tauri", "Cargo.lock"));
+  writeFileSync(join(workspace, "src-tauri", "Cargo.lock"), lockfile);
   git(undefined, ["init", "--bare", "--initial-branch=main", remote]);
   git(root, ["clone", remote, seed]);
   configureGitUser(seed);
   writeFileSync(join(seed, "tracked.txt"), "base\n");
-  git(seed, ["add", "tracked.txt"]);
+  writeFileSync(join(seed, "Cargo.lock"), lockfile);
+  git(seed, ["add", "Cargo.lock", "tracked.txt"]);
   git(seed, ["commit", "-m", "base"]);
   git(seed, ["push", "origin", "main"]);
 
@@ -168,7 +173,7 @@ test("shell updater rebases local commits and reapplies dirty edits", () => {
     assert.equal(git(zmanager, ["merge-base", "--is-ancestor", remoteCommit, "HEAD"]), "");
     assert.match(git(zmanager, ["log", "--format=%s"]), /^local commit$/m);
     assert.match(readFileSync(join(zmanager, "tracked.txt"), "utf8"), /local dirty edit/);
-    assert.equal(readFileSync(join(zmanager, "remote.txt"), "utf8"), "remote commit\n");
+    assert.equal(readFileSync(join(zmanager, "remote.txt"), "utf8").replace(/\r\n/g, "\n"), "remote commit\n");
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

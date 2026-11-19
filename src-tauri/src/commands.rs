@@ -40,7 +40,9 @@ use crate::{
     native_launch_inbox::NativeLaunchInbox,
     quick_action::QuickActionLaunchCoordinator,
 };
-use zmanager_core::archive_browser::{self, BrowserExtractOptions, BrowserListOptions};
+#[cfg(test)]
+use zmanager_core::archive_browser::BrowserListOptions;
+use zmanager_core::archive_browser::{self, BrowserExtractOptions};
 use zmanager_core::engine::tzap::{
     TzapArchiveSignatureCheck, TzapArchiveStatusCheck, TzapArchiveTimeCheck, TzapArchiveTrustCheck, TzapArchiveVerification, TzapArchiveVerificationOutcome,
 };
@@ -1933,22 +1935,24 @@ pub async fn start_native_file_drag(
             dragged_entries: Vec::new(),
         });
     }
+    let mut prepared_handle = None;
     let prepared = (|| -> Result<(Vec<crate::platform::NativeFileDragItem>, &'static str), CommandErrorDto> {
+        let mut prepare_uncached = || {
+            let mut handle = open_drag_archive(Path::new(&archive_path), password.as_deref())?;
+            let listing = archive_browser::list_entries_from_engine_handle(&mut handle).map_err(crate::platform::map_archive_browser_error)?;
+            let items = native_drag_items_from_listing(&listing.entries, &entry_paths, request.strip_components, request.select_all, &excluded_entry_paths)?;
+            prepared_handle = Some(handle);
+            Ok::<_, CommandErrorDto>(items)
+        };
         Ok(if request.select_all {
             match archive_index_registry.drag_all_entries(&archive_path, &excluded_entry_paths)? {
                 Some(entries) => (native_drag_items_from_cached_entries(&entries, request.strip_components)?, "archiveIndexAll"),
-                None => (
-                    build_native_drag_items(&archive_path, &entry_paths, request.strip_components, password.as_deref(), true, &excluded_entry_paths)?,
-                    "coreFallbackAll",
-                ),
+                None => (prepare_uncached()?, "coreFallbackAll"),
             }
         } else {
             match archive_index_registry.drag_entries(&archive_path, &entry_paths)? {
                 Some(entries) => (native_drag_items_from_cached_entries(&entries, request.strip_components)?, "archiveIndex"),
-                None => (
-                    build_native_drag_items(&archive_path, &entry_paths, request.strip_components, password.as_deref(), false, &excluded_entry_paths)?,
-                    "coreFallback",
-                ),
+                None => (prepare_uncached()?, "coreFallback"),
             }
         })
     })();
@@ -2059,9 +2063,40 @@ pub async fn start_native_file_drag(
         result.map_err(native_file_drag_error_from_command)
     });
 
+    let batch_provider: Option<crate::platform::NativeFileDragBatchProvider> = if request.select_all || streamable_entry_count > 1 {
+        let archive_path = archive_path.clone();
+        let batch_registry = registry.inner().clone();
+        let batch_job_id = job_id.clone();
+        let batch_cancellation = cancellation.clone();
+        let batch_successes = Arc::clone(&successful_streams);
+        let batch_bytes = Arc::clone(&streamed_bytes);
+        let strip_components = request.strip_components;
+        let prepared_handle = Mutex::new(prepared_handle);
+        Some(Arc::new(move |root, items| {
+            let mut handle = match prepared_handle.lock().unwrap_or_else(|error| error.into_inner()).take() {
+                Some(handle) => handle,
+                None => open_drag_archive(Path::new(&archive_path), password.as_deref()).map_err(native_file_drag_error_from_command)?,
+            };
+            let mut sink = JobEventCollector::new(&batch_registry, batch_job_id.clone());
+            let Some(written_bytes) = extract_native_drag_batch(&mut handle, root, items, strip_components, &batch_cancellation, &mut sink)
+                .map_err(native_file_drag_error_from_command)?
+            else {
+                return Ok(false);
+            };
+            batch_bytes.store(written_bytes, AtomicOrdering::Relaxed);
+            batch_successes
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .extend(items.iter().filter(|item| item.kind == crate::platform::NativeFileDragItemKind::File).map(|item| item.entry_path.clone()));
+            Ok(true)
+        }))
+    } else {
+        None
+    };
     let settle_cancellation = cancellation.clone();
     let start_result = crate::platform::run_native_file_drag(
         crate::platform::NativeFileDragRun {
+            batch_provider,
             window: window.clone(),
             items: drag_items.clone(),
             drag_registry: drag_registry.inner().clone(),
@@ -2616,24 +2651,6 @@ fn native_drag_job_kind(archive_path: &str) -> JobKindDto {
     }
 }
 
-fn build_native_drag_items(
-    archive_path: &str,
-    entry_paths: &[String],
-    strip_components: usize,
-    password: Option<&str>,
-    select_all: bool,
-    excluded_entry_paths: &[String],
-) -> Result<Vec<crate::platform::NativeFileDragItem>, CommandErrorDto> {
-    let mut entries = Vec::new();
-    archive_browser::visit_entries_with_options(Path::new(archive_path), BrowserListOptions { password, ..Default::default() }, |entry| {
-        entries.push(entry);
-        true
-    })
-    .map_err(crate::platform::map_archive_browser_error)?;
-
-    native_drag_items_from_listing(&entries, entry_paths, strip_components, select_all, excluded_entry_paths)
-}
-
 fn native_drag_items_from_cached_entries(
     entries: &[ArchiveEntryDto],
     strip_components: usize,
@@ -2703,6 +2720,113 @@ fn native_drag_items_from_listing(
     crate::platform::prepare_native_file_drag(&candidates, strip_components).map_err(map_native_file_drag_error)
 }
 
+fn open_drag_archive(archive_path: &Path, password: Option<&str>) -> Result<zmanager_core::engine::ArchiveHandle, CommandErrorDto> {
+    let map_error = crate::platform::archive_error::map_engine_error;
+    let engine = zmanager_core::engine::create_default_engine().map_err(map_error)?;
+    engine
+        .open(
+            zmanager_core::engine::ArchiveSource::from_path_autodetect(archive_path),
+            zmanager_core::engine::OpenOptions { password: password.map(str::to_owned), ..Default::default() },
+        )
+        .map_err(map_error)
+}
+
+fn extract_native_drag_batch(
+    handle: &mut zmanager_core::engine::ArchiveHandle,
+    destination: &Path,
+    items: &[crate::platform::NativeFileDragItem],
+    strip_components: usize,
+    cancellation: &CancellationToken,
+    sink: &mut JobEventCollector,
+) -> Result<Option<u64>, CommandErrorDto> {
+    use crate::platform::NativeFileDragItemKind;
+    use archive_browser::BrowserEntryKind;
+
+    if cancellation.is_cancelled() {
+        return Err(CommandErrorDto::cancelled("Native drag was cancelled."));
+    }
+    let map_error = crate::platform::archive_error::map_engine_error;
+    let policy = ExtractionPolicy { strip_components, ignore_symlinks: true, ..Default::default() };
+    let tzap_restore_options = Some(TzapRestoreOptions { policy: TzapRestorePolicy::Content, allow_degraded: true, allow_absolute_symlinks: false });
+    let listing = handle.list().map_err(map_error)?;
+    let mut pending = items
+        .iter()
+        .map(|item| {
+            let kind = match item.kind {
+                NativeFileDragItemKind::File => BrowserEntryKind::File,
+                NativeFileDragItemKind::Directory => BrowserEntryKind::Directory,
+            };
+            (archive_entry_key(&item.entry_path), kind)
+        })
+        .collect::<std::collections::HashMap<_, _>>();
+    let ids: Vec<_> = listing
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            let key = archive_entry_key(&entry.path);
+            (pending.get(&key) == Some(&entry.kind)).then(|| {
+                pending.remove(&key);
+                entry.id
+            })
+        })
+        .collect();
+    if ids.len() != items.len() {
+        return Err(CommandErrorDto::not_found("One or more dragged entries are no longer in the archive.", None::<String>));
+    }
+
+    let has_unsupported_entries =
+        listing.entries.iter().any(|entry| matches!(entry.kind, BrowserEntryKind::Hardlink | BrowserEntryKind::FileCopy | BrowserEntryKind::Special));
+    let draggable_entry_count = listing.entries.iter().filter(|entry| matches!(entry.kind, BrowserEntryKind::File | BrowserEntryKind::Directory)).count();
+    let all_draggable_entries_selected = ids.len() == draggable_entry_count && !has_unsupported_entries;
+    let report = if all_draggable_entries_selected {
+        handle.extract(&mut zmanager_core::engine::ExtractOptions {
+            destination: destination.to_path_buf(),
+            policy,
+            tzap_restore_options,
+            cancellation: Some(cancellation.clone()),
+            event_sink: Some(sink),
+            ..Default::default()
+        })
+    } else {
+        handle.extract_selected_many(
+            &ids,
+            &mut SelectedExtractOptions {
+                destination: destination.to_path_buf(),
+                policy,
+                tzap_restore_options,
+                cancellation: Some(cancellation.clone()),
+                event_sink: Some(sink),
+                overwrite_resolver: None,
+            },
+        )
+    };
+    let report = match report {
+        // Some formats expose copy-to-writer without selected extraction.
+        // Fall back only when the batch did not create any staged output.
+        Err(error)
+            if error.kind == zmanager_core::engine::ErrorKind::UnsupportedOperation
+                && std::fs::read_dir(destination).is_ok_and(|mut entries| entries.next().is_none()) =>
+        {
+            return Ok(None);
+        }
+        result => result.map_err(map_error)?,
+    };
+    for item in items {
+        let output = destination.join(&item.display_path);
+        let has_expected_type = std::fs::symlink_metadata(output).is_ok_and(|metadata| match item.kind {
+            NativeFileDragItemKind::File => metadata.is_file(),
+            NativeFileDragItemKind::Directory => metadata.is_dir(),
+        });
+        if !has_expected_type {
+            return Err(CommandErrorDto::operation_failed(format!("The drag payload did not contain {}.", item.display_path)));
+        }
+    }
+    if cancellation.is_cancelled() {
+        return Err(CommandErrorDto::cancelled("Native drag was cancelled."));
+    }
+    Ok(Some(report.written_bytes))
+}
+
 fn stream_native_drag_entry(archive_path: &str, password: Option<&str>, entry_path: &str, output: &mut dyn Write) -> Result<u64, CommandErrorDto> {
     stream_entry_to_writer(Path::new(archive_path), entry_path, output, password)
 }
@@ -2726,13 +2850,7 @@ impl Write for NativeDragCancellationWriter<'_> {
 }
 
 fn stream_entry_to_writer(archive_path: &Path, entry_path: &str, output: &mut (dyn Write + '_), password: Option<&str>) -> Result<u64, CommandErrorDto> {
-    let engine = zmanager_core::engine::create_default_engine().map_err(crate::platform::archive_error::map_engine_error)?;
-    let mut handle = engine
-        .open(
-            zmanager_core::engine::ArchiveSource::from_path_autodetect(archive_path),
-            zmanager_core::engine::OpenOptions { password: password.map(str::to_owned), ..Default::default() },
-        )
-        .map_err(crate::platform::archive_error::map_engine_error)?;
+    let mut handle = open_drag_archive(archive_path, password)?;
     let listing = handle.list().map_err(crate::platform::archive_error::map_engine_error)?;
     let target_key = archive_entry_key(entry_path);
     let entry = listing.entries.iter().find(|e| archive_entry_key(&e.path) == target_key).ok_or_else(|| {

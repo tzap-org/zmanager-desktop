@@ -7,7 +7,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use super::{NativeFileDragCandidate, NativeFileDragError, NativeFileDragItem, NativeFileDragItemKind, NativeFileDragStreamProvider};
+use super::{
+    NativeFileDragBatchProvider, NativeFileDragCandidate, NativeFileDragError, NativeFileDragItem, NativeFileDragItemKind, NativeFileDragStreamProvider,
+};
 
 pub(super) struct PosixDragPathPolicy {
     pub platform_label: &'static str,
@@ -77,10 +79,11 @@ impl StagedFileDrag {
     pub(super) fn create(
         platform_label: &str,
         items: &[NativeFileDragItem],
+        batch_provider: Option<NativeFileDragBatchProvider>,
         stream_provider: NativeFileDragStreamProvider,
     ) -> Result<Self, NativeFileDragError> {
         let mut staged = Self::prepare(platform_label, items)?;
-        staged.stage_items(items, stream_provider)?;
+        staged.materialize(items, batch_provider, stream_provider)?;
         Ok(staged)
     }
 
@@ -92,10 +95,11 @@ impl StagedFileDrag {
         root: PathBuf,
         platform_label: &str,
         items: &[NativeFileDragItem],
+        batch_provider: Option<NativeFileDragBatchProvider>,
         stream_provider: NativeFileDragStreamProvider,
     ) -> Result<Self, NativeFileDragError> {
         let mut staged = Self::prepare_at_root(root, platform_label, items)?;
-        staged.stage_items(items, stream_provider)?;
+        staged.materialize(items, batch_provider, stream_provider)?;
         Ok(staged)
     }
 
@@ -119,8 +123,18 @@ impl StagedFileDrag {
         Ok(staged)
     }
 
-    pub(super) fn stage_items(&mut self, items: &[NativeFileDragItem], stream_provider: NativeFileDragStreamProvider) -> Result<(), NativeFileDragError> {
+    pub(super) fn materialize(
+        &mut self,
+        items: &[NativeFileDragItem],
+        batch_provider: Option<NativeFileDragBatchProvider>,
+        stream_provider: NativeFileDragStreamProvider,
+    ) -> Result<(), NativeFileDragError> {
         let root = self.root.as_ref().expect("staged drag root missing");
+        if let Some(provider) = batch_provider
+            && provider(root, items)?
+        {
+            return Ok(());
+        }
         for item in items {
             let relative_path = staged_relative_path(&item.display_path)?;
             let output_path = root.join(relative_path);
@@ -274,6 +288,7 @@ mod tests {
                     modified_unix_seconds: None,
                 },
             ],
+            None,
             provider,
         )
         .expect("stage drag files");
@@ -285,6 +300,25 @@ mod tests {
 
         drop(staged);
         assert!(!root.exists(), "staged drag root should be cleaned up");
+    }
+
+    #[test]
+    fn staged_drag_uses_batch_materializer_before_per_file_fallback() {
+        let items = [NativeFileDragItem {
+            entry_path: "archive.txt".to_string(),
+            display_path: "archive.txt".to_string(),
+            kind: NativeFileDragItemKind::File,
+            size: Some(5),
+            modified_unix_seconds: None,
+        }];
+        let batch: NativeFileDragBatchProvider = Arc::new(|root, _| {
+            fs::write(root.join("archive.txt"), b"batch").map_err(|error| NativeFileDragError::new(error.to_string(), None::<String>))?;
+            Ok(true)
+        });
+        let stream: NativeFileDragStreamProvider = Arc::new(|_, _| panic!("batch materialization should skip per-file fallback"));
+
+        let staged = StagedFileDrag::create("test", &items, Some(batch), stream).expect("materialize batch drag");
+        assert_eq!(fs::read(staged.root_path().join("archive.txt")).unwrap(), b"batch");
     }
 
     #[test]
@@ -302,6 +336,7 @@ mod tests {
                 size: Some(1),
                 modified_unix_seconds: None,
             }],
+            None,
             provider,
         );
 
@@ -336,6 +371,7 @@ mod tests {
                     modified_unix_seconds: None,
                 },
             ],
+            None,
             provider,
         )
         .expect("stage directory entries");
@@ -365,6 +401,7 @@ mod tests {
                 size: Some(12),
                 modified_unix_seconds: None,
             }],
+            None,
             Arc::clone(&provider),
         )
         .expect("stage drag files");
@@ -382,6 +419,7 @@ mod tests {
                 size: Some(12),
                 modified_unix_seconds: None,
             }],
+            None,
             Arc::clone(&provider),
         )
         .expect("stage drag files");

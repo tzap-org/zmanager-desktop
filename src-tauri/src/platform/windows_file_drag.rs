@@ -73,7 +73,7 @@ use windows_sys::Win32::{
 };
 
 use super::{NativeFileDragError, NativeFileDragItem, NativeFileDragOutcome, NativeFileDragStreamProvider};
-use crate::platform::staged_file_drag::StagedFileDrag;
+use crate::platform::{NativeFileDragBatchProvider, staged_file_drag::StagedFileDrag};
 
 pub(super) type DestinationNotifier = Arc<dyn Fn() + Send + Sync>;
 
@@ -90,9 +90,10 @@ pub(super) fn start_drag(
     staged_drag: StagedFileDrag,
     items: Vec<NativeFileDragItem>,
     stream_provider: NativeFileDragStreamProvider,
+    batch_provider: Option<NativeFileDragBatchProvider>,
     notify_destination: DestinationNotifier,
 ) -> Result<NativeFileDragOutcome, NativeFileDragError> {
-    let payload = Arc::new(DragPayload::new(staged_drag, items, stream_provider, notify_destination));
+    let payload = Arc::new(DragPayload::new(staged_drag, items, stream_provider, batch_provider, notify_destination));
     let worker_payload = Arc::clone(&payload);
     let worker = thread::Builder::new()
         .name("zmanager-windows-ole-drag".to_string())
@@ -191,6 +192,7 @@ struct DragPayload {
     effect: AtomicU32,
     items: Vec<NativeFileDragItem>,
     stream_provider: NativeFileDragStreamProvider,
+    batch_provider: Option<NativeFileDragBatchProvider>,
     notify_destination: DestinationNotifier,
 }
 
@@ -199,6 +201,7 @@ impl DragPayload {
         staged: StagedFileDrag,
         items: Vec<NativeFileDragItem>,
         stream_provider: NativeFileDragStreamProvider,
+        batch_provider: Option<NativeFileDragBatchProvider>,
         notify_destination: DestinationNotifier,
     ) -> Self {
         Self {
@@ -207,6 +210,7 @@ impl DragPayload {
             effect: AtomicU32::new(DROPEFFECT_NONE.0),
             items,
             stream_provider,
+            batch_provider,
             notify_destination,
         }
     }
@@ -251,7 +255,7 @@ impl DragPayload {
         }
         let state = &mut *state;
         let staged = state.staged.as_mut().expect("staged drag checked above");
-        match staged.stage_items(&self.items, Arc::clone(&self.stream_provider)) {
+        match staged.materialize(&self.items, self.batch_provider.clone(), Arc::clone(&self.stream_provider)) {
             Ok(()) => {
                 state.materialized = true;
                 Ok(staged.drag_paths().to_vec())

@@ -139,13 +139,13 @@ impl NativeFileDragAdapter for LinuxPlatform {
         _window: &tauri::WebviewWindow<Wry>,
         items: &[NativeFileDragItem],
         stream_provider: NativeFileDragStreamProvider,
-        _context: NativeFileDragJobContext<'_>,
+        context: NativeFileDragJobContext<'_>,
     ) -> Result<NativeFileDragStart, NativeFileDragError> {
         if items.is_empty() {
             return Err(NativeFileDragError::new("No archive files are available to drag.", None::<String>));
         }
 
-        let staged_drag = StagedFileDrag::create("Linux", items, stream_provider)?;
+        let staged_drag = StagedFileDrag::create("Linux", items, context.batch_provider, stream_provider)?;
         Ok(NativeFileDragStart::Settled { outcome: linux_file_drag::start_drag(staged_drag)? })
     }
 }
@@ -327,6 +327,7 @@ mod tests {
                     modified_unix_seconds: None,
                 },
             ],
+            None,
             provider,
         )
         .expect("stage drag files");

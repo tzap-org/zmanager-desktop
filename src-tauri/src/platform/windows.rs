@@ -103,6 +103,7 @@ impl NativeFileDragAdapter for WindowsPlatform {
             staged_drag,
             items.to_vec(),
             stream_provider,
+            context.batch_provider,
             Arc::new(move || {
                 let _ = window.emit("native-file-drag-destination", NativeFileDragDestinationEvent { job_id: job_id.clone() });
             }),

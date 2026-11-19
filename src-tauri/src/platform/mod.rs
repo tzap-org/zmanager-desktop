@@ -130,6 +130,10 @@ pub enum NativeFileDragStart {
 
 pub type NativeFileDragStreamProvider = Arc<dyn Fn(&str, &mut dyn Write) -> Result<u64, NativeFileDragError> + Send + Sync>;
 
+/// Materializes the selected entries in one extraction job. Returns false when
+/// batch extraction is unavailable and staging should use the per-file provider.
+pub type NativeFileDragBatchProvider = Arc<dyn Fn(&Path, &[NativeFileDragItem]) -> Result<bool, NativeFileDragError> + Send + Sync>;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeFileDragErrorKind {
     InvalidRequest,
@@ -246,6 +250,7 @@ pub(crate) trait NativeFileDragAdapter {
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) struct NativeFileDragJobContext<'a> {
+    pub batch_provider: Option<NativeFileDragBatchProvider>,
     pub registry: &'a crate::native_drag_session::NativeDragSessionRegistry,
     pub cancellation: zmanager_core::jobs::CancellationToken,
     pub job_id: &'a str,
@@ -408,6 +413,7 @@ pub(crate) fn format_local_time(time: std::time::SystemTime) -> Option<String> {
 /// Owned inputs for [`run_native_file_drag`], bundled so the dispatch can move
 /// them onto a blocking thread on Windows.
 pub struct NativeFileDragRun {
+    pub batch_provider: Option<NativeFileDragBatchProvider>,
     pub window: tauri::WebviewWindow<Wry>,
     pub items: Vec<NativeFileDragItem>,
     pub drag_registry: crate::native_drag_session::NativeDragSessionRegistry,
@@ -425,7 +431,8 @@ pub struct NativeFileDragRun {
 /// archive is materialized and Explorer owns the drag loop. Other platforms
 /// drive the native drag loop from the async runtime directly.
 pub async fn run_native_file_drag(run: NativeFileDragRun, stream_provider: NativeFileDragStreamProvider) -> Result<NativeFileDragStart, NativeFileDragError> {
-    let NativeFileDragRun { window, items, drag_registry, job_registry, cancellation, job_id, job_kind } = run;
+    let batch_provider = run.batch_provider;
+    let NativeFileDragRun { window, items, drag_registry, job_registry, cancellation, job_id, job_kind, .. } = run;
     #[cfg(target_os = "windows")]
     {
         tauri::async_runtime::spawn_blocking(move || {
@@ -433,7 +440,7 @@ pub async fn run_native_file_drag(run: NativeFileDragRun, stream_provider: Nativ
                 &window,
                 &items,
                 stream_provider,
-                NativeFileDragJobContext { registry: &drag_registry, cancellation, job_id: &job_id, job_kind, job_registry: &job_registry },
+                NativeFileDragJobContext { batch_provider, registry: &drag_registry, cancellation, job_id: &job_id, job_kind, job_registry: &job_registry },
             )
         })
         .await
@@ -445,7 +452,7 @@ pub async fn run_native_file_drag(run: NativeFileDragRun, stream_provider: Nativ
             &window,
             &items,
             stream_provider,
-            NativeFileDragJobContext { registry: &drag_registry, cancellation, job_id: &job_id, job_kind, job_registry: &job_registry },
+            NativeFileDragJobContext { batch_provider, registry: &drag_registry, cancellation, job_id: &job_id, job_kind, job_registry: &job_registry },
         )
     }
 }
