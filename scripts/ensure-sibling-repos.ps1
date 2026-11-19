@@ -53,11 +53,11 @@ $tzapRef = if ($env:ZMANAGER_TZAP_REF) { $env:ZMANAGER_TZAP_REF } else { "69f53d
 $tzapDir = if ($env:ZMANAGER_TZAP_DIR) { $env:ZMANAGER_TZAP_DIR } else { Join-Path $parentDir "tzap" }
 
 $zmanagerRepo = if ($env:ZMANAGER_ZMANAGER_REPO) { $env:ZMANAGER_ZMANAGER_REPO } else { "https://github.com/tzap-org/zmanager" }
-$zmanagerRef = if ($env:ZMANAGER_ZMANAGER_REF) { $env:ZMANAGER_ZMANAGER_REF } else { "fdbc6ec84c1a56d5af7fc9bfd1edf296bab78ca8" }
+$zmanagerRef = if ($env:ZMANAGER_ZMANAGER_REF) { $env:ZMANAGER_ZMANAGER_REF } else { "d2f0302e6a127f0dae7e006e31dabcdfbeb6b9c0" }
 $zmanagerDir = if ($env:ZMANAGER_ZMANAGER_DIR) { $env:ZMANAGER_ZMANAGER_DIR } else { Join-Path $parentDir "zmanager" }
 
 $localsendRepo = if ($env:ZMANAGER_LOCALSEND_REPO) { $env:ZMANAGER_LOCALSEND_REPO } else { "https://github.com/frankmanzhu/localsend-rs" }
-$localsendRef = if ($env:ZMANAGER_LOCALSEND_REF) { $env:ZMANAGER_LOCALSEND_REF } else { "main" }
+$localsendRef = if ($env:ZMANAGER_LOCALSEND_REF) { $env:ZMANAGER_LOCALSEND_REF } else { "0686dcf80d645172fe3b144299c322c2c5a1899b" }
 $localsendDir = if ($env:ZMANAGER_LOCALSEND_DIR) { $env:ZMANAGER_LOCALSEND_DIR } else { Join-Path $parentDir "localsend-rs" }
 
 $forensicVfsEngineRepo = if ($env:ZMANAGER_FORENSIC_VFS_ENGINE_REPO) { $env:ZMANAGER_FORENSIC_VFS_ENGINE_REPO } else { "https://github.com/frankmanzhu/forensic-vfs-engine" }
@@ -66,7 +66,7 @@ $forensicVfsEngineRef = if ($env:ZMANAGER_FORENSIC_VFS_ENGINE_REF) { $env:ZMANAG
 $forensicVfsEngineDir = if ($env:ZMANAGER_FORENSIC_VFS_ENGINE_DIR) { $env:ZMANAGER_FORENSIC_VFS_ENGINE_DIR } else { Join-Path $parentDir "forensic-vfs-engine" }
 
 $iso9660ForensicRepo = if ($env:ZMANAGER_ISO9660_FORENSIC_REPO) { $env:ZMANAGER_ISO9660_FORENSIC_REPO } else { "https://github.com/frankmanzhu/iso9660-forensic" }
-$iso9660ForensicRef = if ($env:ZMANAGER_ISO9660_FORENSIC_REF) { $env:ZMANAGER_ISO9660_FORENSIC_REF } else { "macos/fix-hybrid-session-selection" }
+$iso9660ForensicRef = if ($env:ZMANAGER_ISO9660_FORENSIC_REF) { $env:ZMANAGER_ISO9660_FORENSIC_REF } else { "2e8619d6cc39e4741bdc8c17812d76470a76c8ab" }
 $iso9660ForensicDir = if ($env:ZMANAGER_ISO9660_FORENSIC_DIR) { $env:ZMANAGER_ISO9660_FORENSIC_DIR } else { Join-Path $parentDir "iso9660-forensic" }
 
 function Invoke-Native {
@@ -252,6 +252,14 @@ Ensure-SiblingRepo -Name "iso9660-forensic" -Directory $iso9660ForensicDir -Repo
 Invoke-Native -FilePath "node" -Arguments @(
     (Join-Path $PSScriptRoot "checkout-forensic-forks.mjs"), $parentDir
 )
+
+if (-not $SkipZmanager) {
+    Invoke-Native -FilePath "node" -Arguments @(
+        (Join-Path $PSScriptRoot "check-shared-dependency-locks.mjs"),
+        (Join-Path $zmanagerDir "Cargo.lock"),
+        (Join-Path $PSScriptRoot "..\src-tauri\Cargo.lock")
+    )
+}
 
 # Packaging must use the lockfile that passed the security gate.
 $desktopManifest = Join-Path $PSScriptRoot "..\src-tauri\Cargo.toml"

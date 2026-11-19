@@ -151,9 +151,12 @@ test("release pins the released sibling cores and bootstraps reject lockfile dri
     const tzapRevision = read(".github/workflows/release.yml").match(/ZMANAGER_TZAP_REF: ([0-9a-f]{40})/)?.[1];
     assert.ok(coreRevision && read(path).includes(coreRevision), `${path} must use the audited core revision`);
     assert.ok(tzapRevision && read(path).includes(tzapRevision), `${path} must use the audited TZAP revision`);
-    assert.equal(coreRevision, "fdbc6ec84c1a56d5af7fc9bfd1edf296bab78ca8");
+    assert.equal(coreRevision, "d2f0302e6a127f0dae7e006e31dabcdfbeb6b9c0");
     assert.equal(tzapRevision, "69f53d71ad13876cbf74fac38f5f3aa2cf412920");
   }
+  assert.match(read(".github/workflows/security-audit.yml"), /check-shared-dependency-locks\.mjs/);
+  assert.match(read("scripts/ensure-sibling-repos.sh"), /check-shared-dependency-locks\.mjs/);
+  assert.match(read("scripts/ensure-sibling-repos.ps1"), /check-shared-dependency-locks\.mjs/);
   const opensslSetup = read("scripts/pinned-openssl.sh");
   assert.match(opensslSetup, /zmanager\/scripts\/build-openssl\.py/);
   assert.match(opensslSetup, /OPENSSL_STATIC=1/);

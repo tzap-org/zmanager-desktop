@@ -20,7 +20,7 @@ concurrency:
 env:
   # Pin the released sibling commits used to resolve the desktop's Cargo path dependencies.
   ZMANAGER_TZAP_REF: 69f53d71ad13876cbf74fac38f5f3aa2cf412920
-  ZMANAGER_ZMANAGER_REF: fdbc6ec84c1a56d5af7fc9bfd1edf296bab78ca8
+  ZMANAGER_ZMANAGER_REF: d2f0302e6a127f0dae7e006e31dabcdfbeb6b9c0
 
 jobs:
   security:

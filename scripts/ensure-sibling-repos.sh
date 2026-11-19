@@ -35,11 +35,11 @@ tzap_ref="${ZMANAGER_TZAP_REF:-69f53d71ad13876cbf74fac38f5f3aa2cf412920}"
 tzap_dir="${ZMANAGER_TZAP_DIR:-$parent_dir/tzap}"
 
 zmanager_repo="${ZMANAGER_ZMANAGER_REPO:-https://github.com/tzap-org/zmanager}"
-zmanager_ref="${ZMANAGER_ZMANAGER_REF:-fdbc6ec84c1a56d5af7fc9bfd1edf296bab78ca8}"
+zmanager_ref="${ZMANAGER_ZMANAGER_REF:-d2f0302e6a127f0dae7e006e31dabcdfbeb6b9c0}"
 zmanager_dir="${ZMANAGER_ZMANAGER_DIR:-$parent_dir/zmanager}"
 
 localsend_repo="${ZMANAGER_LOCALSEND_REPO:-https://github.com/frankmanzhu/localsend-rs}"
-localsend_ref="${ZMANAGER_LOCALSEND_REF:-main}"
+localsend_ref="${ZMANAGER_LOCALSEND_REF:-0686dcf80d645172fe3b144299c322c2c5a1899b}"
 localsend_dir="${ZMANAGER_LOCALSEND_DIR:-$parent_dir/localsend-rs}"
 
 forensic_vfs_engine_repo="${ZMANAGER_FORENSIC_VFS_ENGINE_REPO:-https://github.com/frankmanzhu/forensic-vfs-engine}"
@@ -49,7 +49,7 @@ forensic_vfs_engine_ref="${ZMANAGER_FORENSIC_VFS_ENGINE_REF:-400c3d719c4afe354b3
 forensic_vfs_engine_dir="${ZMANAGER_FORENSIC_VFS_ENGINE_DIR:-$parent_dir/forensic-vfs-engine}"
 
 iso9660_forensic_repo="${ZMANAGER_ISO9660_FORENSIC_REPO:-https://github.com/frankmanzhu/iso9660-forensic}"
-iso9660_forensic_ref="${ZMANAGER_ISO9660_FORENSIC_REF:-macos/fix-hybrid-session-selection}"
+iso9660_forensic_ref="${ZMANAGER_ISO9660_FORENSIC_REF:-2e8619d6cc39e4741bdc8c17812d76470a76c8ab}"
 iso9660_forensic_dir="${ZMANAGER_ISO9660_FORENSIC_DIR:-$parent_dir/iso9660-forensic}"
 
 skip_zmanager=0
@@ -201,6 +201,10 @@ ensure_sibling_repo "iso9660-forensic" "$iso9660_forensic_dir" "$iso9660_forensi
 
 # Reproduce the reviewed codec fixes used by both desktop and the core FFI.
 node "$repo_root/scripts/checkout-forensic-forks.mjs" "$parent_dir"
+
+if ((skip_zmanager == 0)); then
+  node "$repo_root/scripts/check-shared-dependency-locks.mjs" "$zmanager_dir/Cargo.lock" "$repo_root/src-tauri/Cargo.lock"
+fi
 
 # Packaging must use the lockfile that passed the security gate. Reject sibling
 # manifest drift before a build can silently resolve different dependencies.

@@ -96,6 +96,8 @@ jobs:
           git -C ../forensic-vfs-engine checkout "$FVE_REV" || git -C ../forensic-vfs-engine checkout main
       - name: Checkout pinned forensic dependency forks
         run: node scripts/checkout-forensic-forks.mjs .audit
+      - name: Verify shared package versions
+        run: node scripts/check-shared-dependency-locks.mjs .audit/core/Cargo.lock src-tauri/Cargo.lock
       - run: rustup toolchain install stable --profile minimal
       - run: cargo +stable install cargo-audit --locked --version 0.22.2
       # Match zmanager's successful audit: refresh lock entries resolved against

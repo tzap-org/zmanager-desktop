@@ -25,7 +25,7 @@ Both sibling bootstraps validate Cargo resolution with `--locked` before
 packaging, so a stale sibling manifest cannot silently replace audited
 dependencies. Releases pin the released TZAP `v0.2.9` source revision
 `69f53d71ad13876cbf74fac38f5f3aa2cf412920` and ZManager `v2.2.1` source
-revision `fdbc6ec84c1a56d5af7fc9bfd1edf296bab78ca8`. The release security job
+revision `d2f0302e6a127f0dae7e006e31dabcdfbeb6b9c0`. The release security job
 audits the resolved core graph using those exact sibling commits before
 packaging. The shell and PowerShell bootstraps use the same pins by default.
 Developers can explicitly override `ZMANAGER_TZAP_REF` and
@@ -52,6 +52,11 @@ apply the forks at the desktop workspace root; Cargo does not inherit core's
 workspace patches. The backhand pin and local TZAP core path keep the desktop
 codec graph on the same fixed zstd releases as the core workspace. The same
 sibling layout supports the core workspace used by the macOS FFI build.
+
+ZManager, AFF4, the ZIP oracle, and the desktop resolve the `zip` package at
+9.6.1. The standalone forensic-vfs-engine test lock retains `zip` 2.4.2 because
+its registry AFF4 dependency requires `zip` ^2; that dev-only graph is not part
+of the desktop runtime, where Cargo patches AFF4 to the local 9.6.1 fork.
 
 The engine bootstrap pins compatibility commit
 `400c3d719c4afe354b3d21d67f71c39092059eee` to match core's upstream ISO 0.8 /
