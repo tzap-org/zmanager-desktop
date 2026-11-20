@@ -15,7 +15,7 @@ function fixture(t) {
   const parent = join(root, "siblings");
   mkdirSync(scripts, { recursive: true });
   mkdirSync(remote);
-  copyFileSync(join(import.meta.dirname, "checkout-forensic-forks.mjs"), join(scripts, "checkout-forensic-forks.mjs"));
+  copyFileSync(join(import.meta.dirname, "checkout-release-inputs.mjs"), join(scripts, "checkout-release-inputs.mjs"));
   git(remote, "init", "--initial-branch=main");
   git(remote, "config", "user.name", "Frank Zhu");
   git(remote, "config", "user.email", "frankmanzhu@hotmail.com");
@@ -24,9 +24,9 @@ function fixture(t) {
   git(remote, "add", ".");
   git(remote, "commit", "-m", "Fix codec");
   const revision = git(remote, "rev-parse", "HEAD");
-  const pins = join(root, "desktop", "forensic-forks.lock");
-  writeFileSync(pins, `# reviewed fork\ncodec ${remote} ${revision}\n`);
-  const run = () => spawnSync(process.execPath, [join(scripts, "checkout-forensic-forks.mjs"), parent], { encoding: "utf8" });
+  const pins = join(root, "desktop", "release-build-inputs.lock");
+  writeFileSync(pins, `# reviewed sibling\ncodec ${remote} main ${revision}\n`);
+  const run = () => spawnSync(process.execPath, [join(scripts, "checkout-release-inputs.mjs"), parent], { encoding: "utf8" });
   return { root, remote, parent, pins, revision, run, checkout: join(parent, "codec") };
 }
 
@@ -46,7 +46,7 @@ test("fork bootstrap refuses a different revision without altering existing work
   assert.equal(f.run().status, 0);
   writeFileSync(join(f.remote, "codec.txt"), "unreviewed codec\n");
   git(f.remote, "commit", "-am", "Change codec");
-  writeFileSync(f.pins, `codec ${f.remote} ${git(f.remote, "rev-parse", "HEAD")}\n`);
+  writeFileSync(f.pins, `codec ${f.remote} main ${git(f.remote, "rev-parse", "HEAD")}\n`);
   const result = f.run();
   assert.equal(result.status, 1);
   assert.match(result.stderr, /existing work was preserved/);
@@ -65,7 +65,7 @@ test("fork bootstrap refuses dirty reviewed checkouts without discarding edits",
 
 test("fork bootstrap fails closed on malformed pins and clone errors", (t) => {
   const f = fixture(t);
-  for (const pin of [`../escape ${f.remote} ${f.revision}`, `codec ${f.remote} main`, `codec ${f.remote} ${f.revision} extra`]) {
+  for (const pin of [`../escape ${f.remote} main ${f.revision}`, `codec ${f.remote} ${f.revision}`, `codec ${f.remote} main ${f.revision} extra`]) {
     writeFileSync(f.pins, pin);
     assert.equal(f.run().status, 1);
   }

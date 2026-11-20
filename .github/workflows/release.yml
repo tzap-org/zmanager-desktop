@@ -18,9 +18,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Pin the released sibling commits used to resolve the desktop's Cargo path dependencies.
-  ZMANAGER_TZAP_REF: 69f53d71ad13876cbf74fac38f5f3aa2cf412920
-  ZMANAGER_ZMANAGER_REF: d2f0302e6a127f0dae7e006e31dabcdfbeb6b9c0
+  ZMANAGER_BUILD_MODE: release
+  ZMANAGER_RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
   security:
@@ -45,6 +44,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Install Node.js
         uses: actions/setup-node@v6
@@ -62,7 +63,7 @@ jobs:
           rustup target add "${{ matrix.arch == 'arm64' && 'aarch64-apple-darwin' || 'x86_64-apple-darwin' }}"
           npm ci
           npx playwright install --with-deps chromium
-          scripts/ensure-sibling-repos.sh
+          scripts/ensure-sibling-repos.sh --mode release
           scripts/sync-uniffi-swift-bindings.sh
           source scripts/pinned-openssl.sh
           zmanager_configure_pinned_openssl "${{ matrix.arch == 'arm64' && 'aarch64-apple-darwin' || 'x86_64-apple-darwin' }}"
@@ -205,6 +206,14 @@ jobs:
             /tmp/zmanager-macos-release-${{ matrix.profile }}/*-inspection.json
             /tmp/zmanager-macos-release-${{ matrix.profile }}/*-SHA256SUMS.txt
 
+      - name: Upload sibling build provenance
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-build-inputs-macos-${{ matrix.arch }}-${{ matrix.profile }}
+          path: target/build-inputs-report.tsv
+          if-no-files-found: warn
+
       - name: Remove release credentials
         if: always()
         run: |
@@ -229,6 +238,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Install Node.js
         uses: actions/setup-node@v6
@@ -355,6 +366,14 @@ jobs:
             ${{ runner.temp }}\zmbuild-${{ matrix.profile }}\*\release\bundle\nsis\*.exe
             ${{ runner.temp }}\zmanager-desktop-*-third-party-licenses.zip
 
+      - name: Upload sibling build provenance
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-build-inputs-windows-${{ matrix.arch }}-${{ matrix.profile }}
+          path: target/build-inputs-report.tsv
+          if-no-files-found: warn
+
   package-deb:
     needs: security
     name: Linux DEB ${{ matrix.arch }} ${{ matrix.profile }} package
@@ -373,6 +392,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Install Node.js
         uses: actions/setup-node@v6
@@ -404,6 +425,14 @@ jobs:
           path: |
             /tmp/zmanager-desktop-deb-${{ matrix.profile }}/*.deb
 
+      - name: Upload sibling build provenance
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-build-inputs-deb-${{ matrix.arch }}-${{ matrix.profile }}
+          path: target/build-inputs-report.tsv
+          if-no-files-found: warn
+
   package-rpm:
     needs: security
     name: Linux RPM ${{ matrix.arch }} ${{ matrix.profile }} package
@@ -424,6 +453,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
 
       - name: Install Node.js
         uses: actions/setup-node@v6
@@ -454,6 +485,14 @@ jobs:
           if-no-files-found: error
           path: |
             /tmp/zmanager-desktop-rpm-${{ matrix.profile }}/*.rpm
+
+      - name: Upload sibling build provenance
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: release-build-inputs-rpm-${{ matrix.arch }}-${{ matrix.profile }}
+          path: target/build-inputs-report.tsv
+          if-no-files-found: warn
 
 
   publish:

@@ -11,6 +11,10 @@ on:
 permissions:
   contents: write
 
+env:
+  ZMANAGER_BUILD_MODE: snapshot
+  ZMANAGER_BUILD_INPUTS_LOCK: .build-inputs/ci-sibling-inputs.lock
+
 jobs:
   bump-version:
     name: Bump Version to ${{ inputs.version }}
@@ -30,6 +34,12 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Resolve sibling branch snapshot
+        run: bash scripts/prepare-sibling-inputs.sh --lockfile release-build-inputs.lock --resolve-ci .build-inputs/ci-sibling-inputs.lock
+
+      - name: Prepare frozen sibling inputs
+        run: bash scripts/prepare-sibling-inputs.sh --mode snapshot --lockfile "$ZMANAGER_BUILD_INPUTS_LOCK"
 
       - name: Run version bump script
         run: bash scripts/bump-version.sh "${{ inputs.version }}"

@@ -94,8 +94,8 @@ x11 = { version = "2.21", features = ["xlib"] }
 keyring = { version = "4.1.6", default-features = false, features = ["v1"] }
 
 # Cargo does not inherit patches from the sibling core workspace. Keep these
-# compatible codec fixes aligned with forensic-forks.lock and bootstrap them
-# through scripts/checkout-forensic-forks.mjs. See public-docs/security.md.
+# compatible codec fixes aligned with release-build-inputs.lock and bootstrap them
+# through scripts/prepare-sibling-inputs.sh. See public-docs/security.md.
 [patch.crates-io]
 aff4 = { path = "../../aff4/core" }
 backhand = { path = "../../backhand/backhand" }

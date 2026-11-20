@@ -11,20 +11,21 @@ function git(args) {
 
 try {
   if (process.argv.length > 3) {
-    throw new Error("usage: node scripts/checkout-forensic-forks.mjs [sibling-parent-directory]");
+    throw new Error("usage: node scripts/checkout-release-inputs.mjs [sibling-parent-directory]");
   }
   const parent = resolve(process.argv[2] ?? resolve(root, ".."));
-  const pins = readFileSync(resolve(root, "forensic-forks.lock"), "utf8")
+  const pins = readFileSync(resolve(root, "release-build-inputs.lock"), "utf8")
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter((line) => line && !line.startsWith("#"))
     .map((line) => {
-      const [name, repository, revision, extra] = line.split(/\s+/);
+      const [name, repository, branch, revision, extra] = line.split(/\s+/);
       if (!/^[a-z0-9][a-z0-9.-]*$/.test(name) || name === ".." ||
-          !repository || repository.startsWith("-") || !/^[0-9a-f]{40}$/.test(revision) || extra) {
-        throw new Error(`invalid forensic fork pin: ${line}`);
+          !repository || repository.startsWith("-") || !/^[A-Za-z0-9._/-]+$/.test(branch) ||
+          !/^[0-9a-f]{40}$/.test(revision) || extra) {
+        throw new Error(`invalid release build input: ${line}`);
       }
-      return { name, repository, revision };
+      return { name, repository, branch, revision };
     });
   if (new Set(pins.map(({ name }) => name)).size !== pins.length) {
     throw new Error("duplicate forensic fork checkout name");

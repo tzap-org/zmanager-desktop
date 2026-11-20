@@ -31,14 +31,12 @@ zmanager-desktop/
   consumes zmanager-core from the public Rust repo
 ```
 
-The local bootstrap dependency points at the sibling macOS checkout by default:
-
-```text
-../ZManager/cli/crates/zmanager-core
-```
-
-When this becomes a standalone repository, replace the local path dependency with
-a Git dependency or a checked-out submodule of the public CLI/core repository.
+The desktop Cargo workspace uses sibling source checkouts, including `zmanager`
+and `tzap`, through local path dependencies. The complete sibling inventory,
+local and CI setup, and release pin procedure are documented in
+[Build inputs and sibling repository design](BUILD_INPUTS_DESIGN.md). That guide
+is the canonical operator reference; the product's release lock records the
+authoritative sibling SHAs.
 
 ## Product direction (engineering)
 

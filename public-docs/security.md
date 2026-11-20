@@ -21,15 +21,10 @@ database or registry failures fail the job; there are no advisory exceptions
 or `continue-on-error` paths. Branch protection can require the workflow's
 checks; artifact workflows enforce their own dependency on the gate.
 
-Both sibling bootstraps validate Cargo resolution with `--locked` before
-packaging, so a stale sibling manifest cannot silently replace audited
-dependencies. Releases pin the released TZAP `v0.2.9` source revision
-`69f53d71ad13876cbf74fac38f5f3aa2cf412920` and ZManager `v2.2.1` source
-revision `d2f0302e6a127f0dae7e006e31dabcdfbeb6b9c0`. The release security job
-audits the resolved core graph using those exact sibling commits before
-packaging. The shell and PowerShell bootstraps use the same pins by default.
-Developers can explicitly override `ZMANAGER_TZAP_REF` and
-`ZMANAGER_ZMANAGER_REF` while working on sibling changes.
+The canonical sibling build procedure, release-lock workflow, and CI provenance
+format are documented in [Build inputs and sibling repository design](BUILD_INPUTS_DESIGN.md).
+`release-build-inputs.lock` is authoritative for desktop release sibling SHAs;
+the release security job audits the core graph from the locked commits.
 
 Desktop builds use the ZManager OpenSSL provisioning script. It builds OpenSSL
 3.5.9 with the shared RSA-PSS provider alias patch and verifies the patch hash
@@ -39,15 +34,13 @@ writes the upstream license and patched-source notice into the install tree.
 ## Temporary forensic codec forks
 
 Until the forensic readers publish fixed codec constraints, desktop mirrors the
-reviewed forks used by the core workspace. `forensic-forks.lock` records exact
-commit pins for AFF4, backhand, Btrfs, DAR, ZFS and the shared ZIP 0.2.2 reader.
+reviewed forks used by the core workspace. The release lock is the authoritative
+source for their URLs and commit pins, alongside the other sibling checkouts.
 AFF4 and archive-core now use the same patched `zip-forensic-core`; the ZIP 0.1
 backport and checkout are no longer needed.
 
-`scripts/checkout-forensic-forks.mjs` runs from both the shell and PowerShell
-sibling bootstraps. It clones missing forks at detached revisions and rejects
-existing checkouts with a different revision or local changes, preserving the
-developer's work. Cargo's `[patch.crates-io]` entries in `src-tauri/Cargo.toml`
+The canonical guide describes sibling selection and checkout behavior. Cargo's
+`[patch.crates-io]` entries in `src-tauri/Cargo.toml`
 apply the forks at the desktop workspace root; Cargo does not inherit core's
 workspace patches. The backhand pin and local TZAP core path keep the desktop
 codec graph on the same fixed zstd releases as the core workspace. The same

@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+env:
+  ZMANAGER_BUILD_MODE: snapshot
+  ZMANAGER_BUILD_INPUTS_LOCK: .build-inputs/ci-sibling-inputs.lock
+
 concurrency:
   group: package-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -18,8 +22,22 @@ jobs:
   security:
     uses: ./.github/workflows/security-audit.yml
 
+  resolve-sibling-inputs:
+    name: Resolve sibling snapshot
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Resolve configured sibling branch heads
+        run: bash scripts/prepare-sibling-inputs.sh --lockfile release-build-inputs.lock --resolve-ci target/ci-sibling-inputs.lock
+      - uses: actions/upload-artifact@v6
+        with:
+          name: ci-sibling-inputs
+          path: target/ci-sibling-inputs.lock
+          if-no-files-found: error
+
   test:
-    needs: security
+    needs: [security, resolve-sibling-inputs]
     name: Test ${{ matrix.flavor }} ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
@@ -57,6 +75,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: ci-sibling-inputs
+          path: .build-inputs
+
+      - name: Prepare frozen sibling snapshot
+        shell: bash
+        run: bash scripts/prepare-sibling-inputs.sh --mode snapshot --lockfile "$ZMANAGER_BUILD_INPUTS_LOCK"
 
       - name: Install Node.js
         uses: actions/setup-node@v6
@@ -262,9 +289,17 @@ jobs:
           scripts/test-linux-packaging-scripts.sh
           npm run test:architecture
 
+      - name: Upload sibling build inputs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: test-build-inputs-${{ matrix.flavor }}-${{ matrix.arch }}
+          path: target/build-inputs-report.tsv
+          if-no-files-found: warn
+
   package:
     name: Package ${{ matrix.flavor }} ${{ matrix.arch }}
-    needs: test
+    needs: [test, resolve-sibling-inputs]
     runs-on: ${{ matrix.runner }}
     container: ${{ matrix.container }}
     strategy:
@@ -309,6 +344,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - uses: actions/download-artifact@v7
+        with:
+          name: ci-sibling-inputs
+          path: .build-inputs
+
+      - name: Prepare frozen sibling snapshot
+        shell: bash
+        run: bash scripts/prepare-sibling-inputs.sh --mode snapshot --lockfile "$ZMANAGER_BUILD_INPUTS_LOCK"
 
       - name: Install Node.js
         uses: actions/setup-node@v6
@@ -427,3 +471,11 @@ jobs:
           if-no-files-found: error
           path: |
             /tmp/zmanager-desktop-rpm/*.rpm
+
+      - name: Upload sibling build inputs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: package-build-inputs-${{ matrix.flavor }}-${{ matrix.arch }}
+          path: target/build-inputs-report.tsv
+          if-no-files-found: warn

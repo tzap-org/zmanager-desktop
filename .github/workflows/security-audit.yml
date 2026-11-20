@@ -64,15 +64,19 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      - name: Read the reviewed release core revision
+      - name: Read released sibling revisions
         id: core
         run: |
           node <<'NODE'
           const fs = require('node:fs');
-          const source = fs.readFileSync('.github/workflows/release.yml', 'utf8');
-          const coreRevision = source.match(/^  ZMANAGER_ZMANAGER_REF: ([0-9a-f]{40})$/m)?.[1];
-          const tzapRevision = source.match(/^  ZMANAGER_TZAP_REF: ([0-9a-f]{40})$/m)?.[1];
-          if (!coreRevision || !tzapRevision) throw new Error('Release must pin reviewed ZManager and TZAP commits');
+          const entries = fs.readFileSync('release-build-inputs.lock', 'utf8')
+            .split(/\r?\n/).filter(line => line.trim() && !line.trimStart().startsWith('#'))
+            .map(line => line.trim().split(/\s+/));
+          const coreRevision = entries.find(([name]) => name === 'zmanager')?.[3];
+          const tzapRevision = entries.find(([name]) => name === 'tzap')?.[3];
+          if (!/^[0-9a-f]{40}$/.test(coreRevision ?? '') || !/^[0-9a-f]{40}$/.test(tzapRevision ?? '')) {
+            throw new Error('Release lock must pin full ZManager and TZAP commits');
+          }
           fs.appendFileSync(process.env.GITHUB_OUTPUT, `core_revision=${coreRevision}\ntzap_revision=${tzapRevision}\n`);
           NODE
       - uses: actions/checkout@v6
@@ -85,17 +89,19 @@ jobs:
           repository: tzap-org/tzap
           ref: ${{ steps.core.outputs.tzap_revision }}
           path: .audit/tzap
-      - name: Clone core's pinned sibling repositories
-        working-directory: .audit/core
+      - name: Prepare the pinned core's sibling inputs
+        shell: bash
         run: |
-          LOCALSEND_REV=$(cat localsend-rs-rev.txt 2>/dev/null || echo "main")
-          git clone https://github.com/frankmanzhu/localsend-rs.git ../localsend-rs
-          git -C ../localsend-rs checkout "$LOCALSEND_REV" || git -C ../localsend-rs checkout main
-          FVE_REV=$(cat forensic-vfs-engine-rev.txt 2>/dev/null || echo "main")
-          git clone https://github.com/frankmanzhu/forensic-vfs-engine.git ../forensic-vfs-engine
-          git -C ../forensic-vfs-engine checkout "$FVE_REV" || git -C ../forensic-vfs-engine checkout main
-      - name: Checkout pinned forensic dependency forks
-        run: node scripts/checkout-forensic-forks.mjs .audit
+          if [[ -f .audit/core/release-build-inputs.lock ]]; then
+            ZMANAGER_SIBLING_PARENT_DIR="$GITHUB_WORKSPACE/.audit" \
+              bash scripts/prepare-sibling-inputs.sh --mode snapshot \
+                --lockfile .audit/core/release-build-inputs.lock
+          else
+            # The currently reviewed core commit predates its consolidated
+            # lock; use the desktop lock, whose shared sibling SHAs match its
+            # historical revision files. Newer core pins use their own lock.
+            node scripts/checkout-release-inputs.mjs .audit
+          fi
       - name: Verify shared package versions
         run: node scripts/check-shared-dependency-locks.mjs .audit/core/Cargo.lock src-tauri/Cargo.lock
       - run: rustup toolchain install stable --profile minimal

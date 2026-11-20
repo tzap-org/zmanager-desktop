@@ -27,7 +27,8 @@ test("security workflow audits npm with one scoped advisory exception and every 
   assert.match(workflow, /ref: \$\{\{ steps\.core\.outputs\.core_revision \}\}/);
   assert.match(workflow, /repository: tzap-org\/tzap/);
   assert.match(workflow, /tzap_revision/);
-  assert.ok(workflow.includes("checkout-forensic-forks.mjs .audit"));
+  assert.ok(workflow.includes(".audit/core/release-build-inputs.lock"));
+  assert.ok(workflow.includes("checkout-release-inputs.mjs .audit"));
   assert.ok(workflow.includes("cargo update --package tzap-core"));
   assert.ok(workflow.includes("cargo update --package crypto-bigint"));
   assert.ok(workflow.includes("cargo audit --deny yanked --file Cargo.lock"));
@@ -38,25 +39,28 @@ test("security workflow audits npm with one scoped advisory exception and every 
 
 test("forensic patches have immutable checkout pins and bootstrap on both platforms", () => {
   const manifest = read("src-tauri/Cargo.toml");
-  const pins = read("forensic-forks.lock").split("\n").filter((line) => line.trim() && !line.startsWith("#"));
-  assert.equal(pins.length, 6);
+  const pins = read("release-build-inputs.lock").split("\n").filter((line) => line.trim() && !line.startsWith("#"));
+  assert.equal(pins.length, 11);
   for (const line of pins) {
-    const [name, repository, revision, extra] = line.split(/\s+/);
+    const [name, repository, branch, revision, extra] = line.split(/\s+/);
     assert.equal(extra, undefined);
-    assert.match(repository, /^https:\/\/github\.com\/frankmanzhu\//);
+    assert.match(repository, /^https:\/\/github\.com\/(?:frankmanzhu|tzap-org)\//);
+    assert.match(branch, /^[A-Za-z0-9._/-]+$/);
     assert.match(revision, /^[0-9a-f]{40}$/);
+  }
+  for (const name of ["aff4", "backhand", "btrfs-core", "dar-core", "zfs-forensic-core", "zip-forensic-core"]) {
     const path = name === "backhand" ? "../../backhand/backhand" : `../../${name}/core`;
     assert.ok(manifest.includes(`path = "${path}"`), `${name} must be patched at the desktop workspace root`);
   }
   assert.match(manifest, /^tzap-core = \{ path = "\.\.\/\.\.\/tzap\/crates\/tzap-core" \}$/m);
   for (const script of ["scripts/ensure-sibling-repos.sh", "scripts/ensure-sibling-repos.ps1"]) {
-    assert.ok(read(script).includes("checkout-forensic-forks.mjs"), `${script} must provision the patches`);
+    assert.ok(/(?:prepare|ensure)-sibling-repos\.sh/.test(read(script)), `${script} must provision the sibling inputs`);
   }
 });
 
 test("AFF4 and archive-core share ZIP forensic 0.2.2 without the retired checkout", () => {
   const manifest = read("src-tauri/Cargo.toml");
-  const pins = read("forensic-forks.lock");
+  const pins = read("release-build-inputs.lock");
   assert.match(manifest, /^zip-forensic-core = \{ path = "\.\.\/\.\.\/zip-forensic-core\/core" \}$/m);
   assert.doesNotMatch(manifest + pins, /zip-forensic-core-0[.12]/);
   const packages = read("src-tauri/Cargo.lock").split("[[package]]");
@@ -105,7 +109,7 @@ test("package and release jobs wait for the reusable security gate", () => {
     assert.match(workflow, /security:[\s\S]*?uses: \.\/\.github\/workflows\/security-audit\.yml/);
     const jobs = path.endsWith("package.yml") ? ["test"] : ["package-macos", "package-windows", "package-deb", "package-rpm"];
     for (const job of jobs) {
-      assert.ok(workflow.includes(`  ${job}:\n    needs: security`), `${job} must wait for security`);
+      assert.match(workflow, new RegExp(`  ${job}:\\n    needs: (?:security|\\[[^\\]]*security)`), `${job} must wait for security`);
     }
   }
 });
@@ -136,27 +140,24 @@ test("the product lockfile uses the reviewed codec sources and excludes yanked c
   assert.deepEqual(versions("crypto-bigint"), ["0.7.10"]);
 });
 
-test("release pins the released sibling cores and bootstraps reject lockfile drift", () => {
-  const reviewedCoreRevision = read(".github/workflows/release.yml").match(/ZMANAGER_ZMANAGER_REF: ([0-9a-f]{40})/)?.[1];
-  const reviewedTzapRevision = read(".github/workflows/release.yml").match(/ZMANAGER_TZAP_REF: ([0-9a-f]{40})/)?.[1];
-  assert.ok(reviewedCoreRevision, "release must pin the reviewed core commit");
-  assert.ok(reviewedTzapRevision, "release must pin the reviewed TZAP commit");
-  assert.ok(read(".github/workflows/release.yml").includes(`ZMANAGER_ZMANAGER_REF: ${reviewedCoreRevision}`));
-  assert.ok(read(".github/workflows/release.yml").includes(`ZMANAGER_TZAP_REF: ${reviewedTzapRevision}`));
+test("release lock captures controlled sibling commits and gate verifies them", () => {
+  const entries = read("release-build-inputs.lock").split("\n")
+    .filter((line) => line.trim() && !line.startsWith("#"))
+    .map((line) => line.split(/\s+/));
+  const reviewedCoreRevision = entries.find(([name]) => name === "zmanager")?.[3];
+  const reviewedTzapRevision = entries.find(([name]) => name === "tzap")?.[3];
+  assert.ok(reviewedCoreRevision, "release lock must pin the reviewed core commit");
+  assert.ok(reviewedTzapRevision, "release lock must pin the reviewed TZAP commit");
+  assert.match(read(".github/workflows/release.yml"), /scripts\/ensure-sibling-repos\.sh --mode release/);
   assert.match(read("scripts/ensure-sibling-repos.sh"), /cargo tree --locked --all-features --target all/);
-  assert.match(read("scripts/ensure-sibling-repos.ps1"), /"tree", "--locked", "--all-features", "--target", "all"/);
-  for (const path of ["scripts/ensure-sibling-repos.sh", "scripts/ensure-sibling-repos.ps1"]) {
-    assert.ok(read(path).includes("400c3d719c4afe354b3d21d67f71c39092059eee"));
-    const coreRevision = read(".github/workflows/release.yml").match(/ZMANAGER_ZMANAGER_REF: ([0-9a-f]{40})/)?.[1];
-    const tzapRevision = read(".github/workflows/release.yml").match(/ZMANAGER_TZAP_REF: ([0-9a-f]{40})/)?.[1];
-    assert.ok(coreRevision && read(path).includes(coreRevision), `${path} must use the audited core revision`);
-    assert.ok(tzapRevision && read(path).includes(tzapRevision), `${path} must use the audited TZAP revision`);
-    assert.equal(coreRevision, "d2f0302e6a127f0dae7e006e31dabcdfbeb6b9c0");
-    assert.equal(tzapRevision, "69f53d71ad13876cbf74fac38f5f3aa2cf412920");
-  }
+  assert.match(read("scripts/ensure-sibling-repos.sh"), /release-gate\.sh" verify-build/);
+  assert.match(read("scripts/ensure-sibling-repos.ps1"), /ensure-sibling-repos\.sh/);
+  assert.match(read("scripts/release-gate.sh"), /refs\/tags\/\$zmanager_tag\^\{commit\}/);
+  assert.match(read("scripts/release-gate.sh"), /require_tagged_commit tzap/);
+  assert.equal(reviewedCoreRevision, "d2f0302e6a127f0dae7e006e31dabcdfbeb6b9c0");
+  assert.equal(reviewedTzapRevision, "69f53d71ad13876cbf74fac38f5f3aa2cf412920");
   assert.match(read(".github/workflows/security-audit.yml"), /check-shared-dependency-locks\.mjs/);
   assert.match(read("scripts/ensure-sibling-repos.sh"), /check-shared-dependency-locks\.mjs/);
-  assert.match(read("scripts/ensure-sibling-repos.ps1"), /check-shared-dependency-locks\.mjs/);
   const opensslSetup = read("scripts/pinned-openssl.sh");
   assert.match(opensslSetup, /zmanager\/scripts\/build-openssl\.py/);
   assert.match(opensslSetup, /OPENSSL_STATIC=1/);

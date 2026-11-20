@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+env:
+  ZMANAGER_BUILD_MODE: snapshot
+  ZMANAGER_BUILD_INPUTS_LOCK: .build-inputs/ci-sibling-inputs.lock
+
 jobs:
   licenses:
     name: Third-party license gate
@@ -30,6 +34,12 @@ jobs:
 
       - name: Install frontend dependencies
         run: npm ci
+
+      - name: Resolve sibling branch snapshot
+        run: bash scripts/prepare-sibling-inputs.sh --lockfile release-build-inputs.lock --resolve-ci .build-inputs/ci-sibling-inputs.lock
+
+      - name: Prepare frozen sibling inputs
+        run: bash scripts/prepare-sibling-inputs.sh --mode snapshot --lockfile "$ZMANAGER_BUILD_INPUTS_LOCK"
 
       - name: Ensure Cargo path dependencies
         run: scripts/ensure-sibling-repos.sh

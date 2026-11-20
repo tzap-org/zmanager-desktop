@@ -1,264 +1,74 @@
-import { execFileSync } from "node:child_process";
 import assert from "node:assert/strict";
-import {
-  cpSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import test from "node:test";
 
-const scriptsDirectory = dirname(fileURLToPath(import.meta.url));
-const repositoryRoot = join(scriptsDirectory, "..");
+const root = join(import.meta.dirname, "..");
+const read = (path) => readFileSync(join(root, path), "utf8");
+const lock = read("release-build-inputs.lock");
+const entries = lock.split(/\r?\n/).filter((line) => line.trim() && !line.trimStart().startsWith("#"))
+  .map((line) => line.trim().split(/\s+/));
 
-const shellBootstrap = readFileSync(join(scriptsDirectory, "ensure-sibling-repos.sh"), "utf8");
-const powershellBootstrap = readFileSync(join(scriptsDirectory, "ensure-sibling-repos.ps1"), "utf8");
-const cargoManifest = readFileSync(join(repositoryRoot, "src-tauri", "Cargo.toml"), "utf8");
-
-const siblingDirectories = [
-  ["ZMANAGER_TZAP", "tzap"],
-  ["ZMANAGER_ZMANAGER", "zmanager"],
-  ["ZMANAGER_LOCALSEND", "localsend-rs"],
-  ["ZMANAGER_FORENSIC_VFS_ENGINE", "forensic-vfs-engine"],
-  ["ZMANAGER_ISO9660_FORENSIC", "iso9660-forensic"],
-];
-
-function git(cwd, args) {
-  return execFileSync("git", args, {
-    ...(cwd ? { cwd } : {}),
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
-  }).trim();
-}
-
-function configureGitUser(directory) {
-  git(directory, ["config", "user.name", "Frank Zhu"]);
-  git(directory, ["config", "user.email", "frankmanzhu@hotmail.com"]);
-}
-
-function createSiblingUpdateFixture() {
-  const root = mkdtempSync(join(tmpdir(), "zmanager-sibling-update-"));
-  const remote = join(root, "remote.git");
-  const seed = join(root, "seed");
-  const workspace = join(root, "workspace");
-  const script = join(workspace, "scripts", "ensure-sibling-repos.sh");
-
-  mkdirSync(join(workspace, "scripts"), { recursive: true });
-  mkdirSync(join(workspace, "src-tauri"), { recursive: true });
-  cpSync(join(scriptsDirectory, "ensure-sibling-repos.sh"), script);
-  cpSync(join(scriptsDirectory, "checkout-forensic-forks.mjs"), join(workspace, "scripts", "checkout-forensic-forks.mjs"));
-  cpSync(join(scriptsDirectory, "check-shared-dependency-locks.mjs"), join(workspace, "scripts", "check-shared-dependency-locks.mjs"));
-  const lockfile = readFileSync(join(repositoryRoot, "src-tauri", "Cargo.lock"));
-  writeFileSync(join(workspace, "src-tauri", "Cargo.lock"), lockfile);
-  git(undefined, ["init", "--bare", "--initial-branch=main", remote]);
-  git(root, ["clone", remote, seed]);
-  configureGitUser(seed);
-  writeFileSync(join(seed, "tracked.txt"), "base\n");
-  writeFileSync(join(seed, "Cargo.lock"), lockfile);
-  git(seed, ["add", "Cargo.lock", "tracked.txt"]);
-  git(seed, ["commit", "-m", "base"]);
-  git(seed, ["push", "origin", "main"]);
-
-  const revision = git(seed, ["rev-parse", "HEAD"]);
-  const forkNames = readFileSync(join(repositoryRoot, "forensic-forks.lock"), "utf8")
-    .split("\n").filter((line) => line.trim() && !line.startsWith("#"))
-    .map((line) => line.split(/\s+/)[0]);
-  writeFileSync(join(workspace, "forensic-forks.lock"), forkNames.map((name) => `${name} ${remote} ${revision}\n`).join(""));
-
-  const env = { ...process.env };
-  for (const [prefix, name] of siblingDirectories) {
-    env[`${prefix}_REPO`] = remote;
-    env[`${prefix}_REF`] = "main";
-    env[`${prefix}_DIR`] = join(root, "siblings", name);
-  }
-
-  return { env, root, remote, script, seed, workspace };
-}
-
-function runUpdater(fixture) {
-  return execFileSync("bash", [fixture.script], {
-    cwd: fixture.workspace,
-    encoding: "utf8",
-    env: fixture.env,
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-}
-
-test("sibling bootstrap provisions the LocalSend path dependency", () => {
-  for (const [name, content] of [
-    ["shell", shellBootstrap],
-    ["PowerShell", powershellBootstrap],
-  ]) {
-    assert.match(content, /localsend-rs/,
-      `${name} bootstrap must mention the localsend-rs sibling repository`);
-    assert.match(content, /ZMANAGER_LOCALSEND_REPO/,
-      `${name} bootstrap must expose the LocalSend repository override`);
-    assert.match(content, /ZMANAGER_LOCALSEND_REF/,
-      `${name} bootstrap must expose the LocalSend ref override`);
-    assert.match(content, /ZMANAGER_LOCALSEND_DIR/,
-      `${name} bootstrap must expose the LocalSend directory override`);
+test("release input lock has unique sibling URLs, integration branches, and full commit pins", () => {
+  assert.ok(entries.length >= 10);
+  assert.equal(new Set(entries.map(([name]) => name)).size, entries.length);
+  for (const [name, url, branch, sha, extra] of entries) {
+    assert.match(name, /^[a-z0-9][a-z0-9.-]*$/);
+    assert.match(url, /^https:\/\//);
+    assert.match(branch, /^[A-Za-z0-9._/-]+$/);
+    assert.match(sha, /^[0-9a-f]{40}$/);
+    assert.equal(extra, undefined);
   }
 });
 
-test("published DPP does not require a sibling checkout", () => {
-  for (const [name, content] of [
-    ["shell", shellBootstrap],
-    ["PowerShell", powershellBootstrap],
-  ]) {
-    assert.doesNotMatch(content, /ZMANAGER_DPP|ensure[_-]sibling[_-]repo[^\n]*dpp|Ensure-SiblingRepo[^\n]*dpp/i,
-      `${name} bootstrap must not provision a DPP sibling repository`);
+test("release lock covers every path-based sibling dependency", () => {
+  const manifest = read("src-tauri/Cargo.toml");
+  const lockNames = new Set(entries.map(([name]) => name));
+  for (const name of ["zmanager", "tzap", "localsend-rs", "forensic-vfs-engine", "aff4", "backhand", "btrfs-core", "dar-core", "zfs-forensic-core", "zip-forensic-core"]) {
+    assert.ok(lockNames.has(name), `${name} must be in the release lock`);
   }
+  assert.match(manifest, /zmanager-core\s*=\s*\{\s*path\s*=\s*"\.\.\/\.\.\/zmanager\/crates\/zmanager-core"/);
+  assert.match(manifest, /zmanager-localsend\s*=\s*\{\s*path\s*=\s*"\.\.\/\.\.\/zmanager\/crates\/zmanager-localsend"/);
+  assert.match(manifest, /tzap-core = \{ path = "\.\.\/\.\.\/tzap\/crates\/tzap-core" \}/);
 });
 
-test("published NTFS and UDF adapters do not require sibling checkouts", () => {
-  for (const [name, content] of [
-    ["shell", shellBootstrap],
-    ["PowerShell", powershellBootstrap],
-  ]) {
-    assert.doesNotMatch(content, /ntfs-forensic|udf-forensic/i,
-      `${name} bootstrap must use the published NTFS and UDF adapters`);
-  }
+test("local and CI sibling resolution preserve local heads and freeze one CI snapshot", () => {
+  const resolver = read("scripts/prepare-sibling-inputs.sh");
+  assert.match(resolver, /mode="\$\{ZMANAGER_BUILD_MODE:-local\}"/);
+  assert.match(resolver, /--resolve-ci/);
+  assert.match(resolver, /git ls-remote --exit-code --refs/);
+  assert.match(resolver, /git clone --single-branch --depth 1 --branch/);
+  assert.match(resolver, /git -C "\$dir" checkout --detach "\$expected"/);
+  const workflow = read(".github/workflows/package.yml");
+  assert.match(workflow, /resolve-sibling-inputs/);
+  assert.match(workflow, /actions\/download-artifact@v7/);
+  assert.match(workflow, /--mode snapshot/);
+  assert.equal(
+    [...workflow.matchAll(/name: Prepare frozen sibling snapshot\s+shell: bash\s+run: bash scripts\/prepare-sibling-inputs\.sh --mode snapshot/g)].length,
+    2,
+    "both package matrix snapshot steps must run under Bash on Windows",
+  );
 });
 
-test("LocalSend Cargo path dependency has a matching sibling bootstrap entry", () => {
-  assert.match(cargoManifest, /zmanager-localsend\s*=\s*\{\s*path\s*=\s*"\.\.\/\.\.\/zmanager\/crates\/zmanager-localsend"/);
-  assert.match(shellBootstrap, /ensure_sibling_repo\s+"localsend-rs"/);
-  assert.match(powershellBootstrap, /Ensure-SiblingRepo\s+-Name\s+"localsend-rs"/);
+test("release gate checks refreshed clean repositories and release workflows use the committed lock", () => {
+  const status = read("scripts/check-sibling-repos.sh");
+  assert.match(status, /fetch --prune --no-tags origin/);
+  assert.match(status, /for-each-ref[^\n]*refs\/heads/);
+  assert.match(status, /dirty worktree/);
+  assert.match(status, /unpushed commit/);
+  assert.match(status, /behind/);
+  const gate = read("scripts/release-gate.sh");
+  assert.match(gate, /"\$check" --strict/);
+  assert.match(gate, /"\$update" --write/);
+  assert.match(gate, /release-build-inputs\.lock/);
+  assert.match(gate, /root_dirty=/);
+  const workflow = read(".github/workflows/release.yml");
+  assert.match(workflow, /scripts\/ensure-sibling-repos\.sh --mode release/);
+  assert.match(read("scripts/ensure-sibling-repos.sh"), /scripts\/release-gate\.sh" verify-build/);
+  assert.doesNotMatch(workflow, /ZMANAGER_(?:TZAP|ZMANAGER)_REF/);
 });
 
-test("sibling bootstrap does not fetch unrelated release tags during branch updates", () => {
-  assert.match(shellBootstrap, /fetch --prune --no-tags origin/);
-  assert.match(shellBootstrap, /pull --rebase --autostash --no-tags origin/);
-  assert.match(powershellBootstrap, /"fetch", "--prune", "--no-tags", "origin"/);
-  assert.match(powershellBootstrap, /"pull", "--rebase", "--autostash", "--no-tags", "origin"/);
-});
-
-test("sibling update failures are build-blocking", () => {
-  for (const [name, content] of [
-    ["shell", shellBootstrap],
-    ["PowerShell", powershellBootstrap],
-  ]) {
-    assert.doesNotMatch(content, /Warning: git update failed/,
-      `${name} bootstrap must not continue after a failed sibling update`);
-    assert.match(content, /refusing to build/,
-      `${name} bootstrap must make update failures build-blocking`);
-  }
-});
-
-test("shell updater rebases local commits and reapplies dirty edits", () => {
-  const fixture = createSiblingUpdateFixture();
-  try {
-    runUpdater(fixture);
-
-    const zmanager = join(fixture.root, "siblings", "zmanager");
-    configureGitUser(zmanager);
-    writeFileSync(join(zmanager, "local.txt"), "local commit\n");
-    git(zmanager, ["add", "local.txt"]);
-    git(zmanager, ["commit", "-m", "local commit"]);
-    writeFileSync(join(zmanager, "tracked.txt"), "base\nlocal dirty edit\n");
-
-    writeFileSync(join(fixture.seed, "remote.txt"), "remote commit\n");
-    git(fixture.seed, ["add", "remote.txt"]);
-    git(fixture.seed, ["commit", "-m", "remote commit"]);
-    const remoteCommit = git(fixture.seed, ["rev-parse", "HEAD"]);
-    git(fixture.seed, ["push", "origin", "main"]);
-
-    runUpdater(fixture);
-
-    assert.equal(git(zmanager, ["merge-base", "--is-ancestor", remoteCommit, "HEAD"]), "");
-    assert.match(git(zmanager, ["log", "--format=%s"]), /^local commit$/m);
-    assert.match(readFileSync(join(zmanager, "tracked.txt"), "utf8"), /local dirty edit/);
-    assert.equal(readFileSync(join(zmanager, "remote.txt"), "utf8").replace(/\r\n/g, "\n"), "remote commit\n");
-  } finally {
-    rmSync(fixture.root, { recursive: true, force: true });
-  }
-});
-
-test("shell updater stops on an autostash conflict", () => {
-  const fixture = createSiblingUpdateFixture();
-  try {
-    runUpdater(fixture);
-
-    const tzap = join(fixture.root, "siblings", "tzap");
-    writeFileSync(join(tzap, "tracked.txt"), "local conflicting edit\n");
-    writeFileSync(join(fixture.seed, "tracked.txt"), "remote conflicting edit\n");
-    git(fixture.seed, ["add", "tracked.txt"]);
-    git(fixture.seed, ["commit", "-m", "conflicting remote edit"]);
-    git(fixture.seed, ["push", "origin", "main"]);
-
-    let updateError;
-    let updateOutput;
-    try {
-      updateOutput = runUpdater(fixture);
-    } catch (error) {
-      updateError = error;
-    }
-    if (!updateError) {
-      console.error("unexpected successful updater output:", updateOutput);
-      console.error("tzap status:", git(tzap, ["status", "--short"]));
-      console.error("tzap stash:", git(tzap, ["stash", "list"]));
-    }
-    assert.ok(updateError, "the updater must fail when autostash cannot be reapplied");
-    assert.match(`${updateError.stdout}\n${updateError.stderr}`, /Unable to update tzap[\s\S]*refusing to build/);
-  } finally {
-    rmSync(fixture.root, { recursive: true, force: true });
-  }
-});
-
-test("shell updater builds a detached-HEAD checkout without self-updating", () => {
-  const fixture = createSiblingUpdateFixture();
-  try {
-    git(fixture.workspace, ["init", "--initial-branch=main"]);
-    configureGitUser(fixture.workspace);
-    git(fixture.workspace, ["add", "."]);
-    git(fixture.workspace, ["commit", "-m", "tagged release"]);
-    git(fixture.workspace, ["checkout", "--detach"]);
-
-    const output = runUpdater(fixture);
-
-    assert.match(output, /detached HEAD[\s\S]*skipping self-update/);
-  } finally {
-    rmSync(fixture.root, { recursive: true, force: true });
-  }
-});
-
-test("sibling bootstrap can clone an immutable commit without creating a branch", () => {
-  const fixture = createSiblingUpdateFixture();
-  try {
-    const revision = git(fixture.seed, ["rev-parse", "HEAD"]);
-    fixture.env.ZMANAGER_FORENSIC_VFS_ENGINE_REF = revision;
-    runUpdater(fixture);
-    const engine = join(fixture.root, "siblings", "forensic-vfs-engine");
-    assert.equal(git(engine, ["rev-parse", "HEAD"]), revision);
-    assert.equal(git(engine, ["branch", "--show-current"]), "");
-  } finally {
-    rmSync(fixture.root, { recursive: true, force: true });
-  }
-});
-
-test("sibling bootstrap fetches a pin missing from an existing shallow clone", () => {
-  const fixture = createSiblingUpdateFixture();
-  try {
-    const pinned = git(fixture.seed, ["rev-parse", "HEAD"]);
-    writeFileSync(join(fixture.seed, "new.txt"), "new head\n");
-    git(fixture.seed, ["add", "new.txt"]);
-    git(fixture.seed, ["commit", "-m", "Advance head"]);
-    git(fixture.seed, ["push", "origin", "main"]);
-    fixture.env.ZMANAGER_FORENSIC_VFS_ENGINE_REPO = new URL(`file://${fixture.remote}`).href;
-    runUpdater(fixture);
-    const engine = join(fixture.root, "siblings", "forensic-vfs-engine");
-    assert.equal(git(engine, ["rev-parse", "--is-shallow-repository"]), "true");
-    assert.throws(() => git(engine, ["cat-file", "-e", pinned]));
-    fixture.env.ZMANAGER_FORENSIC_VFS_ENGINE_REF = pinned;
-    runUpdater(fixture);
-    assert.equal(git(engine, ["rev-parse", "HEAD"]), pinned);
-    assert.equal(git(engine, ["branch", "--show-current"]), "");
-  } finally {
-    rmSync(fixture.root, { recursive: true, force: true });
-  }
+test("PowerShell entry points reuse the same cross-platform sibling implementation", () => {
+  assert.match(read("scripts/ensure-sibling-repos.ps1"), /ensure-sibling-repos\.sh/);
+  assert.match(read("scripts/check-sibling-repos.ps1"), /check-sibling-repos\.sh/);
 });

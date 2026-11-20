@@ -1,5 +1,6 @@
 node_modules/
 dist/
+.build-inputs/
 target/
 src-tauri/target/
 src-tauri/gen/
