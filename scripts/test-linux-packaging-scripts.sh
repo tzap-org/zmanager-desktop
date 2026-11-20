@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
+real_git="$(command -v git)"
 product_version=$(node -p 'require("./package.json").version')
 
 test_root="$(mktemp -d)"
@@ -167,10 +168,11 @@ if [[ "$subcommand" == "diff" ]]; then
   # merge conflict; the stub has nothing to actually merge, so report none.
   exit 0
 fi
-echo "git test stub"
+exec "${REAL_GIT:?}" "$@"
 EOF
 
 PATH="$bin_dir:$PATH" \
+REAL_GIT="$real_git" \
 HOME="$test_root/home" \
 ZMANAGER_PACKAGING_TEST_LOG="$log_file" \
 ZMANAGER_TEST_PRODUCT_VERSION="$product_version" \
@@ -253,6 +255,7 @@ EOF
 
 fedora_target_dir="$test_root/fedora-target"
 PATH="$bin_dir:$PATH" \
+REAL_GIT="$real_git" \
 HOME="$test_root/home" \
 CARGO_TARGET_DIR="$fedora_target_dir" \
 ZMANAGER_PACKAGING_TEST_LOG="$log_file" \
@@ -323,6 +326,7 @@ EOF
 
 node_upgrade_marker="$test_root/node-upgraded"
 PATH="$bin_dir:$PATH" \
+REAL_GIT="$real_git" \
 HOME="$test_root/home" \
 CARGO_TARGET_DIR="$fedora_target_dir" \
 ZMANAGER_PACKAGING_TEST_LOG="$log_file" \
