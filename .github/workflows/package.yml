@@ -87,6 +87,10 @@ jobs:
           name: ci-sibling-inputs
           path: .build-inputs
 
+      - name: Install Git for sibling snapshot preparation
+        if: matrix.flavor == 'linux-rpm'
+        run: dnf install -y git
+
       - name: Prepare frozen sibling snapshot
         shell: bash
         run: bash scripts/prepare-sibling-inputs.sh --mode snapshot --lockfile "$ZMANAGER_BUILD_INPUTS_LOCK"
@@ -355,6 +359,10 @@ jobs:
         with:
           name: ci-sibling-inputs
           path: .build-inputs
+
+      - name: Install Git for sibling snapshot preparation
+        if: matrix.flavor == 'linux-rpm'
+        run: dnf install -y git
 
       - name: Prepare frozen sibling snapshot
         shell: bash
