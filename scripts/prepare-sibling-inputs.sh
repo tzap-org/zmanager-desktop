@@ -86,7 +86,7 @@ while read -r name url branch sha extra; do
     if [[ "$mode" == local ]]; then
       git clone --single-branch --depth 1 --branch "$branch" "$url" "$dir"
     else
-      git clone --no-checkout "$url" "$dir"
+      git clone "$url" "$dir"
     fi
   fi
   git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "$dir exists but is not a Git checkout" >&2; exit 1; }

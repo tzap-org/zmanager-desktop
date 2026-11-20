@@ -103,6 +103,28 @@ test("CI resolver captures the configured branch head in a snapshot lock", (t) =
   assert.equal(entry, `tzap ${fixture.repoUrl} main ${fixture.revision}`);
 });
 
+test("snapshot mode clones a missing sibling cleanly before checking out its pinned SHA", (t) => {
+  // On Windows Git records the rewritten file:// URL as origin during clone,
+  // which correctly fails the resolver's canonical-origin validation. The
+  // resolver CI job runs on Ubuntu, where Git preserves the HTTPS origin.
+  if (process.platform === "win32") {
+    t.skip("Git for Windows records rewritten file:// clone URLs as origin");
+    return;
+  }
+
+  const fixture = createFixture(t);
+  const gitConfig = join(fixture.root, "gitconfig");
+  git(fixture.root, "config", "--file", gitConfig, "--add", `url.file://${fixture.remote}.insteadOf`, fixture.repoUrl);
+  const env = { ...fixture.env, GIT_CONFIG_GLOBAL: gitConfig };
+  const checkout = join(fixture.parent, "tzap");
+
+  runResolver(fixture, ["--mode", "snapshot"], env);
+
+  assert.equal(git(checkout, "rev-parse", "HEAD"), fixture.revision);
+  assert.equal(git(checkout, "branch", "--show-current"), "");
+  assert.equal(git(checkout, "status", "--porcelain=v1", "--untracked-files=all"), "");
+});
+
 test("snapshot mode detaches at the requested commit and rejects dirty checkouts", (t) => {
   const fixture = createFixture(t);
   const checkout = initCheckout(fixture);
