@@ -25,6 +25,13 @@ of maintaining a second procedure.
 | CI | The configured integration branch tip is resolved once near workflow start and written to a temporary snapshot lock. All matrix jobs check out those exact SHAs. | CI uses detached, clean checkouts and uploads an input report with the build artifacts. |
 | Release | Full commit SHAs in that product's committed `release-build-inputs.lock`. | Release setup fails on dirty checkouts and uses detached commits. It never advances refs or regenerates the lock. |
 
+Local mode accepts an existing sibling Git checkout even when its `origin` is
+a personal fork or is absent. It preserves that checkout at its current HEAD,
+records the observed origin in `target/build-inputs-report.tsv`, and warns when
+the origin differs from the canonical URL in the lock. Snapshot and release
+modes still require the configured canonical origin before checking out their
+locked commits.
+
 Local and CI builds use the same inputs when local sibling heads match the
 configured remote branch heads resolved by CI. Compare the reported SHAs to
 confirm parity or check out the SHAs from the CI report to reproduce a run.

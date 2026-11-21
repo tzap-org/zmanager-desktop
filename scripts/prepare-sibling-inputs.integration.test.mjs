@@ -203,3 +203,28 @@ test("local mode preserves dirty sibling work and records its actual head", (t) 
   assert.equal(readFileSync(join(checkout, "tracked.txt"), "utf8"), "local iteration\n");
   assert.match(readFileSync(report, "utf8"), /^tzap\t.*\tmain\tmain\t[0-9a-f]{40}\tdirty\tlocal\t/m);
 });
+
+test("local mode accepts and reports a fork remote without changing it", (t) => {
+  const fixture = createFixture(t);
+  const checkout = initCheckout(fixture);
+  const forkUrl = "https://github.com/frankmanzhu/tzap.git";
+  git(checkout, "remote", "set-url", "origin", forkUrl);
+  const report = join(fixture.root, "report.tsv");
+
+  runResolver(fixture, ["--mode", "local", "--report", report]);
+
+  assert.equal(git(checkout, "remote", "get-url", "origin"), forkUrl);
+  assert.match(readFileSync(report, "utf8"), /^tzap\thttps:\/\/github\.com\/frankmanzhu\/tzap\.git\tmain\tmain\t[0-9a-f]{40}\tclean\tlocal\t/m);
+});
+
+test("snapshot mode still rejects a non-canonical sibling origin", (t) => {
+  const fixture = createFixture(t);
+  const checkout = initCheckout(fixture);
+  git(checkout, "remote", "set-url", "origin", "https://github.com/frankmanzhu/tzap.git");
+
+  assert.throws(
+    () => runResolver(fixture, ["--mode", "snapshot"]),
+    (error) => /tzap origin mismatch/.test(`${error.stdout}\n${error.stderr}`),
+  );
+  assert.equal(git(checkout, "rev-parse", "HEAD"), fixture.revision);
+});

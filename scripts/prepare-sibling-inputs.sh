@@ -104,9 +104,13 @@ while read -r name url branch sha extra; do
   fi
   git -C "$dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "$dir exists but is not a Git checkout" >&2; exit 1; }
   origin="$(git -C "$dir" remote get-url origin 2>/dev/null || true)"
-  [[ -n "$origin" && "$(normalize_url "$origin")" == "$(normalize_url "$url")" ]] || {
-    echo "$name origin mismatch: expected $url, found ${origin:-<missing>}" >&2; exit 1;
-  }
+  if [[ "$mode" != local ]]; then
+    [[ -n "$origin" && "$(normalize_url "$origin")" == "$(normalize_url "$url")" ]] || {
+      echo "$name origin mismatch: expected $url, found ${origin:-<missing>}" >&2; exit 1;
+    }
+  elif [[ -n "$origin" && "$(normalize_url "$origin")" != "$(normalize_url "$url")" ]]; then
+    echo "Using existing local $name checkout with non-canonical origin $origin; local mode preserves this checkout."
+  fi
 
   expected=""
   [[ "$mode" == release || "$mode" == snapshot ]] && expected="$sha"
@@ -123,7 +127,9 @@ while read -r name url branch sha extra; do
   dirty="$(git -C "$dir" status --porcelain=v1 --untracked-files=all)"
   state=clean; [[ -n "$dirty" ]] && state=dirty
   branch_actual="$(git -C "$dir" branch --show-current 2>/dev/null || true)"
-  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$url" "$branch" "${branch_actual:-DETACHED}" "$actual" "$state" "$mode" "$release_tag" >> "$report"
+  reported_origin="$url"
+  [[ "$mode" == local ]] && reported_origin="${origin:-<none>}"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$name" "$reported_origin" "$branch" "${branch_actual:-DETACHED}" "$actual" "$state" "$mode" "$release_tag" >> "$report"
   printf '[%s] %s %s %s\n' "$state" "$name" "${actual:0:12}" "${branch_actual:-detached}"
 done < "$catalog"
 

@@ -523,7 +523,7 @@ impl IClassFactory_Impl for ZManagerClassFactory_Impl {
         if lock.as_bool() {
             SERVER_LOCKS.fetch_add(1, Ordering::Relaxed);
         } else {
-            let _ = SERVER_LOCKS.fetch_update(Ordering::Release, Ordering::Relaxed, |count| count.checked_sub(1));
+            let _ = SERVER_LOCKS.try_update(Ordering::Release, Ordering::Relaxed, |count| count.checked_sub(1));
         }
         Ok(())
     }

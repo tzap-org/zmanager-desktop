@@ -51,6 +51,7 @@ test("Windows build entry points keep local E2E on staging and production explic
 
   assert.match(batch, /if not defined BUILD_ENV set "BUILD_ENV=staging"/u);
   assert.match(batch, /if not defined PROFILE set "PROFILE=local"/u);
+  assert.match(batch, /set "REPO_ROOT=%~dp0\.\."[\s\S]*?pushd "%REPO_ROOT%"[\s\S]*?call npm install/u);
   assert.match(batch, /-Environment "%BUILD_ENV%" -Profile "%PROFILE%"/u);
   assert.match(staticBuild, /ValidateSet\("local", "online"\)[\s\S]*?Profile = "local"/u);
   assert.match(staticBuild, /--no-default-features --features online-profile/u);
@@ -124,6 +125,14 @@ test("Windows build entry points keep local E2E on staging and production explic
     "environment selection must only pass after the observed launch origin is validated",
   );
   assert.match(wdioConfig, /\[A-Za-z0-9_.~-\]\+=\)\[\^&\\s#\]/u);
+});
+
+test("Linux local package builds default to the staging service", () => {
+  for (const scriptPath of ["scripts/build-linux-ubuntu-deb.sh", "scripts/build-linux-fedora-rpm.sh"]) {
+    const script = readFileSync(resolve(repositoryRoot, scriptPath), "utf8");
+    assert.match(script, /ZMANAGER_TZAP_BUILD_ENV="\$\{ZMANAGER_TZAP_BUILD_ENV:-staging\}"/u, `${scriptPath} must default to staging`);
+    assert.match(script, /ZMANAGER_TZAP_SERVER_BASE_URL="\$\{ZMANAGER_TZAP_SERVER_BASE_URL:-https:\/\/staging\.tzap\.org\}"/u, `${scriptPath} must default to the staging service URL`);
+  }
 });
 
 test("CI gates staging-only native GUI lanes and injects their credentials", () => {

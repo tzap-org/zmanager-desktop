@@ -345,7 +345,10 @@ os_label="Linux"
 build_id="${os_label}-${architecture}-${build_profile}-${build_number}"
 export ZMANAGER_BUILD_NUMBER="$build_number"
 export ZMANAGER_BUILD_ID="$build_id"
-export ZMANAGER_TZAP_BUILD_ENV="${ZMANAGER_TZAP_BUILD_ENV:-prod}"
+export ZMANAGER_TZAP_BUILD_ENV="${ZMANAGER_TZAP_BUILD_ENV:-staging}"
+if [[ "$ZMANAGER_TZAP_BUILD_ENV" == staging ]]; then
+  export ZMANAGER_TZAP_SERVER_BASE_URL="${ZMANAGER_TZAP_SERVER_BASE_URL:-https://staging.tzap.org}"
+fi
 export VITE_TZAP_BUILD_ENV="$ZMANAGER_TZAP_BUILD_ENV"
 export VITE_ZMANAGER_PROFILE="$build_profile"
 if [[ "$build_profile" == online ]]; then

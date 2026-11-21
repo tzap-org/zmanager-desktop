@@ -40,6 +40,11 @@ echo Hosted account build environment: %BUILD_ENV%
 :: Get the root directory of the repository (parent of the scripts folder)
 set "REPO_ROOT=%~dp0.."
 for %%I in ("%REPO_ROOT%") do set "REPO_ROOT=%%~fI"
+pushd "%REPO_ROOT%"
+if errorlevel 1 (
+    echo Error: Failed to enter repository root "%REPO_ROOT%".
+    exit /b 1
+)
 
 :: Enable Windows long-path support for this process if available.
 :: Build artifacts in deeply-nested Cargo dependency trees can exceed the
@@ -68,6 +73,7 @@ echo [1/4] Ensuring sibling repositories (tzap, zmanager, localsend-rs)...
 powershell -ExecutionPolicy Bypass -File "%REPO_ROOT%\scripts\ensure-sibling-repos.ps1"
 if %ERRORLEVEL% neq 0 (
     echo Error: Failed to ensure sibling repositories.
+    popd
     exit /b 1
 )
 
@@ -75,6 +81,7 @@ echo [2/4] Installing frontend dependencies...
 call npm install
 if %ERRORLEVEL% neq 0 (
     echo Error: npm install failed.
+    popd
     exit /b 1
 )
 
@@ -82,6 +89,7 @@ echo [3/4] Generating native contracts...
 call npm run generate:contracts
 if %ERRORLEVEL% neq 0 (
     echo Error: Failed to generate native contracts.
+    popd
     exit /b 1
 )
 
@@ -89,8 +97,10 @@ echo [4/4] Running static Windows build and installation...
 powershell -ExecutionPolicy Bypass -File "%REPO_ROOT%\scripts\build-windows-static.ps1" -Environment "%BUILD_ENV%" -Profile "%PROFILE%" -InstallClang -Install
 if %ERRORLEVEL% neq 0 (
     echo Error: Build or installation failed.
+    popd
     exit /b 1
 )
 
 echo Build and installation completed successfully.
+popd
 exit /b 0
