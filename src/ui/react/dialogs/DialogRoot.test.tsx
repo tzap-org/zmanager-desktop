@@ -1,11 +1,15 @@
 import { createElement } from "react";
+import { useEffect } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import { ZManagerAppRuntimeProvider } from "../AppProviders";
-import { createZManagerAppStore } from "../appStore";
+import { createZManagerAppStore, type ZManagerAppStore } from "../appStore";
+import { ExtractPasswordProvider, useExtractPasswordState } from "../archive/ExtractPasswordContext";
 import {
   createInitialZManagerReactSnapshot,
+  noopZManagerReactActions,
   type ZManagerDialogSnapshot,
 } from "../appRuntime";
 import { DialogRoot } from "./DialogRoot";
@@ -31,6 +35,23 @@ function renderDialog(
       createElement(DialogRoot),
     ),
   );
+}
+
+function SeedExtractPassword({
+  password,
+  store,
+  dialog,
+}: Readonly<{
+  password: string;
+  store: ZManagerAppStore;
+  dialog: ZManagerDialogSnapshot;
+}>) {
+  const state = useExtractPasswordState();
+  useEffect(() => {
+    state.setPassword(password);
+    store.publish({ ...store.getSnapshot(), dialog });
+  }, [dialog, password, state.setPassword, store]);
+  return null;
 }
 
 describe("DialogRoot", () => {
@@ -63,6 +84,64 @@ describe("DialogRoot", () => {
     expect(html).toContain('id="extract-start"');
     expect(html).not.toContain("passwordValue");
     expect(html).not.toContain("correct horse");
+  });
+
+  it("carries the extraction pane password into the toolbar-opened dialog", async () => {
+    const initial = createInitialZManagerReactSnapshot();
+    const dialog: ZManagerDialogSnapshot = {
+      kind: "extract",
+      mode: "archive",
+      title: "Extract",
+      message: "Choose a destination.",
+      startLabel: "Extract",
+      destination: "C:/out",
+      destinationHistory: ["C:/out"],
+      useSubfolder: false,
+      subfolder: "",
+      pathMode: "full",
+      overwrite: "refuse",
+      stripComponents: "0",
+      deduplicateRoot: false,
+      tzapRestorePolicy: "portable",
+      tzapAllowDegraded: false,
+      tzapAllowAbsoluteSymlinks: false,
+      ignoreSymlinks: false,
+      passwordPromptOpen: false,
+    };
+    const store = createZManagerAppStore({
+      ...initial,
+    }, {
+      ...noopZManagerReactActions,
+      handleDialogIntent: vi.fn(),
+    });
+
+    render(
+      createElement(
+        ExtractPasswordProvider,
+        null,
+        createElement(
+          ZManagerAppRuntimeProvider,
+          { store },
+          createElement(SeedExtractPassword, { password: "archive-secret", store, dialog }),
+          createElement(DialogRoot),
+        ),
+      ),
+    );
+
+    await waitFor(() => {
+      expect(document.getElementById("browse-password")).toHaveValue("archive-secret");
+    });
+
+    fireEvent.click(document.getElementById("extract-start")!);
+
+    expect(store.getActions().handleDialogIntent).toHaveBeenCalledWith(expect.objectContaining({
+      type: "submitExtract",
+      mode: "archive",
+      password: "archive-secret",
+    }));
+    await waitFor(() => {
+      expect(document.getElementById("browse-password")).toHaveValue("");
+    });
   });
 
   it("renders TZAP metadata policy controls for TZAP archives", () => {

@@ -82,26 +82,25 @@ export function WorkspacePathBar({
       </label>
       {pathAccessory ? (
         <div className="flex min-w-0 items-center gap-2">{pathAccessory}</div>
-      ) : (
-        <div
-          id="path-crumbs"
-          className="hidden min-w-0 flex-1 items-center gap-1 overflow-hidden text-xs text-slate-500 min-[900px]:flex dark:text-slate-400"
-          aria-live="polite"
-          hidden={crumbsHidden}
-        >
-          {crumbsHidden
-            ? emptyCrumbsText
-            : crumbs.map((crumb, index) => (
-                <PathCrumb
-                  key={`${crumb.path}-${index}`}
-                  name={crumb.name}
-                  path={crumb.path}
-                  showSeparator={index > 0}
-                  onClick={onCrumbClick}
-                />
-              ))}
-        </div>
-      )}
+      ) : null}
+      <div
+        id="path-crumbs"
+        className="hidden min-w-0 flex-1 items-center gap-1 overflow-hidden text-xs text-slate-500 min-[900px]:flex dark:text-slate-400"
+        aria-live="polite"
+        hidden={crumbsHidden}
+      >
+        {crumbsHidden
+          ? emptyCrumbsText
+          : crumbs.map((crumb, index) => (
+              <PathCrumb
+                key={`${crumb.path}-${index}`}
+                name={crumb.name}
+                path={crumb.path}
+                showSeparator={index > 0}
+                onClick={onCrumbClick}
+              />
+            ))}
+      </div>
       <WorkspaceSearchControls search={search} />
     </section>
   );

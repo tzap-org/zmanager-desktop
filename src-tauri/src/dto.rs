@@ -603,12 +603,20 @@ pub struct PreviewEntryRequest {
     pub overwrite: OverwritePolicyDto,
     #[serde(default)]
     pub strip_components: usize,
+    #[serde(default)]
+    pub retain_for_navigation: bool,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OpenPreviewPathRequest {
     pub preview_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupNestedArchiveRootRequest {
+    pub cleanup_root: String,
 }
 
 #[derive(Debug, Deserialize)]

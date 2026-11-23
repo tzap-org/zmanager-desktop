@@ -11,6 +11,7 @@ export type ArchiveRuntimeActionEffects = Readonly<{
   navigateToFolder(folderPath: string): void;
   navigateBack(): void;
   navigateUp(): void;
+  navigateArchiveToDepth?(depth: number): void;
   loadNextPage(): void | Promise<void>;
   loadPreviousPage(): void | Promise<void>;
   setSearchQuery(query: string, immediate: boolean): void;
@@ -36,7 +37,8 @@ export type ArchiveRuntimeActionEffects = Readonly<{
   chooseTzapTrustedCAs(): void | Promise<void>;
   removeTzapTrustedCA(path: string): void;
   verifyTzapCertificate(): void | Promise<void>;
-  runExtract(mode: ExtractMode, password: string): void | Promise<void>;
+  openExtractDialog?(mode: ExtractMode): void;
+  runExtract?(mode: ExtractMode, password: string): void | Promise<void>;
   showEmptyContextMenu(x: number, y: number): void;
   showColumnContextMenu(columnId: ArchiveTableColumnId, x: number, y: number): void;
   showFolderContextMenu(path: string, x: number, y: number): void;
@@ -70,6 +72,9 @@ export function createArchiveRuntimeActions(
           break;
         case "navigateUp":
           effects.navigateUp();
+          break;
+        case "navigateArchiveToDepth":
+          effects.navigateArchiveToDepth?.(intent.depth);
           break;
         case "loadNextArchivePage":
           void effects.loadNextPage();
@@ -154,8 +159,11 @@ export function createArchiveRuntimeActions(
         case "verifyTzapCertificate":
           void effects.verifyTzapCertificate();
           break;
+        case "openExtractDialog":
+          effects.openExtractDialog?.(intent.mode);
+          break;
         case "runExtract":
-          void effects.runExtract(intent.mode, intent.password);
+          void effects.runExtract?.(intent.mode, intent.password);
           break;
         case "showEmptyContextMenu":
           effects.showEmptyContextMenu(intent.x, intent.y);

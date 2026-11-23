@@ -99,6 +99,28 @@ describe("context menu model", () => {
     expect(actionItems(entryItems).find((item) => item.payload.action === "test")?.disabled).toBe(true);
   });
 
+  it("labels nested archive drill-in separately from opening outside", () => {
+    const items = actionItems(buildArchiveEntryContextMenuItems({
+      translator,
+      entryPath: "docs/nested.jar",
+      canOpenInside: false,
+      canOpenNestedArchive: true,
+      canOpenOutside: true,
+      selectedCount: 1,
+      selectedEntryCount: 1,
+      hasArchive: true,
+    }));
+
+    expect(items[0]).toEqual(expect.objectContaining({
+      label: "Open in Archive",
+      payload: { action: "open-entry", entryPath: "docs/nested.jar" },
+    }));
+    expect(items[1]).toEqual(expect.objectContaining({
+      label: "Open Outside",
+      payload: { action: "open-outside", entryPath: "docs/nested.jar" },
+    }));
+  });
+
   it("does not advertise duplicate folder actions or selection-only archive testing", () => {
     const folderItems = actionItems(buildArchiveFolderContextMenuItems({
       translator,

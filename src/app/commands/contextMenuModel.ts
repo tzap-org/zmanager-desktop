@@ -116,6 +116,7 @@ export type ArchiveEntryContextMenuInput = Readonly<{
   translator: Translator;
   entryPath: string;
   canOpenInside: boolean;
+  canOpenNestedArchive?: boolean;
   canOpenOutside: boolean;
   selectedCount: number;
   selectedEntryCount: number;
@@ -407,7 +408,13 @@ function singleArchiveEntryContextMenuItems(
   payload: (action: ContextMenuAction) => ContextMenuActionPayload,
 ): ContextMenuItem[] {
   const items: ContextMenuItem[] = [
-    actionItem(input.translator.t(input.canOpenInside ? "command.openFolder" : "command.view"), payload("open-entry")),
+    actionItem(input.translator.t(
+      input.canOpenInside
+        ? "command.openFolder"
+        : input.canOpenNestedArchive
+          ? "command.openInside"
+          : "command.view",
+    ), payload("open-entry")),
   ];
 
   if (input.canOpenOutside) {

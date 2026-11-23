@@ -23,7 +23,6 @@ import { cn } from "../../../lib/utils";
 import { useZManagerActions, useZManagerSnapshot } from "../AppProviders";
 import type { ZManagerReactSnapshot } from "../appRuntime";
 import { useCreatePasswordState } from "../create/CreatePasswordContext";
-import { useExtractPasswordState } from "../archive/ExtractPasswordContext";
 import {
   commandButtonId,
   commandIcon,
@@ -75,10 +74,8 @@ function ExtractToolbarGroups({
   const snapshot = useZManagerSnapshot();
   const actions = useZManagerActions();
   const i18n = translatorForSnapshot(snapshot);
-  const passwordState = useExtractPasswordState();
   const canExtract =
-    snapshot.archive.command.canUseArchive &&
-    Boolean(snapshot.extract.destinationPath.trim());
+    snapshot.archive.command.canUseArchive;
   const selectedCount = snapshot.archive.view.selection.selectedCount;
 
   return (
@@ -97,21 +94,12 @@ function ExtractToolbarGroups({
         <ToolbarActionButton
           id="extract-all"
           label={i18n.t("extract.allAction")}
-          title={
-            canExtract
-              ? i18n.t("extract.allAction")
-              : i18n.t("extract.chooseDestinationFirst")
-          }
+          title={i18n.t("extract.allAction")}
           Icon={ArchiveRestore}
           primary={canExtract}
           disabled={!canExtract}
           onClick={() => {
-            actions.handleArchiveIntent({
-              type: "runExtract",
-              mode: "archive",
-              password: passwordState.password,
-            });
-            passwordState.reset();
+            actions.handleArchiveIntent({ type: "openExtractDialog", mode: "archive" });
           }}
         />
         <ToolbarActionButton
@@ -127,12 +115,7 @@ function ExtractToolbarGroups({
           Icon={ArchiveRestore}
           disabled={!canExtract || selectedCount === 0}
           onClick={() => {
-            actions.handleArchiveIntent({
-              type: "runExtract",
-              mode: "selection",
-              password: passwordState.password,
-            });
-            passwordState.reset();
+            actions.handleArchiveIntent({ type: "openExtractDialog", mode: "selection" });
           }}
         />
         <ToolbarButton commandId="test" />

@@ -23,12 +23,12 @@ use crate::{
     archive_index::ArchiveIndexRegistry,
     constants, destination_reservation,
     dto::{
-        AckSubscriptionRequest, AcknowledgeAcceptedJobRequest, ArchiveEntryDto, ArchiveEntryKindDto, CreatePlanEntryDto, CreatePlanResponse,
-        DestinationCollisionStrategyDto, HandoffCoordinatorLeaseRequest, NativeFileDragAcceptanceResponse, NativeFileDragOutcomeDto, NativeFileDragRequest,
-        NativeFileDragResponse, OpenJobOutputRequest, OpenPreviewPathRequest, PauseJobRequest, PlanCreateRequest, PreviewEntryRequest, PreviewEntryResponse,
-        ProjectContract, ProjectIntegrationContract, ResumeJobRequest, StartCreateRequest, StartExtractRequest, StartNativeFileDragRequest,
-        SubscribeAcceptedJobsRequest, SubscribeJobRequest, SubscriptionRequest, SystemFileIconRequest, SystemFileIconResponse, TestArchiveRequest,
-        TzapRestorePolicyDto, ValidateDirectoryRequest, ValidateDirectoryResponse,
+        AckSubscriptionRequest, AcknowledgeAcceptedJobRequest, ArchiveEntryDto, ArchiveEntryKindDto, CleanupNestedArchiveRootRequest, CreatePlanEntryDto,
+        CreatePlanResponse, DestinationCollisionStrategyDto, HandoffCoordinatorLeaseRequest, NativeFileDragAcceptanceResponse, NativeFileDragOutcomeDto,
+        NativeFileDragRequest, NativeFileDragResponse, OpenJobOutputRequest, OpenPreviewPathRequest, PauseJobRequest, PlanCreateRequest, PreviewEntryRequest,
+        PreviewEntryResponse, ProjectContract, ProjectIntegrationContract, ResumeJobRequest, StartCreateRequest, StartExtractRequest,
+        StartNativeFileDragRequest, SubscribeAcceptedJobsRequest, SubscribeJobRequest, SubscriptionRequest, SystemFileIconRequest, SystemFileIconResponse,
+        TestArchiveRequest, TzapRestorePolicyDto, ValidateDirectoryRequest, ValidateDirectoryResponse,
     },
     error::{CommandErrorDto, ErrorSeverityDto},
     job_dto::{
@@ -40,9 +40,7 @@ use crate::{
     native_launch_inbox::NativeLaunchInbox,
     quick_action::QuickActionLaunchCoordinator,
 };
-#[cfg(test)]
-use zmanager_core::archive_browser::BrowserListOptions;
-use zmanager_core::archive_browser::{self, BrowserExtractOptions};
+use zmanager_core::archive_browser::{self, BrowserExtractOptions, BrowserListOptions};
 use zmanager_core::engine::tzap::{
     TzapArchiveSignatureCheck, TzapArchiveStatusCheck, TzapArchiveTimeCheck, TzapArchiveTrustCheck, TzapArchiveVerification, TzapArchiveVerificationOutcome,
 };
@@ -1768,8 +1766,9 @@ pub fn preview_entry(
         })
         .or_else(|| archive_index_registry.password_for_archive(&archive_path));
 
+    let retain_for_navigation = request.retain_for_navigation;
     let report = archive_browser::preview_entry_with_options(
-        archive_path,
+        archive_path.clone(),
         &entry_path,
         BrowserExtractOptions {
             password: password.as_deref(),
@@ -1780,13 +1779,113 @@ pub fn preview_entry(
     )
     .map_err(crate::platform::map_archive_browser_error)?;
 
-    registry.replace_preview_root(report.cleanup_root.clone());
+    if retain_for_navigation {
+        match materialize_nested_archive_companions(&report.cleanup_root, &archive_path, &entry_path, password.as_deref(), request.strip_components) {
+            Ok(()) => {}
+            Err(error) => {
+                let _ = std::fs::remove_dir_all(&report.cleanup_root);
+                return Err(error);
+            }
+        }
+    }
+
+    if request.retain_for_navigation {
+        registry.register_nested_archive_root(report.cleanup_root.clone());
+    } else {
+        registry.replace_preview_root(report.cleanup_root.clone());
+    }
 
     Ok(PreviewEntryResponse {
         cleanup_root: report.cleanup_root.to_string_lossy().to_string(),
         preview_path: report.preview_path.to_string_lossy().to_string(),
         written_bytes: report.written_bytes,
     })
+}
+
+fn materialize_nested_archive_companions(
+    cleanup_root: &Path,
+    parent_archive_path: &str,
+    selected_entry_path: &str,
+    password: Option<&str>,
+    strip_components: usize,
+) -> Result<(), CommandErrorDto> {
+    if !is_split_archive_volume_path(selected_entry_path) {
+        return Ok(());
+    }
+
+    let listing = archive_browser::list_entries_with_options(parent_archive_path, BrowserListOptions { password, ..BrowserListOptions::default() })
+        .map_err(crate::platform::map_archive_browser_error)?;
+    let companions = listing
+        .entries
+        .into_iter()
+        .filter(|entry| {
+            matches!(entry.kind, zmanager_core::archive_browser::BrowserEntryKind::File | zmanager_core::archive_browser::BrowserEntryKind::FileCopy)
+                && same_split_archive_volume_set(selected_entry_path, &entry.path)
+        })
+        .map(|entry| entry.path)
+        .collect::<Vec<_>>();
+
+    for entry_path in companions {
+        if normalize_archive_entry_path(&entry_path) == normalize_archive_entry_path(selected_entry_path) {
+            continue;
+        }
+        archive_browser::extract_entry_with_options(
+            parent_archive_path,
+            &entry_path,
+            cleanup_root,
+            BrowserExtractOptions { password, overwrite: OverwritePolicy::Replace, strip_components, ..BrowserExtractOptions::default() },
+        )
+        .map_err(crate::platform::map_archive_browser_error)?;
+    }
+    Ok(())
+}
+
+fn is_split_archive_volume_path(path: &str) -> bool {
+    let name = path.rsplit(|character| character == '/' || character == '\\').next().unwrap_or(path);
+    split_archive_volume_prefix(name).is_some()
+}
+
+fn same_split_archive_volume_set(selected_path: &str, candidate_path: &str) -> bool {
+    let selected_normalized = normalize_archive_entry_path(selected_path);
+    let candidate_normalized = normalize_archive_entry_path(candidate_path);
+    let selected_parent = selected_normalized.rsplit_once('/').map_or("", |(parent, _)| parent);
+    let candidate_parent = candidate_normalized.rsplit_once('/').map_or("", |(parent, _)| parent);
+    if selected_parent != candidate_parent {
+        return false;
+    }
+
+    let selected_name = selected_normalized.rsplit('/').next().unwrap_or(&selected_normalized);
+    let candidate_name = candidate_normalized.rsplit('/').next().unwrap_or(&candidate_normalized);
+    match (split_archive_volume_prefix(selected_name), split_archive_volume_prefix(candidate_name)) {
+        (Some(selected_prefix), Some(candidate_prefix)) => selected_prefix.eq_ignore_ascii_case(candidate_prefix),
+        _ => false,
+    }
+}
+
+fn split_archive_volume_prefix(name: &str) -> Option<&str> {
+    let lower = name.to_ascii_lowercase();
+    if let Some(marker) = lower.rfind(".7z.") {
+        let suffix = &lower[marker + 4..];
+        if suffix.len() == 3 && suffix.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Some(&name[..marker + 4]);
+        }
+    }
+    if lower.ends_with(".tzap") {
+        let stem_end = name.len() - ".tzap".len();
+        let stem = &name[..stem_end];
+        let lower_stem = &lower[..stem_end];
+        if let Some(marker) = lower_stem.rfind(".vol") {
+            let digits = &stem[marker + 4..];
+            if !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()) {
+                return Some(&name[..marker + 4]);
+            }
+        }
+    }
+    None
+}
+
+fn normalize_archive_entry_path(path: &str) -> String {
+    path.replace('\\', "/").trim_matches('/').to_owned()
 }
 
 #[tauri::command]
@@ -2220,8 +2319,18 @@ pub async fn start_native_file_drag(
 }
 
 #[tauri::command]
-pub fn cleanup_preview_roots(registry: State<'_, JobRegistry>) {
-    registry.cleanup_preview_roots();
+pub fn cleanup_preview_roots(request: Option<CleanupNestedArchiveRootRequest>, registry: State<'_, JobRegistry>) -> Result<(), CommandErrorDto> {
+    if let Some(request) = request {
+        let root = ensure_non_empty_path(request.cleanup_root, "cleanupRoot")?;
+        if registry.cleanup_nested_archive_root(Path::new(&root)) {
+            Ok(())
+        } else {
+            Err(CommandErrorDto::not_found("nested archive materialization is no longer available", None))
+        }
+    } else {
+        registry.cleanup_preview_roots();
+        Ok(())
+    }
 }
 
 #[tauri::command]
@@ -3039,6 +3148,20 @@ mod tests {
     use openssl::pkey::PKey;
     use openssl::rsa::Rsa;
     use openssl::x509::X509NameBuilder;
+
+    #[test]
+    fn split_archive_companions_match_only_the_same_volume_set_and_directory() {
+        assert!(same_split_archive_volume_set("docs/backup.7z.001", "docs/backup.7z.002"));
+        assert!(!same_split_archive_volume_set("docs/backup.7z.001", "other/backup.7z.002"));
+        assert!(!same_split_archive_volume_set("docs/backup.7z.001", "docs/other.7z.002"));
+        assert!(same_split_archive_volume_set("docs/backup.vol000.tzap", "docs/backup.vol001.tzap"));
+        assert!(same_split_archive_volume_set("docs/backup.vol42.tzap", "docs/backup.vol43.tzap"));
+        assert!(!same_split_archive_volume_set("docs/backup.vol000.tzap", "docs/other.vol001.tzap"));
+        assert!(!is_split_archive_volume_path("docs/ordinary.zip"));
+        assert!(is_split_archive_volume_path("docs/backup.7z.001"));
+        assert!(is_split_archive_volume_path("docs/backup.vol000.tzap"));
+        assert!(is_split_archive_volume_path("docs/backup.vol42.tzap"));
+    }
 
     #[test]
     fn job_controls_are_scoped_to_the_matching_disposable_task_window() {

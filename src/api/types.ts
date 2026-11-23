@@ -581,6 +581,7 @@ export type PreviewEntryRequest = {
   password?: string;
   overwrite: "refuse" | "replace" | "rename" | "ask";
   stripComponents: number;
+  retainForNavigation?: boolean;
 };
 
 export type PreviewEntryResponse = {
@@ -591,6 +592,10 @@ export type PreviewEntryResponse = {
 
 export type OpenPreviewPathRequest = {
   previewPath: string;
+};
+
+export type CleanupNestedArchiveRootRequest = {
+  cleanupRoot: string;
 };
 
 export type OpenJobOutputRequest = {

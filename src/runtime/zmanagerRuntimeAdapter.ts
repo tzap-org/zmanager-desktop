@@ -312,6 +312,8 @@ import {
   runLocalSendTrustDevice,
   runPlanCreate,
   runPreviewEntry,
+  runMaterializeNestedArchiveEntry,
+  runCleanupNestedArchiveRoot,
   runOpenJobOutput,
   runOpenPreviewPath,
   runStartCreate,
@@ -482,6 +484,16 @@ const archiveWorkspace = createArchiveWorkspace({
   sortAscending: appPreferences.tableSortAscending,
   tableColumns: initialArchiveColumns,
 });
+type NestedArchiveFrame = Readonly<{
+  archivePath: string;
+  label: string;
+  cleanupRoot: string;
+  parentFolderPath: string;
+}>;
+let topLevelArchivePath = "";
+let nestedArchiveStack: NestedArchiveFrame[] = [];
+let nestedArchiveOpening = false;
+let nestedArchiveNavigationRevision = 0;
 
 // Resolve initial create table columns from prefs + safe-base capability set
 const initialCompressResolved = resolveCompressColumns({
@@ -603,6 +615,7 @@ const archiveRuntimeActions = createArchiveRuntimeActions({
   navigateToFolder,
   navigateBack,
   navigateUp,
+  navigateArchiveToDepth: navigateToArchiveDepth,
   loadNextPage: () => archiveLoadController.loadNextPage(),
   loadPreviousPage: () => archiveLoadController.loadPreviousPage(),
   setSearchQuery: (query, immediate) => {
@@ -679,7 +692,7 @@ const archiveRuntimeActions = createArchiveRuntimeActions({
     publishReactSnapshot();
   },
   verifyTzapCertificate: verifyCurrentTzapCertificate,
-  runExtract: (mode, password) => startExtract(mode, extractWorkspace.buildStartInput(password)),
+  openExtractDialog: (mode) => openExtractDialog(mode),
   showEmptyContextMenu: showStartupContextMenu,
   showColumnContextMenu: (columnId, x, y) => showTableHeaderContextMenu(x, y, columnId),
   showFolderContextMenu: (path, x, y) => showFolderContextMenu(path, x, y, path),
@@ -972,7 +985,7 @@ const archiveLoadController = createArchiveLoadController({
     }
     clearTrackedPreviewState();
     contextMenuRuntime.hide();
-    applyExtractPreferenceDefaults(snapshot.currentArchivePath);
+    applyExtractPreferenceDefaults(topLevelArchivePath || snapshot.currentArchivePath);
     publishArchiveSnapshot(snapshot);
     setOperationalMessage("archive.loaded");
   },
@@ -1011,7 +1024,10 @@ const archiveOpenController = createArchiveOpenController({
   nativeDialogFailedMessage: () => displayContext.translator.t("nativeDialog.failed"),
   unknownErrorMessage,
   setOperationalStatus,
-  clearPreviewState: clearTrackedPreviewState,
+  clearPreviewState: () => {
+    clearTrackedPreviewState();
+    resetNestedArchiveNavigation();
+  },
   setCurrentArchivePath: () => {},
   loadArchive: (request) => loadArchive(request),
 });
@@ -2074,9 +2090,17 @@ function isPasswordCommandError(commandError: ReturnType<typeof asCommandError>)
 function currentCommandStateMap() {
   const snapshot = archiveWorkspace.getSnapshot();
   const commandContext = snapshot.command;
+  const selectedEntry = snapshot.view.selection.selectedEntries.length === 1
+    ? snapshot.view.selection.selectedEntries[0]
+    : null;
 
   return selectCommandState({
     ...commandContext,
+    canOpenNestedArchive: Boolean(
+      selectedEntry &&
+      selectedEntry.kind === "file" &&
+      isSupportedArchivePath(selectedEntry.path),
+    ),
     mutableOperationsSupported: false,
   });
 }
@@ -2121,12 +2145,19 @@ const commandRouter = createCommandRouter({
         setOperationalMessage("command.singleFileRequired");
         return;
       }
-      navigateToFolder(selected[0]);
+      const entry = getEntryByPath(selected[0]);
+      if (entry?.kind === "directory") {
+        navigateToFolder(selected[0]);
+      } else if (entry?.kind === "file" && isSupportedArchivePath(entry.path)) {
+        void openNestedArchiveEntry(selected[0]);
+      } else {
+        setOperationalMessage("command.singleFileRequired");
+      }
     },
     openOutside: () => void onOpenOutsideSelectedEntry(),
     extract: (mode, destination) => {
       if (destination === "here") {
-        const parent = nativeParentPath(archiveCurrentPath());
+        const parent = nativeParentPath(topLevelArchivePath || archiveCurrentPath());
         const selectedEntries = mode === "selection" ? getSelectedEntryDtos() : [];
         const selectedFilePath = selectedEntries.length === 1 && selectedEntries[0]?.kind !== "directory"
           ? selectedEntries[0].path
@@ -2224,6 +2255,18 @@ function createCurrentReactSnapshot(): ZManagerReactSnapshot {
     localSendIncomingTransfers,
     shell: shellWorkspace.getSnapshot(),
     archive,
+    archiveNavigation: [
+      ...(topLevelArchivePath || archive.currentArchivePath
+        ? [{
+            label: getPathBasename(topLevelArchivePath || archive.currentArchivePath, "Archive"),
+            depth: 0,
+          }]
+        : []),
+      ...nestedArchiveStack.map((frame, index) => ({
+        label: frame.label,
+        depth: index + 1,
+      })),
+    ],
     create: createWorkspace.getSnapshot(),
     extract: extractWorkspace.getSnapshot(),
     systemIcons: cachedSystemIconsSnapshot,
@@ -3121,6 +3164,7 @@ function activatePendingDropChoice(action: "openArchive" | "addToCompress" | "ca
 }
 
 function navigateToFolder(folderPath: string) {
+  nestedArchiveNavigationRevision += 1;
   const before = archiveWorkspace.getSnapshot().view;
   const snapshot = archiveWorkspace.navigateToFolder(folderPath);
   if (
@@ -3143,7 +3187,61 @@ function navigateToFolder(folderPath: string) {
   void archiveLoadController.loadFolder(snapshot.view.currentFolder);
 }
 
+function resetNestedArchiveNavigation() {
+  nestedArchiveNavigationRevision += 1;
+  nestedArchiveStack = [];
+  topLevelArchivePath = "";
+  // Retained roots stay registered with the backend until its final JobRegistry
+  // handle drops. An extract/test job may still be reading a nested archive
+  // after the user navigates away, so eager cleanup here can break that job.
+  void archiveLoadController.close();
+  publishReactSnapshot();
+}
+
+function navigateToArchiveDepth(depth: number, restoreParentFolder = false) {
+  if (depth === 0 && nestedArchiveStack.length === 0) {
+    navigateToFolder("");
+    return;
+  }
+  if (depth < 0 || depth >= nestedArchiveStack.length) {
+    return;
+  }
+  const nextStack = nestedArchiveStack.slice(0, depth);
+  const archivePath = depth === 0
+    ? topLevelArchivePath
+    : nestedArchiveStack[depth - 1]?.archivePath ?? "";
+  const parentFolderPath = restoreParentFolder
+    ? nestedArchiveStack[depth]?.parentFolderPath ?? ""
+    : "";
+  if (!archivePath) {
+    return;
+  }
+
+  nestedArchiveNavigationRevision += 1;
+  const navigationRevision = nestedArchiveNavigationRevision;
+  nestedArchiveStack = nextStack;
+  publishReactSnapshot();
+
+  void (async () => {
+    await archiveLoadController.close();
+    if (navigationRevision !== nestedArchiveNavigationRevision) return;
+    await loadArchive({ archivePath });
+    if (navigationRevision !== nestedArchiveNavigationRevision) return;
+    if (archiveWorkspace.getSnapshot().browseState !== "loaded" && archiveWorkspace.getSnapshot().browseState !== "empty") {
+      return;
+    }
+    if (parentFolderPath) {
+      navigateToFolder(parentFolderPath);
+    }
+  })();
+}
+
 function navigateBack() {
+  if (!archiveCurrentFolder() && nestedArchiveStack.length > 0) {
+    navigateToArchiveDepth(nestedArchiveStack.length - 1, true);
+    return;
+  }
+  nestedArchiveNavigationRevision += 1;
   const before = archiveWorkspace.getSnapshot().view;
   const snapshot = archiveWorkspace.navigateBack();
   if (
@@ -3158,8 +3256,10 @@ function navigateBack() {
 
 function navigateUp() {
   if (!archiveCurrentFolder()) {
+    navigateToArchiveDepth(nestedArchiveStack.length - 1, true);
     return;
   }
+  nestedArchiveNavigationRevision += 1;
   const before = archiveWorkspace.getSnapshot().view;
   const snapshot = archiveWorkspace.navigateUp();
   if (
@@ -3306,6 +3406,7 @@ function showEntryContextMenu(entryPath: string, x: number, y: number) {
     translator: displayContext.translator,
     entryPath,
     canOpenInside: entry?.kind === "directory",
+    canOpenNestedArchive: entry?.kind === "file" && isSupportedArchivePath(entry.path),
     canOpenOutside: selectedCount === 1 && entry?.kind !== "directory",
     selectedCount,
     selectedEntryCount: archiveSelectedCount(),
@@ -3953,7 +4054,7 @@ function openExtractDialog(mode: ExtractMode) {
   openReactExtractDialogSnapshot(
     mode,
     createExtractDialogFormSnapshot({
-      destination: extractDestinationHistory[0] ?? "",
+      destination: extractDestinationHistory[0] || extractWorkspace.getSnapshot().destinationPath || "",
       overwrite: activeExtractDialogForm.overwrite,
       stripComponents: activeExtractDialogForm.stripComponents,
       tzapRestorePolicy: extractWorkspace.getSnapshot().tzapRestorePolicy,
@@ -3966,7 +4067,7 @@ function openExtractDialog(mode: ExtractMode) {
 }
 
 function openExtractHereDialog(mode: ExtractMode) {
-  const archivePath = archiveCurrentPath();
+  const archivePath = topLevelArchivePath || archiveCurrentPath();
   const parent = nativeParentPath(archivePath);
   openExtractDialog(mode);
   if (parent) {
@@ -3996,6 +4097,13 @@ function showCreateWorkspace() {
 }
 
 async function loadArchive(request: ListArchiveRequest, options: ArchiveLoadOptions = {}) {
+  const belongsToNestedTrail = request.archivePath === topLevelArchivePath || nestedArchiveStack.some((frame) => frame.archivePath === request.archivePath);
+  if (nestedArchiveStack.length > 0 && !belongsToNestedTrail) {
+    resetNestedArchiveNavigation();
+  }
+  if (nestedArchiveStack.length === 0 && (!topLevelArchivePath || request.archivePath !== topLevelArchivePath)) {
+    topLevelArchivePath = request.archivePath;
+  }
   const timing = {
     startedAt: performance.now(),
     firstPageRecorded: false,
@@ -4055,6 +4163,9 @@ function loadArchiveListingIntoState(listing: ArchiveFixture, options: ArchiveLo
   contextMenuRuntime.hide();
   shellWorkspace.setWorkspaceMode("extract");
   const archivePath = archiveListingFromFixture(listing).archivePath;
+  if (nestedArchiveStack.length === 0) {
+    topLevelArchivePath = archivePath;
+  }
   const familyRes = resolveExtractFamilyFromPath(archivePath);
   const resolved = resolveExtractColumns({
     familyResolution: familyRes,
@@ -4387,6 +4498,8 @@ function applyCleanupOnAppClose(): void {
   if (appPreferences.previewCleanupPolicy === "whenAppCloses") {
     void cleanupPreviewRoots();
   }
+  // Nested roots are cleaned when the backend's final JobRegistry handle
+  // drops. A running extract/test may still be reading one at window close.
 }
 
 function bindWindowLifecycleHandlers(): void {
@@ -4415,6 +4528,7 @@ function bindWindowLifecycleHandlers(): void {
 
 function closeCurrentArchive(): void {
   clearTrackedPreviewState();
+  resetNestedArchiveNavigation();
   contextMenuRuntime.hide();
   archiveWorkspace.reset();
   extractWorkspace.applyDefaults({
@@ -4579,7 +4693,85 @@ async function startExtract(destinationMode: ExtractMode, input: ExtractStartInp
 }
 
 async function onPreviewSelectedEntry() {
+  const selected = getSelectedEntryDtos();
+  if (selected.length === 1 && selected[0].kind === "file" && isSupportedArchivePath(selected[0].path)) {
+    await openNestedArchiveEntry(selected[0].path);
+    return;
+  }
   await runPreviewSelectedEntry("preview");
+}
+
+async function openNestedArchiveEntry(entryPath: string) {
+  const entry = getEntryByPath(entryPath);
+  const parentArchivePath = archiveCurrentPath();
+  if (nestedArchiveOpening || !parentArchivePath || !entry || entry.kind !== "file" || !isSupportedArchivePath(entry.path)) {
+    return;
+  }
+
+  nestedArchiveOpening = true;
+  const navigationRevision = nestedArchiveNavigationRevision;
+  const parentSnapshot = archiveWorkspace.getSnapshot();
+  let password: string | undefined;
+  while (true) {
+    const extractOptions = extractWorkspace.getSnapshot();
+    const requestResult = archiveWorkspace.buildPreviewRequest({
+      overwrite: extractOptions.overwrite,
+      stripComponents: 0,
+      ...(password ? { password } : {}),
+    });
+    if (!requestResult.ok || requestResult.request.entryPath !== entryPath) {
+      nestedArchiveOpening = false;
+      setOperationalMessage("command.singleFileRequired");
+      return;
+    }
+
+    try {
+      const materialized = await runMaterializeNestedArchiveEntry(requestResult.request);
+      if (navigationRevision !== nestedArchiveNavigationRevision || archiveCurrentPath() !== parentArchivePath) {
+        await runCleanupNestedArchiveRoot({ cleanupRoot: materialized.cleanupRoot }).catch(() => undefined);
+        nestedArchiveOpening = false;
+        return;
+      }
+      if (!topLevelArchivePath) {
+        topLevelArchivePath = parentArchivePath;
+      }
+      nestedArchiveStack = [...nestedArchiveStack, {
+        archivePath: materialized.previewPath,
+        label: getPathBasename(entry.path, entry.path),
+        cleanupRoot: materialized.cleanupRoot,
+        parentFolderPath: parentSnapshot.view.currentFolder,
+      }];
+      archiveWorkspace.clearPasswordRetry();
+      publishReactSnapshot();
+      await loadArchive({ archivePath: materialized.previewPath });
+      nestedArchiveOpening = false;
+      return;
+    } catch (error) {
+      if (navigationRevision !== nestedArchiveNavigationRevision || archiveCurrentPath() !== parentArchivePath) {
+        nestedArchiveOpening = false;
+        return;
+      }
+      const commandError = asCommandError(error);
+      const retry = archiveWorkspace.requestPasswordRetry({
+        operation: "previewEntry",
+        error: commandError,
+      });
+      if (!retry) {
+        nestedArchiveOpening = false;
+        archiveWorkspace.clearPasswordRetry();
+        setBrowseState("error", commandError?.message ?? message("preview.unablePreview"));
+        return;
+      }
+      const nextPassword = promptForArchivePasswordRetry(retry);
+      if (!nextPassword) {
+        nestedArchiveOpening = false;
+        archiveWorkspace.clearPasswordRetry();
+        setBrowseState("error", commandError?.message ?? message("preview.unablePreview"));
+        return;
+      }
+      password = nextPassword;
+    }
+  }
 }
 
 async function onOpenOutsideSelectedEntry() {

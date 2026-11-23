@@ -13,6 +13,7 @@ import {
 } from "../../components/ui/select";
 import { useZManagerActions, useZManagerSnapshot } from "../AppProviders";
 import type { ZManagerDialogSnapshot } from "../appRuntime";
+import { useExtractPasswordState } from "../archive/ExtractPasswordContext";
 import { PreferencesDialog } from "../preferences/PreferencesDialog";
 import { translatorForSnapshot } from "../shell/shellHelpers";
 import { DesktopDialog } from "./DesktopDialog";
@@ -323,6 +324,7 @@ function ExtractDialog({
   const snapshot = useZManagerSnapshot();
   const actions = useZManagerActions();
   const i18n = translatorForSnapshot(snapshot);
+  const passwordState = useExtractPasswordState();
   const destinationRef = useRef<HTMLInputElement | null>(null);
   const [destination, setDestination] = useState(dialog.destination);
   const [useSubfolder, setUseSubfolder] = useState(dialog.useSubfolder);
@@ -347,7 +349,7 @@ function ExtractDialog({
   const [ignoreSymlinks, setIgnoreSymlinks] = useState(
     dialog.ignoreSymlinks,
   );
-  const [password, setPassword] = useState("");
+  const [password, setPassword] = useState(passwordState.password);
   const [showPassword, setShowPassword] = useState(false);
   const canExtract = destination.trim().length > 0;
   const isTzap = snapshot.archive.currentArchivePath
@@ -381,9 +383,9 @@ function ExtractDialog({
   ]);
 
   useEffect(() => {
-    setPassword("");
+    setPassword(passwordState.password);
     setShowPassword(false);
-  }, [dialog.mode, dialog.passwordPromptOpen]);
+  }, [dialog.mode, dialog.passwordPromptOpen, passwordState.password]);
 
   useEffect(() => {
     destinationRef.current?.focus();
@@ -764,14 +766,15 @@ function ExtractDialog({
             className="min-w-24"
             aria-disabled={!canExtract}
             disabled={!canExtract}
-            onClick={() =>
+            onClick={() => {
               actions.handleDialogIntent({
                 type: "submitExtract",
                 mode: dialog.mode,
                 ...form,
                 password,
-              })
-            }
+              });
+              passwordState.reset();
+            }}
           >
             {dialog.startLabel}
           </Button>

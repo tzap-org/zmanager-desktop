@@ -107,6 +107,7 @@ struct RegistryState {
     catalog_publication_closed: bool,
     jobs: HashMap<String, JobRecord>,
     preview_roots: VecDeque<PathBuf>,
+    nested_archive_roots: VecDeque<PathBuf>,
     catalog_sender: watch::Sender<Arc<JobCatalogSnapshotDto>>,
     accepted_jobs: VecDeque<AcceptedJobEnvelopeDto>,
     accepted_sender: watch::Sender<Arc<Vec<AcceptedJobEnvelopeDto>>>,
@@ -207,6 +208,7 @@ impl RegistryState {
             catalog_publication_closed: false,
             jobs: HashMap::new(),
             preview_roots: VecDeque::new(),
+            nested_archive_roots: VecDeque::new(),
             catalog_sender,
             accepted_jobs: VecDeque::new(),
             accepted_sender,
@@ -1136,6 +1138,42 @@ impl JobRegistry {
             }
         });
     }
+
+    pub fn register_nested_archive_root(&self, path: PathBuf) {
+        self.with_lock(|state| state.nested_archive_roots.push_back(path));
+    }
+
+    pub fn cleanup_nested_archive_root(&self, path: &Path) -> bool {
+        self.with_lock(|state| {
+            let candidate = match path.canonicalize() {
+                Ok(candidate) => candidate,
+                Err(_) => return false,
+            };
+            let Some(index) = state.nested_archive_roots.iter().position(|root| root.canonicalize().is_ok_and(|root| root == candidate)) else {
+                return false;
+            };
+            let root = state.nested_archive_roots.get(index).expect("located nested archive root").clone();
+            match fs::remove_dir_all(&root) {
+                Ok(()) => {
+                    state.nested_archive_roots.remove(index);
+                    true
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    state.nested_archive_roots.remove(index);
+                    true
+                }
+                Err(_) => false,
+            }
+        })
+    }
+
+    fn cleanup_nested_archive_roots(&self) {
+        self.with_lock(|state| {
+            while let Some(root) = state.nested_archive_roots.pop_front() {
+                let _ = fs::remove_dir_all(root);
+            }
+        });
+    }
 }
 
 #[cfg(test)]
@@ -1369,7 +1407,10 @@ fn cancel_job_subscriptions(state: &mut RegistryState, job_id: &str) {
 
 impl Drop for JobRegistry {
     fn drop(&mut self) {
-        self.cleanup_preview_roots();
+        if Arc::strong_count(&self.state) == 1 {
+            self.cleanup_preview_roots();
+            self.cleanup_nested_archive_roots();
+        }
     }
 }
 
@@ -2081,5 +2122,55 @@ mod tests {
         registry.cleanup_preview_roots();
         assert!(!second.exists(), "cleanup should remove remaining preview root");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn nested_archive_roots_are_exactly_registered_and_explicitly_cleaned() {
+        let registry = JobRegistry::new();
+        let root = temporary_preview_root();
+        let nested_root = root.join("nested-materialization");
+        fs::create_dir_all(&nested_root).expect("nested materialization should be created");
+        registry.register_nested_archive_root(nested_root.clone());
+
+        assert!(!registry.cleanup_nested_archive_root(&root), "unregistered parent paths must not be removable");
+        assert!(nested_root.exists(), "rejecting a parent path must leave the registered root intact");
+        assert!(registry.cleanup_nested_archive_root(&nested_root), "registered nested root should be removable");
+        assert!(!nested_root.exists(), "explicit cleanup should remove the materialized root");
+        assert!(!registry.cleanup_nested_archive_root(&nested_root), "a cleaned root must no longer be registered");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn failed_nested_root_cleanup_keeps_the_root_registered_for_retry() {
+        let registry = JobRegistry::new();
+        let root = temporary_preview_root();
+        let nested_root = root.join("nested-materialization");
+        fs::write(&nested_root, b"not a directory").expect("cleanup failure fixture should be written");
+        registry.register_nested_archive_root(nested_root.clone());
+
+        assert!(!registry.cleanup_nested_archive_root(&nested_root), "a non-directory root should fail directory cleanup");
+        assert!(nested_root.exists(), "failed cleanup should leave the path intact");
+
+        fs::remove_file(&nested_root).expect("failed root should be replaceable for retry");
+        fs::create_dir(&nested_root).expect("replacement root should be created");
+        assert!(registry.cleanup_nested_archive_root(&nested_root), "a retained registration should allow a later cleanup retry");
+        assert!(!nested_root.exists(), "successful retry should remove the root");
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn nested_archive_roots_are_removed_when_the_final_registry_handle_drops() {
+        let registry = JobRegistry::new();
+        let clone = registry.clone();
+        let root = temporary_preview_root();
+        let nested_root = root.join("nested-materialization");
+        fs::create_dir_all(&nested_root).expect("nested materialization should be created");
+        registry.register_nested_archive_root(nested_root.clone());
+
+        drop(registry);
+        assert!(nested_root.exists(), "dropping an intermediate shared handle must retain active navigation data");
+        drop(clone);
+        assert!(!nested_root.exists(), "dropping the final registry handle should clean its nested roots");
+        let _ = fs::remove_dir_all(root);
     }
 }

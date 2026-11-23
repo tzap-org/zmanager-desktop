@@ -1,13 +1,16 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import { ZManagerAppRuntimeProvider } from "../AppProviders";
 import { createZManagerAppStore } from "../appStore";
 import {
   createInitialZManagerReactSnapshot,
   createZManagerReactSnapshot,
+  noopZManagerReactActions,
 } from "../appRuntime";
+import { createArchiveWorkspace } from "../../../app/workspaces/archiveWorkspace";
 import { AppFrame } from "./AppFrame";
 
 describe("React AppFrame shell", () => {
@@ -91,6 +94,42 @@ describe("React AppFrame shell", () => {
     expect(html).not.toContain('id="include-all-sources"');
     expect(html).not.toContain('id="exclude-all-sources"');
     expect(html).not.toContain('id="clear-sources"');
+  });
+
+  it("opens the destination dialog for Extract All and Extract Selected", () => {
+    const initialSnapshot = createInitialZManagerReactSnapshot();
+    const archiveWorkspace = createArchiveWorkspace();
+    archiveWorkspace.loadSucceeded({
+      archivePath: "C:/archives/demo.zip",
+      entries: [{ path: "nested.zip", kind: "file", size: 10, compressedSize: 8 }],
+      entryCount: 1,
+      totalSize: 10,
+    });
+    const selected = archiveWorkspace.setPathSelected("nested.zip", true);
+    const handleArchiveIntent = vi.fn();
+    const store = createZManagerAppStore(
+      createZManagerReactSnapshot({
+        ...initialSnapshot,
+        shell: { ...initialSnapshot.shell, activeMode: "extract" },
+        archive: selected,
+        extract: { ...initialSnapshot.extract, destinationPath: "" },
+      }),
+      { ...noopZManagerReactActions, handleArchiveIntent },
+    );
+
+    render(
+      createElement(
+        ZManagerAppRuntimeProvider,
+        { store },
+        createElement(AppFrame, null, createElement("section")),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Extract All" }));
+    fireEvent.click(screen.getByRole("button", { name: "Extract Selected (1)" }));
+
+    expect(handleArchiveIntent).toHaveBeenNthCalledWith(1, { type: "openExtractDialog", mode: "archive" });
+    expect(handleArchiveIntent).toHaveBeenNthCalledWith(2, { type: "openExtractDialog", mode: "selection" });
   });
 
   it("omits workspace mode before the runtime bridge is ready", () => {

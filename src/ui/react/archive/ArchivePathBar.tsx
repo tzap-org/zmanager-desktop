@@ -1,6 +1,5 @@
-import { FolderOpen } from "lucide-react";
-import { useEffect, useState } from "react";
-
+import { Home } from "lucide-react";
+import { useEffect } from "react";
 import { getPathBasename } from "../../../app/formatting";
 import { useZManagerActions, useZManagerSnapshot } from "../AppProviders";
 import { translatorForSnapshot } from "../shell/shellHelpers";
@@ -11,64 +10,68 @@ export function ArchivePathBar() {
   const actions = useZManagerActions();
   const i18n = translatorForSnapshot(snapshot);
   const archive = snapshot.archive;
-  const extract = snapshot.extract;
-  const [destination, setDestination] = useState(extract.destinationPath);
-  const archiveName = getPathBasename(archive.currentArchivePath, "ZManager");
+  const archiveNavigation = snapshot.archiveNavigation.length
+    ? snapshot.archiveNavigation
+    : archive.currentArchivePath
+      ? [{ label: getPathBasename(archive.currentArchivePath, "Archive"), depth: 0 }]
+      : [];
+  const navigationCrumbs = archiveNavigation.map((crumb) => ({
+    name: crumb.label,
+    path: `archive-depth:${crumb.depth}`,
+  }));
+  const folderCrumbs = archive.view.breadcrumbs.slice(1).map((crumb) => ({
+    name: crumb.name,
+    path: `archive-folder:${crumb.path}`,
+  }));
+  const crumbs = [...navigationCrumbs, ...folderCrumbs];
+  const location = [
+    ...archiveNavigation.map((crumb) => crumb.label),
+    ...archive.view.breadcrumbs.slice(1).map((crumb) => crumb.name),
+  ].join(" › ");
 
   useEffect(() => {
-    setDestination(extract.destinationPath);
-  }, [extract.destinationPath]);
-
-  useEffect(() => {
-    document.title = archive.currentArchivePath
-      ? archive.view.currentFolder
-        ? `${archiveName}\\${archive.view.currentFolder.replace(/\//g, "\\")} - ZManager`
-        : `${archiveName} - ZManager`
-      : "ZManager";
-  }, [archive.currentArchivePath, archive.view.currentFolder, archiveName]);
+    document.title = location ? `${location} - ZManager` : "ZManager";
+  }, [location]);
 
   return (
     <WorkspacePathBar
-      ariaLabel={i18n.t("extract.destination")}
-      locationLabel={i18n.t("extract.destination")}
-      pathAriaLabel={i18n.t("extract.destination")}
-      pathInputId="extract-destination"
-      displayPath={destination}
+      ariaLabel={i18n.t("workspace.archiveLocation.aria")}
+      locationLabel={i18n.t("workspace.archiveLocation.aria")}
+      pathAriaLabel={i18n.t("workspace.archiveLocation.aria")}
+      pathInputId="archive-location"
+      displayPath={location}
       pathDisabled={!archive.currentArchivePath}
-      pathReadOnly={false}
-      pathPlaceholder={i18n.t("extract.destination.placeholder")}
-      onPathChange={(path) => {
-        setDestination(path);
-        actions.handleArchiveIntent({
-          type: "setExtractDestination",
-          destinationPath: path,
-        });
-      }}
-      crumbs={[]}
-      crumbsHidden
+      pathReadOnly
+      pathPlaceholder={i18n.t("browse.noArchiveOpen")}
+      crumbs={crumbs}
+      crumbsHidden={!archive.currentArchivePath}
       emptyCrumbsText=""
       pathAccessory={
-        <>
-          <button
-            id="browse-extract-destination"
-            className="grid size-8 place-items-center rounded-md border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
-            type="button"
-            aria-label={i18n.t("nativeDialog.chooseExtractDestination")}
-            title={i18n.t("nativeDialog.chooseExtractDestination")}
-            disabled={!archive.currentArchivePath}
-            onClick={() =>
-              actions.handleArchiveIntent({ type: "browseExtractDestination" })
-            }
-          >
-            <FolderOpen className="size-4" aria-hidden="true" />
-          </button>
-          <span className="hidden max-w-28 truncate text-[11px] text-slate-500 min-[900px]:inline dark:text-slate-400">
-            {extract.usesGlobalDefaults
-              ? i18n.t("extract.globalDefault")
-              : i18n.t("extract.customDestination")}
-          </span>
-        </>
+        <button
+          id="archive-open-root"
+          className="grid size-8 shrink-0 place-items-center rounded-md border border-slate-300 bg-white hover:bg-slate-100 disabled:opacity-50 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
+          type="button"
+          aria-label={i18n.t("icon.archiveRoot")}
+          title={i18n.t("icon.archiveRoot")}
+          disabled={!archive.currentArchivePath}
+          onClick={() => actions.handleArchiveIntent({ type: "navigateArchiveToDepth", depth: 0 })}
+        >
+          <Home className="size-4" aria-hidden="true" />
+        </button>
       }
+      onCrumbClick={(path) => {
+        if (path.startsWith("archive-depth:")) {
+          actions.handleArchiveIntent({
+            type: "navigateArchiveToDepth",
+            depth: Number(path.slice("archive-depth:".length)),
+          });
+        } else if (path.startsWith("archive-folder:")) {
+          actions.handleArchiveIntent({
+            type: "navigateToFolder",
+            folderPath: path.slice("archive-folder:".length),
+          });
+        }
+      }}
       search={{
         query: archive.view.searchQuery,
         disabled: !archive.command.canSearchEntries,

@@ -341,8 +341,8 @@ test("Close Archive resets Extract to its empty state", async ({ page }) => {
   await page.locator("#close-archive").click();
 
   await expect(page.locator("#archive-empty-state")).toBeVisible();
-  await expect(page.locator("#extract-destination")).toBeDisabled();
-  await expect(page.locator("#extract-destination")).toHaveValue("");
+  await expect(page.locator("#archive-location")).toBeDisabled();
+  await expect(page.locator("#archive-location")).toHaveValue("");
   await expect(page.locator("#close-archive")).toBeDisabled();
 });
 

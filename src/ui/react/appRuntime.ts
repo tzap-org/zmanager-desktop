@@ -87,6 +87,11 @@ export type ZManagerRuntimeSnapshot = Readonly<{
   isLocalSendAvailable: boolean;
 }>;
 
+export type ZManagerArchiveNavigationCrumb = Readonly<{
+  label: string;
+  depth: number;
+}>;
+
 export type ZManagerContextMenuSnapshot =
   | Readonly<{ visible: false; id: number }>
   | Readonly<{
@@ -109,6 +114,7 @@ export type ZManagerReactSnapshot = Readonly<{
   localSendIncomingTransfers: readonly LocalSendIncomingTransferSnapshot[];
   shell: ShellWorkspaceSnapshot;
   archive: ArchiveWorkspaceSnapshot;
+  archiveNavigation: readonly ZManagerArchiveNavigationCrumb[];
   create: CreateWorkspaceSnapshot;
   extract: ExtractWorkspaceSnapshot;
   systemIcons: Readonly<Record<string, string | null>>;
@@ -127,6 +133,7 @@ export type ZManagerArchiveIntent =
   | Readonly<{ type: "navigateToFolder"; folderPath: string }>
   | Readonly<{ type: "navigateBack" }>
   | Readonly<{ type: "navigateUp" }>
+  | Readonly<{ type: "navigateArchiveToDepth"; depth: number }>
   | Readonly<{ type: "loadNextArchivePage" }>
   | Readonly<{ type: "loadPreviousArchivePage" }>
   | Readonly<{ type: "setSearchQuery"; query: string; immediate?: boolean }>
@@ -188,6 +195,7 @@ export type ZManagerArchiveIntent =
   | Readonly<{ type: "chooseTzapTrustedCAs" }>
   | Readonly<{ type: "removeTzapTrustedCA"; path: string }>
   | Readonly<{ type: "verifyTzapCertificate" }>
+  | Readonly<{ type: "openExtractDialog"; mode: ExtractMode }>
   | Readonly<{ type: "runExtract"; mode: ExtractMode; password: string }>
   | Readonly<{ type: "showEmptyContextMenu"; x: number; y: number }>
   | Readonly<{
@@ -448,6 +456,7 @@ export type CreateZManagerReactSnapshotInput = Readonly<{
   localSendIncomingTransfers?: readonly LocalSendIncomingTransferSnapshot[];
   shell: ShellWorkspaceSnapshot;
   archive: ArchiveWorkspaceSnapshot;
+  archiveNavigation?: readonly ZManagerArchiveNavigationCrumb[];
   create: CreateWorkspaceSnapshot;
   extract?: ExtractWorkspaceSnapshot;
   systemIcons?: Readonly<Record<string, string | null>>;
@@ -520,6 +529,7 @@ export function createZManagerReactSnapshot(
     localSendIncomingTransfers: [...(input.localSendIncomingTransfers ?? [])],
     shell: input.shell,
     archive: input.archive,
+    archiveNavigation: [...(input.archiveNavigation ?? [])],
     create: input.create,
     extract: { ...(input.extract ?? createExtractWorkspace().getSnapshot()) },
     systemIcons: { ...(input.systemIcons ?? {}) },

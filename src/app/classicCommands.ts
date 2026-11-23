@@ -75,6 +75,7 @@ export type CommandContext = {
   focusedRow: boolean;
   canNavigateUp?: boolean;
   canOpenInside?: boolean;
+  canOpenNestedArchive?: boolean;
   selectedCount: number;
   visibleSelectableCount: number;
   mutableOperationsSupported: boolean;
@@ -136,6 +137,7 @@ export function selectCommandState(context: CommandContext): CommandStateMap {
   const hasFocusedOrSelected = context.focusedRow || hasSelection;
   const canNavigateUp = Boolean(context.canNavigateUp);
   const canOpenInside = Boolean(context.canOpenInside);
+  const canOpenNestedArchive = Boolean(context.canOpenNestedArchive);
   const mutationsEnabled = context.mutableOperationsSupported;
   const archiveReason = context.hasArchive ? ARCHIVE_NOT_READY_MESSAGE : NO_ARCHIVE_OPEN_MESSAGE;
 
@@ -153,8 +155,8 @@ export function selectCommandState(context: CommandContext): CommandStateMap {
   enable(["closeArchive", "extract", "test", "properties", "info", "refresh"], canOperateArchive, archiveReason);
   enable(["copyTo", "flatView"], canUseArchive, archiveReason);
   enable(["copy"], hasSelection && canListEntries, hasSelection ? archiveReason : NO_SELECTION_MESSAGE);
-  enable(["view", "openOutside"], hasOneSelection && canListEntries && !canOpenInside, hasOneSelection && !canOpenInside ? archiveReason : SINGLE_FILE_REQUIRED_MESSAGE);
-  enable(["openInside"], canOpenInside && canListEntries, hasOneSelection ? SINGLE_FOLDER_REQUIRED_MESSAGE : SINGLE_FILE_REQUIRED_MESSAGE);
+  enable(["view", "openOutside"], hasOneSelection && canListEntries && (!canOpenInside || canOpenNestedArchive), hasOneSelection && (!canOpenInside || canOpenNestedArchive) ? archiveReason : SINGLE_FILE_REQUIRED_MESSAGE);
+  enable(["openInside"], hasOneSelection && (canOpenInside || canOpenNestedArchive) && canListEntries, hasOneSelection ? SINGLE_FOLDER_REQUIRED_MESSAGE : SINGLE_FILE_REQUIRED_MESSAGE);
   enable(["selectAll"], canListEntries && context.visibleSelectableCount > 0, canListEntries ? NO_ENTRIES_MESSAGE : archiveReason);
   enable(["deselectAll"], hasSelection, NO_SELECTION_MESSAGE);
   enable(["invertSelection"], canListEntries && context.visibleSelectableCount > 0, canListEntries ? NO_ENTRIES_MESSAGE : archiveReason);

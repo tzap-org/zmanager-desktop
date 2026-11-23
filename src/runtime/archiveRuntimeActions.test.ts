@@ -67,6 +67,20 @@ describe("archive runtime actions", () => {
     expect(effects.runExtract).toHaveBeenCalledWith("archive", "secret");
   });
 
+  it("routes nested archive breadcrumb navigation and dialog-based extraction", () => {
+    const effects = createEffects({
+      navigateArchiveToDepth: vi.fn(),
+      openExtractDialog: vi.fn(),
+    });
+    const actions = createArchiveRuntimeActions(effects);
+
+    actions.handleIntent({ type: "navigateArchiveToDepth", depth: 2 });
+    actions.handleIntent({ type: "openExtractDialog", mode: "selection" });
+
+    expect(effects.navigateArchiveToDepth).toHaveBeenCalledWith(2);
+    expect(effects.openExtractDialog).toHaveBeenCalledWith("selection");
+  });
+
   it("routes column width and reorder intents to their respective effects", () => {
     const effects = createEffects();
     const actions = createArchiveRuntimeActions(effects);

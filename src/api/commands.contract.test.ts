@@ -444,6 +444,30 @@ describe("Tauri command contracts", () => {
       request: { environment: "prod", audience: "login.tzap.org" },
     });
   });
+
+  it("materializes nested entries with navigation retention and cleans only the requested root", async () => {
+    await api.runMaterializeNestedArchiveEntry({
+      archivePath: "C:/archives/outer.zip",
+      entryPath: "inner.jar",
+      overwrite: "refuse",
+      stripComponents: 0,
+    });
+    expect(invokeMock).toHaveBeenCalledWith("preview_entry", {
+      request: {
+        archivePath: "C:/archives/outer.zip",
+        entryPath: "inner.jar",
+        overwrite: "refuse",
+        stripComponents: 0,
+        retainForNavigation: true,
+      },
+    });
+
+    invokeMock.mockClear();
+    await api.runCleanupNestedArchiveRoot({ cleanupRoot: "C:/temp/nested-root" });
+    expect(invokeMock).toHaveBeenCalledWith("cleanup_preview_roots", {
+      request: { cleanupRoot: "C:/temp/nested-root" },
+    });
+  });
 });
 
 function rustInvokeHandlerCommands(): string[] {

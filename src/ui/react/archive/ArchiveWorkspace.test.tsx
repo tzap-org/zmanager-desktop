@@ -1,6 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import { ARCHIVE_NOT_READY_MESSAGE } from "../../../app/classicCommands";
 import { createArchiveWorkspace } from "../../../app/workspaces/archiveWorkspace";
@@ -13,17 +14,20 @@ import {
   type ZManagerReactSnapshot,
 } from "../appRuntime";
 import { ArchiveWorkspace } from "./ArchiveWorkspace";
+import { ArchivePathBar } from "./ArchivePathBar";
 
 describe("React archive workspace", () => {
-  it("renders extraction destination, options, search, tree, table, and archive details", () => {
+  it("renders archive location, extraction options, search, tree, table, and archive details", () => {
     const snapshot = archiveSnapshot();
     const html = renderArchiveWorkspace(snapshot);
 
     expect(html).toContain('data-shell-chrome="path"');
-    expect(html).toContain("Extract to");
-    expect(html).toContain('id="extract-destination"');
-    expect(html).toContain("C:/output/demo");
-    expect(html).toContain('id="browse-extract-destination"');
+    expect(html).toContain("Archive location");
+    expect(html).toContain('id="archive-location"');
+    expect(html).toContain('value="demo.zip › docs"');
+    expect(html).toContain('id="archive-open-root"');
+    expect(html).toContain('data-crumb-path="archive-depth:0"');
+    expect(html).toContain('data-crumb-path="archive-folder:docs"');
     expect(html).not.toContain('id="nav-back"');
     expect(html).not.toContain('id="nav-up"');
     expect(html).toContain("demo.zip");
@@ -40,7 +44,6 @@ describe("React archive workspace", () => {
     expect(html).toContain('id="extract-path-mode"');
     expect(html).toContain('id="extract-overwrite"');
     expect(html).toContain('id="extract-password"');
-    expect(html).toContain("Using global defaults");
     expect(html).toContain("C:/archives/demo.zip");
   });
 
@@ -51,6 +54,39 @@ describe("React archive workspace", () => {
     expect(html).toContain('data-empty-action="open-archive"');
     expect(html).toContain('data-details-action="open-archive"');
     expect(html).toContain("Open Archive");
+  });
+
+  it("shows and routes archive breadcrumbs back through nested levels", () => {
+    const initial = archiveSnapshot();
+    const snapshot = createZManagerReactSnapshot({
+      ...initial,
+      archiveNavigation: [
+        { label: "demo.zip", depth: 0 },
+        { label: "nested.jar", depth: 1 },
+      ],
+    });
+    const handleArchiveIntent = vi.fn();
+    const store = createZManagerAppStore(snapshot, {
+      ...noopZManagerReactActions,
+      handleArchiveIntent,
+    });
+
+    render(
+      createElement(
+        ZManagerAppRuntimeProvider,
+        { store },
+        createElement(ArchivePathBar),
+      ),
+    );
+
+    expect(screen.getByRole("textbox", { name: "Archive location" })).toHaveValue("demo.zip › nested.jar › docs");
+    fireEvent.click(screen.getByRole("button", { name: "nested.jar" }));
+    fireEvent.click(screen.getByRole("button", { name: "docs" }));
+    fireEvent.click(screen.getByRole("button", { name: "Archive root" }));
+
+    expect(handleArchiveIntent).toHaveBeenNthCalledWith(1, { type: "navigateArchiveToDepth", depth: 1 });
+    expect(handleArchiveIntent).toHaveBeenNthCalledWith(2, { type: "navigateToFolder", folderPath: "docs" });
+    expect(handleArchiveIntent).toHaveBeenNthCalledWith(3, { type: "navigateArchiveToDepth", depth: 0 });
   });
 
   it("disables no-archive open actions while another job blocks archive commands", () => {

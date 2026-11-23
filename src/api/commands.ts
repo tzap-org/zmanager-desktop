@@ -41,6 +41,7 @@ import type {
   PauseJobRequest,
   PlanCreateRequest,
   PreviewEntryRequest,
+  CleanupNestedArchiveRootRequest,
   OpenPreviewPathRequest,
   OpenJobOutputRequest,
   PreviewEntryResponse,
@@ -308,6 +309,14 @@ export async function runPreviewEntry(request: PreviewEntryRequest): Promise<Pre
   return invoke<PreviewEntryResponse>("preview_entry", {
     request,
   });
+}
+
+export async function runMaterializeNestedArchiveEntry(request: PreviewEntryRequest): Promise<PreviewEntryResponse> {
+  return runPreviewEntry({ ...request, retainForNavigation: true });
+}
+
+export async function runCleanupNestedArchiveRoot(request: CleanupNestedArchiveRootRequest): Promise<void> {
+  return invoke<void>("cleanup_preview_roots", { request });
 }
 
 export async function runOpenPreviewPath(request: OpenPreviewPathRequest): Promise<void> {

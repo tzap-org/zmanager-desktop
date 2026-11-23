@@ -264,6 +264,23 @@ describe("command state selector", () => {
     expect(state.openInside.enabled).toBe(true);
   });
 
+  it("enables View and Open in Archive for a selected nested archive file", () => {
+    const state = selectCommandState({
+      ...baseContext,
+      browseState: "loaded",
+      hasArchive: true,
+      focusedRow: true,
+      selectedCount: 1,
+      visibleSelectableCount: 3,
+      canOpenInside: false,
+      canOpenNestedArchive: true,
+    });
+
+    expect(state.view.enabled).toBe(true);
+    expect(state.openOutside.enabled).toBe(true);
+    expect(state.openInside.enabled).toBe(true);
+  });
+
   it("covers representative create, browse, job, menu, details, and row-action commands", () => {
     const state = selectCommandState({
       ...baseContext,
