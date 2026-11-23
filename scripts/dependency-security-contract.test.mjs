@@ -31,6 +31,7 @@ test("security workflow audits npm with one scoped advisory exception and every 
   assert.ok(workflow.includes("checkout-release-inputs.mjs .audit"));
   assert.ok(workflow.includes("cargo update --package tzap-core"));
   assert.ok(workflow.includes("cargo update --package crypto-bigint"));
+  assert.ok(workflow.includes("cargo update --package url"));
   assert.ok(workflow.includes("cargo audit --deny yanked --file Cargo.lock"));
   assert.doesNotMatch(workflow, /continue-on-error|--ignore|\|\| true/);
   assert.doesNotMatch(npmAuditGate, /--ignore|audit-level=high/);
@@ -138,6 +139,7 @@ test("the product lockfile uses the reviewed codec sources and excludes yanked c
   assert.deepEqual(versions("zstd"), ["0.14.3"]);
   assert.deepEqual(versions("zstd-safe"), ["8.2.0"]);
   assert.deepEqual(versions("crypto-bigint"), ["0.7.10"]);
+  assert.deepEqual(versions("url"), ["2.5.9"]);
 });
 
 test("release lock captures controlled sibling commits and gate verifies them", () => {
