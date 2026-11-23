@@ -1841,7 +1841,7 @@ fn materialize_nested_archive_companions(
 }
 
 fn is_split_archive_volume_path(path: &str) -> bool {
-    let name = path.rsplit(|character| character == '/' || character == '\\').next().unwrap_or(path);
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
     split_archive_volume_prefix(name).is_some()
 }
 
