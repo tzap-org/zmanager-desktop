@@ -86,13 +86,6 @@ codesign --force --sign - "$case_app/Contents/MacOS/zmanager-desktop" >/dev/null
 resign_app "$case_app"
 expect_failure "bad rpath" "bad rpath" "$case_app" --expected-arch "$architecture"
 
-case_app=$(copy_case profiles)
-rm -f "$case_app/Contents/embedded.provisionprofile"
-rm -f "$case_app/Contents/PlugIns/ZManagerFinderExtension.appex/Contents/embedded.provisionprofile"
-resign_app "$case_app"
-expect_failure "missing App Group profiles" "invalid App Group provisioning profile" "$case_app" \
-  --expected-arch "$architecture" --require-provisioned-app-group
-
 notary_output=$work/notary-output.txt
 if "$repo_root/scripts/release-gate-macos.sh" "$source_app" --expected-arch "$architecture" \
   --require-developer-id --require-notarization >"$notary_output" 2>&1; then

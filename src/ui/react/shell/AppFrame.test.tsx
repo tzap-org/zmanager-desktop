@@ -96,7 +96,7 @@ describe("React AppFrame shell", () => {
     expect(html).not.toContain('id="clear-sources"');
   });
 
-  it("opens the destination dialog for Extract All and Extract Selected", () => {
+  it("runs Extract All from the inline destination and keeps the Extract Selected dialog", () => {
     const initialSnapshot = createInitialZManagerReactSnapshot();
     const archiveWorkspace = createArchiveWorkspace();
     archiveWorkspace.loadSucceeded({
@@ -128,7 +128,11 @@ describe("React AppFrame shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Extract All" }));
     fireEvent.click(screen.getByRole("button", { name: "Extract Selected (1)" }));
 
-    expect(handleArchiveIntent).toHaveBeenNthCalledWith(1, { type: "openExtractDialog", mode: "archive" });
+    expect(handleArchiveIntent).toHaveBeenNthCalledWith(1, {
+      type: "runExtract",
+      mode: "archive",
+      password: "",
+    });
     expect(handleArchiveIntent).toHaveBeenNthCalledWith(2, { type: "openExtractDialog", mode: "selection" });
   });
 

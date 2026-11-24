@@ -192,6 +192,7 @@ import {
 } from "../app/extractDialogState";
 import {
   ARCHIVE_OPEN_FILTER,
+  baseNameWithoutKnownArchiveExtension,
   getKnownArchiveSuffix,
   isSupportedArchivePath,
 } from "../app/archiveFileTypes";
@@ -693,6 +694,10 @@ const archiveRuntimeActions = createArchiveRuntimeActions({
   },
   verifyTzapCertificate: verifyCurrentTzapCertificate,
   openExtractDialog: (mode) => openExtractDialog(mode),
+  runExtract: (mode, password) => {
+    archiveWorkspace.clearPasswordRetry();
+    return startExtract(mode, extractWorkspace.buildStartInput(password));
+  },
   showEmptyContextMenu: showStartupContextMenu,
   showColumnContextMenu: (columnId, x, y) => showTableHeaderContextMenu(x, y, columnId),
   showFolderContextMenu: (path, x, y) => showFolderContextMenu(path, x, y, path),
@@ -1123,7 +1128,7 @@ const extractStartController = createExtractStartController({
     setOperationalStatus(message("extract.selectEntryFirst"));
   },
   recordDestination: recordExtractDestinationHistory,
-  closeExtractDialog: closeReactDialog,
+  closeExtractDialog: closeExtractDialogIfOpen,
   handoffAcceptedJob: async (response, resetSubmittedState) => {
     await jobHandoff.handoffAcceptedJob(response, { resetSubmittedState });
   },
@@ -1863,11 +1868,7 @@ function createOutputFolderDefaultPath(destinationPath: string): string {
 function extractionDefaultsForArchive(archivePath: string): ExtractWorkspaceDefaults {
   const parent = nativeParentPath(archivePath);
   const configuredBase = appPreferences.customExtractFolderPath.trim() || defaultCreateDirectory(appPreferences) || parent;
-  const suffix = getKnownArchiveSuffix(archivePath);
-  const archiveName = getPathBasename(archivePath, APP_TITLE);
-  const folderName = suffix && archiveName.toLowerCase().endsWith(suffix.toLowerCase())
-    ? archiveName.slice(0, -suffix.length)
-    : archiveName;
+  const folderName = baseNameWithoutKnownArchiveExtension(archivePath);
   const extractionAction = appPreferences.defaultExtractionBehavior === "extractHere"
     ? "extractHere"
     : "extractToFolder";
@@ -2821,6 +2822,20 @@ function closeReactDialog() {
       passwordPromptOpen: false,
     });
   }
+  publishReactSnapshot();
+}
+
+function closeExtractDialogIfOpen() {
+  if (reactDialogSnapshot.kind === "extract") {
+    closeReactDialog();
+    return;
+  }
+
+  extractWorkspace.setOptions({ passwordPromptOpen: false });
+  archiveWorkspace.clearPasswordRetry();
+  activeExtractDialogForm = patchExtractDialogFormSnapshot(activeExtractDialogForm, {
+    passwordPromptOpen: false,
+  });
   publishReactSnapshot();
 }
 
@@ -4050,11 +4065,10 @@ function openExtractDialog(mode: ExtractMode) {
   }
 
   archiveWorkspace.clearPasswordRetry();
-  const { extractDestinationHistory } = pathHistoryStore.getSnapshot();
   openReactExtractDialogSnapshot(
     mode,
     createExtractDialogFormSnapshot({
-      destination: extractDestinationHistory[0] || extractWorkspace.getSnapshot().destinationPath || "",
+      destination: extractWorkspace.getSnapshot().destinationPath || "",
       overwrite: activeExtractDialogForm.overwrite,
       stripComponents: activeExtractDialogForm.stripComponents,
       tzapRestorePolicy: extractWorkspace.getSnapshot().tzapRestorePolicy,

@@ -35,6 +35,18 @@ test("macOS release CI syncs UniFFI Swift sources before Cargo validation", () =
   assert.ok(sync < cargo, "release CI sync must precede Cargo validation");
 });
 
+test("macOS release signing derives its team from configured credentials", () => {
+  const workflow = readFileSync(resolve(root, ".github/workflows/release.yml"), "utf8");
+  const releaseGate = readFileSync(resolve(root, "scripts/release-gate-macos.sh"), "utf8");
+
+  assert.match(workflow, /team_id=\$\(sed -n/);
+  assert.match(workflow, /configured Developer ID identity does not include a Team ID/);
+  assert.match(workflow, /echo "ZMANAGER_TEAM_ID=\$team_id"/);
+  assert.doesNotMatch(workflow, /9PMA523YY4/);
+  assert.match(releaseGate, /expected_team_id=\$\{ZMANAGER_TEAM_ID:-\$actual_team_id\}/);
+  assert.doesNotMatch(releaseGate, /TeamIdentifier=9PMA523YY4/);
+});
+
 test("macOS linkers include SystemConfiguration for system proxy support", () => {
   const rustBuild = readFileSync(resolve(root, "src-tauri/build.rs"), "utf8");
   const nativeBuild = readFileSync(resolve(root, "scripts/build-macos-native-targets.sh"), "utf8");
@@ -142,6 +154,9 @@ test("macOS installation registers exactly one extension provider", () => {
   const build = readFileSync(resolve(root, "scripts/build-macos.sh"), "utf8");
   assert.match(build, /ditto "\$staged_app" "\$temporary"/);
   assert.match(build, /codesign --verify --deep --strict "\$destination"/);
+  assert.match(build, /ZMANAGER_APP_GROUP_IDENTIFIER="\$team_id\.\$app_group_name"/);
+  assert.match(build, /A team-matched macOS signing identity is required to install ZManager/);
+  assert.doesNotMatch(build, /local_development_codesign_identity|8014C7D557DE28E3C52971362BA18A3CCC28A723/);
 
   // Retire the build's intermediate bundles before force-registering the
   // installed one. LaunchServices indexes apps from almost any location, and a
@@ -181,6 +196,7 @@ test("macOS registration verifier asserts a single provider without touching use
   assert.match(verifier, /Expected exactly one LaunchServices registration/);
   assert.match(verifier, /without de-duplicating paths/);
   assert.match(verifier, /More than one registered bundle carries the Finder Sync extension/);
+  assert.match(verifier, /Finder integration bundle is ad-hoc signed/);
   // Read-only probes of pluginkit are fine; mutating registration or the user's
   // enabled/disabled choice is not.
   assert.doesNotMatch(verifier, /pluginkit"? +-(?:a|r|e)\b/);

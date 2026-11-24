@@ -30,6 +30,39 @@ application=$1
   echo "invalid application bundle: $application" >&2
   exit 1
 }
+application_team=""
+for signed_bundle in "$application" "$application/Contents/PlugIns/ZManagerFinderExtension.appex"; do
+  [[ -d "$signed_bundle" ]] || { echo "missing signed extension bundle: $signed_bundle" >&2; exit 1; }
+  signed_team=$(codesign -d --verbose=4 "$signed_bundle" 2>&1 | sed -n 's/^TeamIdentifier=//p' | sed -n '1p')
+  if [[ -z "$signed_team" || "$signed_team" == "not set" ]]; then
+    echo "Finder integration bundle is ad-hoc signed: $signed_bundle" >&2
+    exit 1
+  fi
+  if [[ -n "$application_team" && "$signed_team" != "$application_team" ]]; then
+    echo "Finder extension and host app use different signing teams." >&2
+    exit 1
+  fi
+  application_team="$signed_team"
+done
+app_group_name=$(/usr/bin/python3 -c \
+  "import json,sys; print(json.load(open(sys.argv[1]))['appGroupName'])" \
+  "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/packaging/macos/product-identity.json")
+/usr/bin/python3 - "$application" "$application_team" "$app_group_name" <<'PY'
+import plistlib, subprocess, sys
+from pathlib import Path
+
+application, team, group_name = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+expected = f"{team}.{group_name}"
+for relative in (".", "Contents/PlugIns/ZManagerFinderExtension.appex"):
+    result = subprocess.run(
+        ["codesign", "-d", "--entitlements", ":-", str(application / relative)],
+        capture_output=True,
+    )
+    entitlements = plistlib.loads(result.stdout.strip())
+    groups = entitlements.get("com.apple.security.application-groups", [])
+    if groups != [expected]:
+        raise SystemExit(f"unexpected App Group for {relative}: {groups!r}")
+PY
 
 lsregister="${ZMANAGER_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}"
 pluginkit="${ZMANAGER_PLUGINKIT:-/usr/bin/pluginkit}"

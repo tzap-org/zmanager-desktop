@@ -130,16 +130,13 @@ scripts/build-linux-fedora-rpm.sh
 scripts/build-macos.sh
 ```
 
-- Builds the complete Release Bundle. Local builds use the preferred Apple
-  Development identity `8014C7D557DE28E3C52971362BA18A3CCC28A723` when it is
-  available in Keychain. Matching main-app and Finder-extension provisioning
-  profiles are selected from Xcode and refreshed through Personal Team
-  automatic signing when missing or expired. Free Personal Team profiles expire
-  after seven days; `scripts/refresh-macos-development-profiles.sh` refreshes
-  them explicitly. Xcode must have the signing Apple Account configured. The
-  build falls back to ad-hoc signing when the preferred identity is unavailable.
-  Set `ZMANAGER_CODESIGN_IDENTITY=-` to force ad-hoc signing. Protected release
-  builds use Developer ID signing, notarization, and stapling.
+- Builds the complete Release Bundle. Local builds select an Apple Development
+  or Apple Distribution identity from Keychain and derive the Finder App Group
+  from that signing team. Clones can select a specific identity with
+  `ZMANAGER_CODESIGN_IDENTITY`; the private key stays in Keychain. Installing
+  requires a team-signed build. Ad-hoc builds are available with `--no-install`
+  for packaging checks. Protected releases use the certificate and notary
+  credentials supplied through GitHub Actions secrets.
 - `--bundle app|dmg|all` selects the artifact type; the default is `all`.
 - `--install-deps` installs missing CMake/Node dependencies with Homebrew and
   installs or updates Rust through rustup.
@@ -152,6 +149,19 @@ scripts/build-macos.sh
   `ZMANAGER_MACOS_STAGE_DIR`.
 - `scripts/release-gate-macos.sh` verifies nested targets, linkage, identifiers,
   versions, entitlements, architectures, signatures, notarization, and stapling.
+
+### macOS release signing secrets
+
+The GitHub Actions release workflow reads signing material only from encrypted
+repository or environment secrets. Configure `MACOS_DEVELOPER_ID_P12_BASE64`
+with the base64 encoded Developer ID `.p12` export and
+`MACOS_DEVELOPER_ID_P12_PASSWORD` with its export password. Notarization uses
+`MACOS_NOTARY_PRIVATE_KEY_BASE64` (base64 encoded App Store Connect API `.p8`),
+`MACOS_NOTARY_KEY_ID`, and `MACOS_NOTARY_ISSUER_ID`. The workflow imports these
+into a temporary runner keychain, validates the expected release team, then
+signs and notarizes the artifacts. Never commit the certificate, private key,
+or passwords. Local contributors use identities installed in their own
+Keychain; the source tree contains no signing certificate or private key.
 
 ## Repository layout
 

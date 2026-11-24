@@ -9,6 +9,11 @@ on:
       tag:
         description: "Tag to publish"
         required: true
+      notarization_test:
+        description: "Build and notarize macOS packages without publishing a release"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -45,7 +50,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ inputs.notarization_test && github.ref || github.event.inputs.tag || github.ref }}
 
       - name: Install Node.js
         uses: actions/setup-node@v6
@@ -85,18 +90,15 @@ jobs:
         env:
           MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
           MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
-          MACOS_MAIN_PROVISIONING_PROFILE_BASE64: ${{ secrets.MACOS_MAIN_PROVISIONING_PROFILE_BASE64 }}
-          MACOS_FINDER_PROVISIONING_PROFILE_BASE64: ${{ secrets.MACOS_FINDER_PROVISIONING_PROFILE_BASE64 }}
           MACOS_NOTARY_PRIVATE_KEY_BASE64: ${{ secrets.MACOS_NOTARY_PRIVATE_KEY_BASE64 }}
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          REQUIRE_SIGNING: ${{ github.event_name == 'push' || inputs.notarization_test }}
         run: |
           set -euo pipefail
           missing=()
           [[ -n "$MACOS_DEVELOPER_ID_P12_BASE64" ]] || missing+=(MACOS_DEVELOPER_ID_P12_BASE64)
           [[ -n "$MACOS_DEVELOPER_ID_P12_PASSWORD" ]] || missing+=(MACOS_DEVELOPER_ID_P12_PASSWORD)
-          [[ -n "$MACOS_MAIN_PROVISIONING_PROFILE_BASE64" ]] || missing+=(MACOS_MAIN_PROVISIONING_PROFILE_BASE64)
-          [[ -n "$MACOS_FINDER_PROVISIONING_PROFILE_BASE64" ]] || missing+=(MACOS_FINDER_PROVISIONING_PROFILE_BASE64)
           [[ -n "$MACOS_NOTARY_PRIVATE_KEY_BASE64" ]] || missing+=(MACOS_NOTARY_PRIVATE_KEY_BASE64)
           [[ -n "$MACOS_NOTARY_KEY_ID" ]] || missing+=(MACOS_NOTARY_KEY_ID)
           [[ -n "$MACOS_NOTARY_ISSUER_ID" ]] || missing+=(MACOS_NOTARY_ISSUER_ID)
@@ -104,6 +106,9 @@ jobs:
           if ((${#missing[@]} == 0)); then
             echo "configured=true" >> "$GITHUB_OUTPUT"
             echo "macOS Developer ID signing and notarization are configured."
+          elif [[ "$REQUIRE_SIGNING" == "true" ]]; then
+            echo "::error::Signing is required for this release/test run. Missing: ${missing[*]}"
+            exit 1
           else
             echo "configured=false" >> "$GITHUB_OUTPUT"
             echo "::warning::macOS release credentials are incomplete; building an ad-hoc-signed testing package. Missing: ${missing[*]}"
@@ -114,8 +119,6 @@ jobs:
         env:
           MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
           MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
-          MACOS_MAIN_PROVISIONING_PROFILE_BASE64: ${{ secrets.MACOS_MAIN_PROVISIONING_PROFILE_BASE64 }}
-          MACOS_FINDER_PROVISIONING_PROFILE_BASE64: ${{ secrets.MACOS_FINDER_PROVISIONING_PROFILE_BASE64 }}
           MACOS_NOTARY_PRIVATE_KEY_BASE64: ${{ secrets.MACOS_NOTARY_PRIVATE_KEY_BASE64 }}
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
@@ -123,22 +126,16 @@ jobs:
           set -euo pipefail
           : "${MACOS_DEVELOPER_ID_P12_BASE64:?missing Developer ID certificate}"
           : "${MACOS_DEVELOPER_ID_P12_PASSWORD:?missing certificate password}"
-          : "${MACOS_MAIN_PROVISIONING_PROFILE_BASE64:?missing main Developer ID provisioning profile}"
-          : "${MACOS_FINDER_PROVISIONING_PROFILE_BASE64:?missing Finder Developer ID provisioning profile}"
           : "${MACOS_NOTARY_PRIVATE_KEY_BASE64:?missing notary API key}"
           : "${MACOS_NOTARY_KEY_ID:?missing notary key ID}"
           : "${MACOS_NOTARY_ISSUER_ID:?missing notary issuer ID}"
           keychain="$RUNNER_TEMP/zmanager-release.keychain-db"
           certificate="$RUNNER_TEMP/zmanager-developer-id.p12"
           api_key="$RUNNER_TEMP/AuthKey_${MACOS_NOTARY_KEY_ID}.p8"
-          main_profile="$RUNNER_TEMP/ZManagerMain.provisionprofile"
-          finder_profile="$RUNNER_TEMP/ZManagerFinder.provisionprofile"
           keychain_password="$(openssl rand -hex 32)"
           printf '%s' "$MACOS_DEVELOPER_ID_P12_BASE64" | base64 --decode > "$certificate"
           printf '%s' "$MACOS_NOTARY_PRIVATE_KEY_BASE64" | base64 --decode > "$api_key"
-          printf '%s' "$MACOS_MAIN_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$main_profile"
-          printf '%s' "$MACOS_FINDER_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$finder_profile"
-          chmod 0600 "$certificate" "$api_key" "$main_profile" "$finder_profile"
+          chmod 0600 "$certificate" "$api_key"
           security create-keychain -p "$keychain_password" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
@@ -146,8 +143,13 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
           security list-keychains -d user -s "$keychain"
           identity=$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -1)
-          [[ $identity == "Developer ID Application:"*"(9PMA523YY4)" ]] || {
-            echo "Expected Developer ID Application identity for Team 9PMA523YY4" >&2
+          [[ $identity == "Developer ID Application:"* ]] || {
+            echo "The configured certificate must be a Developer ID Application identity." >&2
+            exit 1
+          }
+          team_id=$(sed -n 's/.*(\([A-Z0-9][A-Z0-9]*\))$/\1/p' <<< "$identity")
+          [[ -n $team_id ]] || {
+            echo "The configured Developer ID identity does not include a Team ID." >&2
             exit 1
           }
           xcrun notarytool store-credentials ZManagerCI --key "$api_key" \
@@ -156,9 +158,8 @@ jobs:
           {
             echo "ZMANAGER_CI_KEYCHAIN=$keychain"
             echo "ZMANAGER_CODESIGN_IDENTITY=$identity"
+            echo "ZMANAGER_TEAM_ID=$team_id"
             echo "ZMANAGER_NOTARY_PROFILE=ZManagerCI"
-            echo "ZMANAGER_MAIN_PROVISIONING_PROFILE=$main_profile"
-            echo "ZMANAGER_FINDER_PROVISIONING_PROFILE=$finder_profile"
           } >> "$GITHUB_ENV"
 
       - name: Build, sign, notarize, staple, and inspect
@@ -221,6 +222,7 @@ jobs:
           find "$RUNNER_TEMP" -maxdepth 1 -type f \( -name '*.p12' -o -name 'AuthKey_*.p8' -o -name '*.provisionprofile' \) -delete
 
   package-windows:
+    if: github.event_name != 'workflow_dispatch' || !inputs.notarization_test
     needs: security
     name: Windows ${{ matrix.arch }} ${{ matrix.profile }} package
     runs-on: ${{ matrix.runner }}
@@ -375,6 +377,7 @@ jobs:
           if-no-files-found: warn
 
   package-deb:
+    if: github.event_name != 'workflow_dispatch' || !inputs.notarization_test
     needs: security
     name: Linux DEB ${{ matrix.arch }} ${{ matrix.profile }} package
     runs-on: ${{ matrix.runner }}
@@ -434,6 +437,7 @@ jobs:
           if-no-files-found: warn
 
   package-rpm:
+    if: github.event_name != 'workflow_dispatch' || !inputs.notarization_test
     needs: security
     name: Linux RPM ${{ matrix.arch }} ${{ matrix.profile }} package
     runs-on: ${{ matrix.runner }}
@@ -496,6 +500,7 @@ jobs:
 
 
   publish:
+    if: github.event_name != 'workflow_dispatch' || !inputs.notarization_test
     name: Publish release
     runs-on: ubuntu-24.04
     needs:

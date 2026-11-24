@@ -13,7 +13,6 @@ install_dir="${ZMANAGER_MACOS_INSTALL_DIR:-/Applications}"
 lsregister="${ZMANAGER_LSREGISTER:-/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister}"
 architecture="$(uname -m)"
 export LZMA_API_STATIC=1
-local_development_codesign_identity="8014C7D557DE28E3C52971362BA18A3CCC28A723"
 
 usage() {
   cat <<'EOF'
@@ -25,11 +24,10 @@ Builds and stages the unified macOS Tauri Release Bundle under
 
 By default the script builds the host architecture and produces both a .app
 bundle and a .dmg, then installs ZManager.app into /Applications. Local builds
-embed build-machine codec libraries and rewrite their load paths. When the
-preferred local Apple Development identity is available in Keychain, the script
-uses it with matching Xcode-managed main/Finder provisioning profiles for
-inside-out signing. Missing or expired Personal Team profiles are refreshed
-through Xcode automatic signing. Otherwise the script uses ad-hoc signing. Set
+embed build-machine codec libraries and rewrite their load paths. When an
+Apple Development or Apple Distribution identity is available in Keychain, the
+script uses it for inside-out signing and derives the App Group from its team.
+Otherwise --no-install builds may use ad-hoc signing. Set
 ZMANAGER_CODESIGN_IDENTITY to "-" to force ad-hoc signing, or to a Developer ID
 Application identity and set ZMANAGER_NOTARY_PROFILE to a validated notarytool
 keychain profile to sign, notarize, staple, and Gatekeeper-check the same output.
@@ -146,18 +144,26 @@ fi
 
 codesign_identity="${ZMANAGER_CODESIGN_IDENTITY:-}"
 codesign_identities="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+official_team_id=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["teamIdentifier"])' \
+  "$repo_root/packaging/macos/product-identity.json")
 if [[ -z "$codesign_identity" ]]; then
-  if grep -F "$local_development_codesign_identity" <<<"$codesign_identities" >/dev/null; then
-    codesign_identity="$local_development_codesign_identity"
-  else
-    codesign_identity="-"
+  git_identity_email=$(git config user.email 2>/dev/null || true)
+  if [[ -n "$git_identity_email" ]]; then
+    team_identity_record=$(grep -F "Apple Development: $git_identity_email" <<<"$codesign_identities" | sed -n '1p')
   fi
+  [[ -n ${team_identity_record:-} ]] || team_identity_record=$(grep -F 'Apple Development:' <<<"$codesign_identities" | sed -n '1p')
+  [[ -n "$team_identity_record" ]] || team_identity_record=$(grep -F 'Apple Distribution:' <<<"$codesign_identities" | sed -n '1p')
+  codesign_identity=$(awk '{print $2}' <<<"$team_identity_record")
+  codesign_identity="${codesign_identity:--}"
 fi
 if [[ "$codesign_identity" != "-" ]] &&
   ! grep -F "$codesign_identity" <<<"$codesign_identities" >/dev/null; then
-  echo "The requested macOS code-signing identity is not available: $codesign_identity" >&2
+  echo "The configured macOS code-signing identity is not available in Keychain." >&2
   exit 1
 fi
+team_id="${ZMANAGER_TEAM_ID:-}"
+app_group_name=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["appGroupName"])' \
+  "$repo_root/packaging/macos/product-identity.json")
 export ZMANAGER_CODESIGN_IDENTITY="$codesign_identity"
 if [[ "$codesign_identity" == "-" ]]; then
   codesign_identity_label="ad-hoc"
@@ -165,10 +171,9 @@ if [[ "$codesign_identity" == "-" ]]; then
   echo "Code signing: ad-hoc"
 else
   identity_record=$(grep -F "$codesign_identity" <<<"$codesign_identities" | sed -n '1p')
-  codesign_identity_sha1=$(awk '{print $2}' <<<"$identity_record")
   codesign_identity_label=$(sed -E 's/^[^"]*"([^"]+)".*/\1/' <<<"$identity_record")
   export ZMANAGER_CODESIGN_IDENTITY_LABEL="$codesign_identity_label"
-  echo "Code signing identity: $codesign_identity"
+  echo "Code signing: Apple team identity from Keychain"
 fi
 
 source_cargo_env() {
@@ -247,10 +252,6 @@ for command_name in node npm cargo rustc cmake xcrun security codesign ditto; do
     missing_commands+=("$command_name")
   fi
 done
-if [[ $codesign_identity_label == Apple\ Development:* ]] &&
-  ! command -v xcodebuild >/dev/null 2>&1; then
-  missing_commands+=("xcodebuild")
-fi
 if ((${#missing_commands[@]})); then
   echo "Missing required command(s): ${missing_commands[*]}" >&2
   echo "Install the macOS prerequisites, or rerun with --install-deps." >&2
@@ -263,42 +264,11 @@ if ! xcrun --find clang >/dev/null 2>&1; then
   exit 1
 fi
 
-if [[ $codesign_identity_label == Apple\ Development:* ]]; then
-  team_id=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["teamIdentifier"])' \
-    "$repo_root/packaging/macos/product-identity.json")
-  app_group_id=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["appGroupIdentifier"])' \
-    "$repo_root/packaging/macos/product-identity.json")
-  main_bundle_id=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["mainBundleIdentifier"])' \
-    "$repo_root/packaging/macos/product-identity.json")
-  finder_bundle_id=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["finderExtensionBundleIdentifier"])' \
-    "$repo_root/packaging/macos/product-identity.json")
-  main_profile="${ZMANAGER_MAIN_PROVISIONING_PROFILE:-}"
-  finder_profile="${ZMANAGER_FINDER_PROVISIONING_PROFILE:-}"
-
-  select_development_profile() {
-    python3 "$repo_root/scripts/macos_provisioning_profile.py" \
-      --bundle-id "$1" \
-      --team-id "$team_id" \
-      --app-group "$app_group_id" \
-      --identity-sha1 "$codesign_identity_sha1"
-  }
-
-  if [[ -z $main_profile ]]; then
-    main_profile=$(select_development_profile "$main_bundle_id" 2>/dev/null || true)
-  fi
-  if [[ -z $finder_profile ]]; then
-    finder_profile=$(select_development_profile "$finder_bundle_id" 2>/dev/null || true)
-  fi
-  if [[ ! -f $main_profile || ! -f $finder_profile ]]; then
-    echo "Refreshing the Personal Team macOS development profiles."
-    "$repo_root/scripts/refresh-macos-development-profiles.sh"
-    main_profile=$(select_development_profile "$main_bundle_id")
-    finder_profile=$(select_development_profile "$finder_bundle_id")
-  fi
-  export ZMANAGER_MAIN_PROVISIONING_PROFILE="$main_profile"
-  export ZMANAGER_FINDER_PROVISIONING_PROFILE="$finder_profile"
-  echo "Main provisioning profile: $main_profile"
-  echo "Finder provisioning profile: $finder_profile"
+if ((install_application)) && [[ "$codesign_identity" == "-" ]]; then
+  echo "A team-matched macOS signing identity is required to install ZManager." >&2
+  echo "Finder Sync needs a team-authorized App Group; an ad-hoc build can register the menu but cannot deliver its requests." >&2
+  echo "Install a valid Apple Development or Apple Distribution identity in Keychain, or pass --no-install for an ad-hoc build." >&2
+  exit 1
 fi
 
 if [[ ! -f src-tauri/icons/icon.icns ]]; then
@@ -419,6 +389,28 @@ run_packaging_step "stage application" ditto "$application" "$staged_app"
 # Build the native extension suite and finalize metadata only in the staged
 # release bundle. The Tauri target directory remains an uninstalled build
 # product and is never made into a second Finder Sync provider.
+if [[ "$codesign_identity" != "-" ]]; then
+  main_executable=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$staged_app/Contents/Info.plist")
+  team_probe_dir=$(mktemp -d "${TMPDIR:-/tmp}/zmanager-signing-team.XXXXXX")
+  team_probe="$team_probe_dir/$main_executable"
+  ditto "$staged_app/Contents/MacOS/$main_executable" "$team_probe"
+  codesign --force --sign "$codesign_identity" "$team_probe" >/dev/null
+  signing_team_id=$(codesign -d --verbose=4 "$team_probe" 2>&1 | sed -n 's/^TeamIdentifier=//p' | sed -n '1p')
+  rm -rf "$team_probe_dir"
+  if [[ -z "$signing_team_id" || "$signing_team_id" == "not set" ]]; then
+    echo "The selected signing identity does not provide a Team ID for App Group access." >&2
+    exit 1
+  fi
+  if [[ -n "$team_id" && "$team_id" != "$signing_team_id" ]]; then
+    echo "ZMANAGER_TEAM_ID does not match the selected signing identity." >&2
+    exit 1
+  fi
+  team_id="${team_id:-$signing_team_id}"
+else
+  team_id="${team_id:-$official_team_id}"
+fi
+export ZMANAGER_TEAM_ID="$team_id"
+export ZMANAGER_APP_GROUP_IDENTIFIER="$team_id.$app_group_name"
 scripts/prepare-macos-self-contained-app.sh "$staged_app" "$architecture"
 
 create_zip() {
@@ -473,9 +465,6 @@ fi
 gate_args=("$staged_app" --expected-arch "$architecture")
 gate_args+=(--zip "$zip_artifact")
 [[ ! -f $dmg_artifact ]] || gate_args+=(--dmg "$dmg_artifact")
-if [[ $codesign_identity_label == Apple\ Development:* ]]; then
-  gate_args+=(--require-provisioned-app-group)
-fi
 if [[ -n "$notary_profile" ]]; then
   gate_args+=(--require-developer-id --require-notarization)
 fi

@@ -17,14 +17,15 @@ import { ArchiveWorkspace } from "./ArchiveWorkspace";
 import { ArchivePathBar } from "./ArchivePathBar";
 
 describe("React archive workspace", () => {
-  it("renders archive location, extraction options, search, tree, table, and archive details", () => {
+  it("renders extraction destination, archive navigation, extraction options, search, tree, table, and archive details", () => {
     const snapshot = archiveSnapshot();
     const html = renderArchiveWorkspace(snapshot);
 
     expect(html).toContain('data-shell-chrome="path"');
-    expect(html).toContain("Archive location");
-    expect(html).toContain('id="archive-location"');
-    expect(html).toContain('value="demo.zip › docs"');
+    expect(html).toContain("Extract to");
+    expect(html).toContain('id="extract-destination-bar"');
+    expect(html).toContain('value="C:/output/demo"');
+    expect(html).toContain('id="browse-extract-destination-bar"');
     expect(html).toContain('id="archive-open-root"');
     expect(html).toContain('data-crumb-path="archive-depth:0"');
     expect(html).toContain('data-crumb-path="archive-folder:docs"');
@@ -79,7 +80,7 @@ describe("React archive workspace", () => {
       ),
     );
 
-    expect(screen.getByRole("textbox", { name: "Archive location" })).toHaveValue("demo.zip › nested.jar › docs");
+    expect(screen.getByRole("combobox", { name: "Extract to" })).toHaveValue("C:/output/demo");
     fireEvent.click(screen.getByRole("button", { name: "nested.jar" }));
     fireEvent.click(screen.getByRole("button", { name: "docs" }));
     fireEvent.click(screen.getByRole("button", { name: "Archive root" }));

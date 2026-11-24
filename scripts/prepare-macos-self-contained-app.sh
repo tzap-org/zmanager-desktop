@@ -100,7 +100,28 @@ identity_label=${ZMANAGER_CODESIGN_IDENTITY_LABEL:-$identity}
 options=()
 main_entitlements="$repo_root/packaging/macos/ZManager.entitlements"
 finder_entitlements="$repo_root/packaging/macos/FinderExtension/ZManagerFinderExtension.entitlements"
-signing_work=""
+app_group_identifier=${ZMANAGER_APP_GROUP_IDENTIFIER:-}
+if [[ -z "$app_group_identifier" ]]; then
+  configured_team_id=${ZMANAGER_TEAM_ID:-$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["teamIdentifier"])' "$repo_root/packaging/macos/product-identity.json")}
+  app_group_name=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["appGroupName"])' "$repo_root/packaging/macos/product-identity.json")
+  app_group_identifier="$configured_team_id.$app_group_name"
+fi
+signing_work=$(mktemp -d "${TMPDIR:-/tmp}/zmanager-signing-entitlements.XXXXXX")
+trap 'rm -rf "$signing_work"' EXIT
+/usr/bin/python3 - "$main_entitlements" "$finder_entitlements" "$signing_work" "$app_group_identifier" <<'PY'
+import plistlib, sys
+sources = sys.argv[1:3]
+directory = sys.argv[3]
+app_group = sys.argv[4]
+for name, source_path in zip(("main.plist", "finder.plist"), sources):
+    with open(source_path, "rb") as source:
+        entitlements = plistlib.load(source)
+    entitlements["com.apple.security.application-groups"] = [app_group]
+    with open(f"{directory}/{name}", "wb") as destination:
+        plistlib.dump(entitlements, destination)
+PY
+main_entitlements="$signing_work/main.plist"
+finder_entitlements="$signing_work/finder.plist"
 if [[ $identity != - ]]; then
   options=(--options runtime --generate-entitlement-der)
   if [[ $identity_label == Developer\ ID\ Application:* ]]; then
@@ -108,61 +129,6 @@ if [[ $identity != - ]]; then
   else
     options+=(--timestamp=none)
   fi
-fi
-if [[ $identity_label == Developer\ ID\ Application:* ||
-  $identity_label == Apple\ Development:* ]]; then
-  main_profile=${ZMANAGER_MAIN_PROVISIONING_PROFILE:-}
-  finder_profile=${ZMANAGER_FINDER_PROVISIONING_PROFILE:-}
-  [[ -f $main_profile ]] || { echo "App Group signing requires ZMANAGER_MAIN_PROVISIONING_PROFILE" >&2; exit 1; }
-  [[ -f $finder_profile ]] || { echo "App Group signing requires ZMANAGER_FINDER_PROVISIONING_PROFILE" >&2; exit 1; }
-  ditto "$main_profile" "$app/Contents/embedded.provisionprofile"
-  ditto "$finder_profile" "$finder_appex/Contents/embedded.provisionprofile"
-  signing_work=$(mktemp -d "${TMPDIR:-/tmp}/zmanager-signing-entitlements.XXXXXX")
-  trap '[[ -z ${signing_work:-} ]] || rm -rf "$signing_work"' EXIT
-  security cms -D -i "$main_profile" > "$signing_work/main-profile.plist"
-  security cms -D -i "$finder_profile" > "$signing_work/finder-profile.plist"
-  /usr/bin/python3 - \
-    "$identity_label" \
-    "$main_entitlements" "$signing_work/main.plist" \
-    "$signing_work/main-profile.plist" org.tzap-org.zmanager \
-    "$finder_entitlements" "$signing_work/finder.plist" \
-    "$signing_work/finder-profile.plist" org.tzap-org.zmanager.finder-extension <<'PY'
-import datetime, plistlib, sys
-
-identity_label = sys.argv[1]
-targets = [sys.argv[2:6], sys.argv[6:10]]
-now = datetime.datetime.now(datetime.timezone.utc)
-for source_path, output_path, profile_path, bundle_id in targets:
-    with open(source_path, "rb") as source:
-        entitlements = plistlib.load(source)
-    with open(profile_path, "rb") as source:
-        profile = plistlib.load(source)
-    profile_entitlements = profile.get("Entitlements", {})
-    application_identifier = (
-        profile_entitlements.get("com.apple.application-identifier")
-        or profile_entitlements.get("application-identifier")
-    )
-    team_identifier = profile_entitlements.get("com.apple.developer.team-identifier")
-    expiration = profile.get("ExpirationDate")
-    if expiration is None or expiration.replace(tzinfo=datetime.timezone.utc) <= now:
-        raise SystemExit(f"Provisioning profile is expired for {bundle_id}")
-    if application_identifier != f"{team_identifier}.{bundle_id}":
-        raise SystemExit(f"Provisioning profile application identifier mismatch for {bundle_id}")
-    if "group.org.tzap-org.zmanager" not in profile_entitlements.get(
-        "com.apple.security.application-groups", []
-    ):
-        raise SystemExit(f"Provisioning profile App Group mismatch for {bundle_id}")
-    entitlements["com.apple.application-identifier"] = application_identifier
-    entitlements["com.apple.developer.team-identifier"] = team_identifier
-    if identity_label.startswith("Apple Development:"):
-        entitlements["com.apple.security.get-task-allow"] = True
-    else:
-        entitlements.pop("com.apple.security.get-task-allow", None)
-    with open(output_path, "wb") as destination:
-        plistlib.dump(entitlements, destination)
-PY
-  main_entitlements="$signing_work/main.plist"
-  finder_entitlements="$signing_work/finder.plist"
 fi
 while IFS= read -r -d '' nested; do codesign --force ${options[@]+"${options[@]}"} --sign "$identity" "$nested"; done < <(find "$frameworks" -type f -print0)
 while IFS= read -r -d '' extension; do

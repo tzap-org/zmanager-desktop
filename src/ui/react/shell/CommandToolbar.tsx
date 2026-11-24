@@ -99,7 +99,7 @@ function ExtractToolbarGroups({
           primary={canExtract}
           disabled={!canExtract}
           onClick={() => {
-            actions.handleArchiveIntent({ type: "openExtractDialog", mode: "archive" });
+            actions.handleArchiveIntent({ type: "runExtract", mode: "archive", password: "" });
           }}
         />
         <ToolbarActionButton

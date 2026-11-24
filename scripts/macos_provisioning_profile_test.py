@@ -19,7 +19,7 @@ IDENTITY_SHA1 = __import__("hashlib").sha1(IDENTITY).hexdigest().upper()
 REQUIREMENTS = ProfileRequirements(
     bundle_identifier="org.tzap-org.zmanager",
     team_identifier="9PMA523YY4",
-    app_group_identifier="group.org.tzap-org.zmanager",
+    app_group_identifier="9PMA523YY4.org.tzap-org.zmanager",
     signing_identity_sha1=IDENTITY_SHA1,
 )
 
@@ -41,7 +41,7 @@ def profile(
             "com.apple.application-identifier": f"9PMA523YY4.{bundle_identifier}",
             "com.apple.developer.team-identifier": "9PMA523YY4",
             "com.apple.security.application-groups": groups
-            or ["group.org.tzap-org.zmanager", "9PMA523YY4.*"],
+            or ["9PMA523YY4.org.tzap-org.zmanager", "9PMA523YY4.*"],
         },
     }
 

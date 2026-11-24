@@ -4,7 +4,7 @@
   "quickLookPreviewBundleIdentifier": "org.tzap-org.zmanager.quicklook-preview",
   "quickLookThumbnailBundleIdentifier": "org.tzap-org.zmanager.quicklook-thumbnail",
   "spotlightImporterBundleIdentifier": "org.tzap-org.zmanager.spotlight-importer",
-  "appGroupIdentifier": "group.org.tzap-org.zmanager",
+  "appGroupName": "org.tzap-org.zmanager",
   "teamIdentifier": "9PMA523YY4",
   "urlScheme": "zmanager",
   "urlSchemes": ["zmanager", "tzap"],

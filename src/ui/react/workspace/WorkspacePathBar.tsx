@@ -30,6 +30,8 @@ export type WorkspacePathBarProps = Readonly<{
   pathDisabled: boolean;
   pathReadOnly?: boolean;
   pathPlaceholder?: string;
+  pathSuggestionsId?: string;
+  pathSuggestions?: readonly string[];
   crumbs: readonly WorkspacePathCrumb[];
   crumbsHidden: boolean;
   emptyCrumbsText: string;
@@ -48,6 +50,8 @@ export function WorkspacePathBar({
   pathDisabled,
   pathReadOnly = true,
   pathPlaceholder,
+  pathSuggestionsId,
+  pathSuggestions = [],
   crumbs,
   crumbsHidden,
   emptyCrumbsText,
@@ -62,7 +66,7 @@ export function WorkspacePathBar({
       data-shell-chrome="path"
       aria-label={ariaLabel}
     >
-      <label className="flex min-w-0 flex-1 items-center gap-2">
+      <label className="flex min-w-0 flex-[0_1_32rem] items-center gap-2">
         <span className="shrink-0 text-xs font-semibold text-slate-600 dark:text-slate-300">
           {locationLabel}
         </span>
@@ -76,8 +80,16 @@ export function WorkspacePathBar({
             readOnly={pathReadOnly}
             disabled={pathDisabled}
             placeholder={pathPlaceholder}
+            list={pathSuggestionsId}
             onChange={(event) => onPathChange?.(event.currentTarget.value)}
           />
+          {pathSuggestionsId ? (
+            <datalist id={pathSuggestionsId}>
+              {pathSuggestions.map((suggestion) => (
+                <option value={suggestion} key={suggestion} />
+              ))}
+            </datalist>
+          ) : null}
         </span>
       </label>
       {pathAccessory ? (
@@ -85,7 +97,7 @@ export function WorkspacePathBar({
       ) : null}
       <div
         id="path-crumbs"
-        className="hidden min-w-0 flex-1 items-center gap-1 overflow-hidden text-xs text-slate-500 min-[900px]:flex dark:text-slate-400"
+        className="hidden min-w-0 flex-[2_1_0%] items-center gap-1 overflow-hidden text-xs text-slate-500 min-[900px]:flex dark:text-slate-400"
         aria-live="polite"
         hidden={crumbsHidden}
       >

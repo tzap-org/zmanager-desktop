@@ -4,7 +4,6 @@ set -euo pipefail
 app_path="${1:-/Applications/ZManager.app}"
 lookback="${2:-2h}"
 bundle_id="org.tzap-org.zmanager.finder-extension"
-app_group_id="group.org.tzap-org.zmanager"
 
 if [[ ! -d "$app_path" ]]; then
   printf 'error=installed_app_missing\n' >&2
@@ -14,6 +13,9 @@ fi
 extension_path="$app_path/Contents/PlugIns/ZManagerFinderExtension.appex"
 info_plist="$app_path/Contents/Info.plist"
 user_home="$(dscl . -read "/Users/$(id -un)" NFSHomeDirectory | awk '{print $2}')"
+extension_team="$(codesign -d --verbose=4 "$extension_path" 2>&1 | sed -n 's/^TeamIdentifier=//p' | sed -n '1p')"
+app_group_name="$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["appGroupName"])' "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/packaging/macos/product-identity.json")"
+app_group_id="$extension_team.$app_group_name"
 request_directory="$user_home/Library/Group Containers/$app_group_id/ShellActionRequests"
 
 app_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$info_plist")"

@@ -2,8 +2,14 @@ import ZManagerGenerated
 import AppKit
 import CoreServices
 import Foundation
+import OSLog
 import UniformTypeIdentifiers
 import ZManagerMacOSShared
+
+private let shellActionLogger = Logger(
+    subsystem: "org.tzap-org.zmanager",
+    category: "shellActionIngress"
+)
 
 private struct IconRequest: Decodable {
     let key: String
@@ -270,6 +276,23 @@ public func zmanagerMacOSConsumeShellActionRequest(
         }
         return 0
     } catch {
+        let reason: String
+        if let error = error as? AppGroupRequestInboxError {
+            switch error {
+            case .invalidToken: reason = "invalidToken"
+            case .invalidFile: reason = "invalidFile"
+            case .wrongOwner: reason = "wrongOwner"
+            case .invalidPermissions: reason = "invalidPermissions"
+            case .oversized: reason = "oversized"
+            case .stale: reason = "stale"
+            case .unavailableAppGroup: reason = "unavailableAppGroup"
+            case .randomFailure: reason = "randomFailure"
+            }
+        } else {
+            let nativeError = error as NSError
+            reason = "nativeError domain=\(nativeError.domain) code=\(nativeError.code)"
+        }
+        shellActionLogger.error("requestConsumeFailed reason=\(reason, privacy: .public)")
         return MacOSFFIErrorMapping.systemError
     }
 }

@@ -5,7 +5,6 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 app=""
 expected_arch="$(uname -m)"
 require_developer_id=0
-require_provisioned_app_group=0
 require_notarization=0
 report=""
 dmg=""
@@ -18,8 +17,6 @@ Usage: scripts/release-gate-macos.sh APPLICATION [options]
 Options:
   --expected-arch arm64|x86_64  Require an exact, thin architecture slice.
   --require-developer-id        Require the frozen Developer ID team and hardened runtime.
-  --require-provisioned-app-group
-                                Require valid main/Finder profiles and authorized App Group entitlements.
   --require-notarization        Require Gatekeeper acceptance and a stapled ticket.
   --report PATH                 Write a machine-readable JSON inspection report.
   --dmg PATH                    Inspect the matching DMG signature and ticket.
@@ -34,7 +31,6 @@ while (($#)); do
   case "$1" in
     --expected-arch) [[ $# -ge 2 ]] || { echo "--expected-arch requires a value" >&2; exit 2; }; expected_arch=$2; shift ;;
     --require-developer-id) require_developer_id=1 ;;
-    --require-provisioned-app-group) require_provisioned_app_group=1 ;;
     --require-notarization) require_notarization=1 ;;
     --report) [[ $# -ge 2 ]] || { echo "--report requires a path" >&2; exit 2; }; report=$2; shift ;;
     --dmg) [[ $# -ge 2 ]] || { echo "--dmg requires a path" >&2; exit 2; }; dmg=$2; shift ;;
@@ -218,18 +214,32 @@ done
 
 entitlements_dir=$(mktemp -d "${TMPDIR:-/tmp}/zmanager-entitlements.XXXXXX")
 trap 'rm -rf "$entitlements_dir"' EXIT
-entitlement_error=$(/usr/bin/python3 - "$app" "$require_developer_id" "$require_provisioned_app_group" <<'PY'
+entitlement_error=$(/usr/bin/python3 - "$app" 2>&1 <<'PY'
 import plistlib, subprocess, sys
 from pathlib import Path
 
 app = Path(sys.argv[1])
-require_developer_id = sys.argv[2] == "1"
-require_provisioned_app_group = sys.argv[3] == "1"
+def read_entitlements(relative):
+    result = subprocess.run(["codesign", "-d", "--entitlements", ":-", str(app / relative)], capture_output=True)
+    data = result.stdout.strip()
+    return plistlib.loads(data) if data else {}
+
+main_entitlements = read_entitlements(".")
+groups = main_entitlements.get("com.apple.security.application-groups", [])
+group_identifier = groups[0] if len(groups) == 1 else ""
+if not group_identifier.endswith(".org.tzap-org.zmanager"):
+    raise SystemExit(f"main app has invalid App Group identifier: {groups!r}")
+team_result = subprocess.run(["codesign", "-d", "--verbose=4", str(app)], capture_output=True, text=True)
+team_line = next((line for line in (team_result.stdout + team_result.stderr).splitlines() if line.startswith("TeamIdentifier=")), "")
+team_identifier = team_line.partition("=")[2]
+if team_identifier not in ("", "not set") and not group_identifier.startswith(team_identifier + "."):
+    raise SystemExit("main app App Group does not match its signing team")
+
 targets = {
-    ".": {"com.apple.security.application-groups": ["group.org.tzap-org.zmanager"]},
+    ".": {"com.apple.security.application-groups": [group_identifier]},
     "Contents/PlugIns/ZManagerFinderExtension.appex": {
         "com.apple.security.app-sandbox": True,
-        "com.apple.security.application-groups": ["group.org.tzap-org.zmanager"],
+        "com.apple.security.application-groups": [group_identifier],
         "com.apple.security.files.user-selected.read-only": True,
     },
     "Contents/PlugIns/ZManagerQuickLookPreview.appex": {
@@ -244,19 +254,7 @@ targets = {
 }
 errors = []
 for relative, expected in targets.items():
-    result = subprocess.run(["codesign", "-d", "--entitlements", ":-", str(app / relative)], capture_output=True)
-    data = result.stdout.strip()
-    actual = plistlib.loads(data) if data else {}
-    if (require_developer_id or require_provisioned_app_group) and relative in {
-        ".", "Contents/PlugIns/ZManagerFinderExtension.appex"
-    }:
-        bundle_id = "org.tzap-org.zmanager" if relative == "." else "org.tzap-org.zmanager.finder-extension"
-        expected = {**expected,
-            "com.apple.application-identifier": "9PMA523YY4." + bundle_id,
-            "com.apple.developer.team-identifier": "9PMA523YY4",
-        }
-        if require_provisioned_app_group and not require_developer_id:
-            expected["com.apple.security.get-task-allow"] = True
+    actual = read_entitlements(relative)
     if actual != expected:
         errors.append(f"{relative}: {actual!r}, expected {expected!r}")
 print("; ".join(errors))
@@ -331,56 +329,19 @@ if [[ -n $zip ]]; then
   fi
 fi
 
-if ((require_developer_id || require_provisioned_app_group)); then
-  profile_error=$(/usr/bin/python3 - "$app" "$entitlements_dir" <<'PY'
-import datetime, plistlib, subprocess, sys
-from pathlib import Path
-
-app = Path(sys.argv[1])
-profiles = {
-    "Contents/embedded.provisionprofile": "org.tzap-org.zmanager",
-    "Contents/PlugIns/ZManagerFinderExtension.appex/Contents/embedded.provisionprofile": "org.tzap-org.zmanager.finder-extension",
-}
-errors = []
-now = datetime.datetime.now(datetime.timezone.utc)
-for relative, bundle_id in profiles.items():
-    path = app / relative
-    if not path.is_file():
-        errors.append(f"missing {relative}")
-        continue
-    result = subprocess.run(["security", "cms", "-D", "-i", str(path)], capture_output=True)
-    try:
-        profile = plistlib.loads(result.stdout)
-    except Exception:
-        errors.append(f"invalid {relative}")
-        continue
-    expiration = profile.get("ExpirationDate")
-    if expiration is None or expiration.replace(tzinfo=datetime.timezone.utc) <= now:
-        errors.append(f"expired {relative}")
-    if "9PMA523YY4" not in profile.get("TeamIdentifier", []):
-        errors.append(f"TeamIdentifier mismatch in {relative}")
-    entitlements = profile.get("Entitlements", {})
-    application_identifier = (
-        entitlements.get("com.apple.application-identifier")
-        or entitlements.get("application-identifier")
-    )
-    if application_identifier != "9PMA523YY4." + bundle_id:
-        errors.append(f"application identifier mismatch in {relative}")
-    if "group.org.tzap-org.zmanager" not in entitlements.get("com.apple.security.application-groups", []):
-        errors.append(f"App Group mismatch in {relative}")
-print("; ".join(errors))
-PY
-)
-  [[ -z $profile_error ]] && pass || fail "invalid App Group provisioning profile: $profile_error"
-fi
-
 if ((require_developer_id)); then
   developer_id_targets=("$app")
   for relative in "${expected_macho[@]}"; do developer_id_targets+=("$app/$relative"); done
+  main_details=$(codesign -d --verbose=4 "$app" 2>&1 || true)
+  actual_team_id=$(sed -n 's/^TeamIdentifier=//p' <<<"$main_details" | sed -n '1p')
+  expected_team_id=${ZMANAGER_TEAM_ID:-$actual_team_id}
+  if [[ -z $expected_team_id || $expected_team_id == "not set" ]]; then
+    fail "Developer ID signing team is unavailable"
+  fi
   for target in "${developer_id_targets[@]}"; do
     details=$(codesign -d --verbose=4 "$target" 2>&1 || true)
     grep -q '^Authority=Developer ID Application:' <<<"$details" || fail "Developer ID signature missing: ${target#"$app/"}"
-    grep -q '^TeamIdentifier=9PMA523YY4$' <<<"$details" || fail "Developer ID TeamIdentifier mismatch: ${target#"$app/"}"
+    grep -q "^TeamIdentifier=$expected_team_id$" <<<"$details" || fail "Developer ID TeamIdentifier mismatch: ${target#"$app/"}"
     grep -Eq 'flags=.*runtime' <<<"$details" || fail "hardened runtime missing: ${target#"$app/"}"
     grep -q '^Timestamp=' <<<"$details" || fail "secure timestamp missing: ${target#"$app/"}"
     requirement=$(codesign -d -r- "$target" 2>&1 || true)
