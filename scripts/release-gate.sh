@@ -26,7 +26,9 @@ require_tagged_commit() {
 
 verify_release_order() {
   require_tagged_commit tzap
-  require_tagged_commit zmanager
+  if [[ "${ZMANAGER_NOTARIZATION_TEST:-false}" != "true" ]]; then
+    require_tagged_commit zmanager
+  fi
 }
 package_lock_version() {
   awk -v wanted="$1" '$0 == "[[package]]" { in_package=0 } $0 == "name = \"" wanted "\"" { in_package=1; next } in_package && /^version = / { gsub(/"/, "", $3); print $3; exit }' "$2"
@@ -40,7 +42,9 @@ verify_controlled_release_versions() {
   [[ -n "$tzap_version" && -n "$zmanager_version" ]] || { echo "Cargo.lock is missing a controlled TZAP or ZManager package" >&2; return 1; }
   tzap_tag="v$tzap_version"; zmanager_tag="v$zmanager_version"
   [[ "$(git -C "$parent/tzap" rev-parse -q --verify "refs/tags/$tzap_tag^{commit}" 2>/dev/null || true)" == "$tzap_sha" ]] || { echo "TZAP lock commit $tzap_sha must have release tag $tzap_tag" >&2; return 1; }
-  [[ "$(git -C "$parent/zmanager" rev-parse -q --verify "refs/tags/$zmanager_tag^{commit}" 2>/dev/null || true)" == "$zmanager_sha" ]] || { echo "ZManager lock commit $zmanager_sha must have release tag $zmanager_tag" >&2; return 1; }
+  if [[ "${ZMANAGER_NOTARIZATION_TEST:-false}" != "true" ]]; then
+    [[ "$(git -C "$parent/zmanager" rev-parse -q --verify "refs/tags/$zmanager_tag^{commit}" 2>/dev/null || true)" == "$zmanager_sha" ]] || { echo "ZManager lock commit $zmanager_sha must have release tag $zmanager_tag" >&2; return 1; }
+  fi
   for package in tzap-core tzap-plugin-keywrap tzap-plugin-signing; do
     resolved="$(package_lock_version "$package" "$root/src-tauri/Cargo.lock")"
     [[ "$resolved" == "$tzap_version" ]] || { echo "$package resolves to ${resolved:-<missing>}; expected released TZAP $tzap_tag" >&2; return 1; }
