@@ -156,7 +156,7 @@ test("release lock captures controlled sibling commits and gate verifies them", 
   assert.match(read("scripts/ensure-sibling-repos.ps1"), /ensure-sibling-repos\.sh/);
   assert.match(read("scripts/release-gate.sh"), /refs\/tags\/\$zmanager_tag\^\{commit\}/);
   assert.match(read("scripts/release-gate.sh"), /require_tagged_commit tzap/);
-  assert.equal(reviewedCoreRevision, "d2f0302e6a127f0dae7e006e31dabcdfbeb6b9c0");
+  assert.equal(reviewedCoreRevision, "fdbc6ec84c1a56d5af7fc9bfd1edf296bab78ca8");
   assert.equal(reviewedTzapRevision, "69f53d71ad13876cbf74fac38f5f3aa2cf412920");
   assert.match(read(".github/workflows/security-audit.yml"), /check-shared-dependency-locks\.mjs/);
   assert.match(read("scripts/ensure-sibling-repos.sh"), /check-shared-dependency-locks\.mjs/);

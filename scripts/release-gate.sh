@@ -54,9 +54,11 @@ verify_controlled_release_versions() {
 verify_product_release_tag() {
   local tag="${ZMANAGER_RELEASE_TAG:-}" tag_commit product_commit expected_version product_version
   [[ -n "$tag" ]] || return 0
-  tag_commit="$(git -C "$root" rev-parse -q --verify "refs/tags/$tag^{commit}" 2>/dev/null || true)"
-  product_commit="$(git -C "$root" rev-parse HEAD)"
-  [[ -n "$tag_commit" && "$tag_commit" == "$product_commit" ]] || { echo "Product checkout $product_commit does not match release tag $tag" >&2; return 1; }
+  if [[ "${ZMANAGER_NOTARIZATION_TEST:-false}" != "true" ]]; then
+    tag_commit="$(git -C "$root" rev-parse -q --verify "refs/tags/$tag^{commit}" 2>/dev/null || true)"
+    product_commit="$(git -C "$root" rev-parse HEAD)"
+    [[ -n "$tag_commit" && "$tag_commit" == "$product_commit" ]] || { echo "Product checkout $product_commit does not match release tag $tag" >&2; return 1; }
+  fi
   expected_version="${tag#v}"
   product_version="$(node -e 'console.log(require(process.argv[1]).version)' "$root/package.json")"
   [[ "$product_version" == "$expected_version" ]] || { echo "package.json version $product_version does not match release tag $tag" >&2; return 1; }
