@@ -93,7 +93,7 @@ jobs:
           MACOS_NOTARY_PRIVATE_KEY_BASE64: ${{ secrets.MACOS_NOTARY_PRIVATE_KEY_BASE64 }}
           MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
-          REQUIRE_SIGNING: ${{ github.event_name == 'push' || inputs.notarization_test }}
+          REQUIRE_SIGNING: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         run: |
           set -euo pipefail
           missing=()
