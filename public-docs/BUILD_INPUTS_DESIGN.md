@@ -74,19 +74,26 @@ this single release lock so a checkout has only one release pin.
    `bash scripts/release-gate.sh verify` and tag/publish ZManager.
 4. In `zmanager-desktop`, run the same `prepare` command after ZManager is
    released. It requires both locked TZAP and ZManager commits to have release
-   tags and checks their versions against the desktop Cargo lock.
+   tags and checks their versions against the desktop Cargo lock. When reviewing
+   the generated Desktop lock, use the URL and SHA from the selected ZManager
+   release's `release-build-inputs.lock` for each of its sibling inputs.
 5. Review, commit, and push the desktop release lock. Run `verify`, then tag
-   and release `zmanager-desktop`.
+   and release `zmanager-desktop`. Run `verify` directly when the committed
+   Desktop pin set already selects the intended releases.
 6. Release workflows check out the committed sibling SHAs and run
    `bash scripts/release-gate.sh verify-build` before packaging.
 
-The check-in gate fetches remotes and fails on dirty or untracked files,
-stashes, commits not pushed, branches behind their upstream, missing upstreams,
-incorrect remotes or integration branches, and fetch errors. It names the
-repository, branch, and commit counts so the developer or agent can resolve
-the issue. It never commits or pushes changes. After the lock is pushed, the
-`verify` command checks repository freshness and confirms the lock still
-matches. A tag cannot silently move inputs after that point.
+The preparation check-in gate fetches remotes and fails on dirty or untracked
+files, stashes, commits not pushed, branches behind their upstream, missing
+upstreams, incorrect remotes or integration branches, and fetch errors. It names
+the repository, branch, and commit counts so the developer can resolve the issue.
+It never commits or pushes changes.
+
+After the Desktop lock is pushed, `verify` checks the Desktop checkout and
+recreates the committed input set in a temporary directory. It compares
+inherited pins against the selected ZManager manifest and runs locked Cargo
+resolution for Desktop and the macOS FFI. Existing sibling checkouts can
+carry local development patches while `verify` runs.
 
 Sibling inspection and setup have PowerShell wrappers. The release gate and
 lock updater are Bash scripts; run them from PowerShell with Git Bash available

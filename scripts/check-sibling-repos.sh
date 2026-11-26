@@ -5,15 +5,17 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 lock="$root/release-build-inputs.lock"
 fetch=0
 strict=0
+product_only=0
 
 usage() {
   cat <<'EOF'
-Usage: scripts/check-sibling-repos.sh [--fetch] [--strict]
+Usage: scripts/check-sibling-repos.sh [--fetch] [--strict] [--product-only]
 
 Inspect the product checkout and every sibling listed in
 release-build-inputs.lock. --fetch refreshes origin tracking refs.
 --strict implies --fetch and fails for any dirty, unpushed, behind, detached,
 missing-upstream, or fetch-error state.
+--product-only checks the Desktop checkout without inspecting sibling worktrees.
 EOF
 }
 
@@ -21,6 +23,7 @@ while (($#)); do
   case "$1" in
     --fetch) fetch=1 ;;
     --strict) strict=1; fetch=1 ;;
+    --product-only) product_only=1 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown option: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -117,19 +120,23 @@ inspect_repo() {
 
 root_name="$(basename "$root")"
 inspect_repo "$root_name" "$root"
-parent="${ZMANAGER_SIBLING_PARENT_DIR:-$(dirname "$root")}"
-while read -r name url branch sha extra; do
-  [[ -z "${name:-}" || "$name" == \#* ]] && continue
-  if [[ -n "${extra:-}" || ! "$name" =~ ^[a-z0-9][a-z0-9.-]*$ || ! "$url" =~ ^https?:// || ! "$branch" =~ ^[A-Za-z0-9._/-]+$ || ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
-    echo "Invalid release input lock entry: $name $url ${branch:-} ${sha:-}" >&2
-    exit 1
-  fi
-  inspect_repo "$name" "$parent/$name" "$url" "$branch"
-done < "$lock"
+if ((!product_only)); then
+  parent="${ZMANAGER_SIBLING_PARENT_DIR:-$(dirname "$root")}"
+  while read -r name url branch sha extra; do
+    [[ -z "${name:-}" || "$name" == \#* ]] && continue
+    if [[ -n "${extra:-}" || ! "$name" =~ ^[a-z0-9][a-z0-9.-]*$ || ! "$url" =~ ^https?:// || ! "$branch" =~ ^[A-Za-z0-9._/-]+$ || ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "Invalid release input lock entry: $name $url ${branch:-} ${sha:-}" >&2
+      exit 1
+    fi
+    inspect_repo "$name" "$parent/$name" "$url" "$branch"
+  done < "$lock"
+fi
 
 if ((issues)); then
   printf '\n%d repository/repositories need attention.\n' "$issues"
   ((strict)) && exit 1
+elif ((product_only)); then
+  echo "The Desktop checkout is clean, pushed, and current with its upstream."
 else
   echo "All repositories are clean, pushed, and current with their upstreams."
 fi

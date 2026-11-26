@@ -228,3 +228,163 @@ test("snapshot mode still rejects a non-canonical sibling origin", (t) => {
   );
   assert.equal(git(checkout, "rev-parse", "HEAD"), fixture.revision);
 });
+
+function createReleaseFixture(t, { drift = false, ffiFails = false } = {}) {
+  const fixture = createFixture(t);
+  const { workspace, root, seed, remote, repoUrl, revision } = fixture;
+  git(seed, "tag", "v1.0.0", revision);
+  git(seed, "push", "origin", "v1.0.0");
+
+  const controlled = [
+    "tzap-core", "tzap-plugin-keywrap", "tzap-plugin-signing",
+    "zmanager-core", "zmanager-tzap-hosted", "zmanager-localsend",
+  ];
+  const shared = [
+    "aff4", "backhand", "btrfs-core", "dar-core", "forensic-vfs-engine",
+    "tzap-core", "zfs-forensic-core", "zip", "zip-forensic-core", "zmanager-core",
+  ];
+  const lockfile = (names) => [...new Set(names)]
+    .map((name) => `[[package]]\nname = "${name}"\nversion = "1.0.0"\n`).join("\n");
+
+  const core = join(root, "core");
+  const coreRemote = join(root, "core.git");
+  const coreUrl = "https://fixture.invalid/zmanager.git";
+  const forensicUrl = "https://fixture.invalid/forensic-vfs-engine.git";
+  git(root, "init", "--bare", "--initial-branch=main", coreRemote);
+  git(root, "init", "--initial-branch=main", core);
+  git(core, "config", "user.name", "Build Inputs Test");
+  git(core, "config", "user.email", "build-inputs@example.invalid");
+  mkdirSync(join(core, "crates", "zmanager-ffi"), { recursive: true });
+  writeFileSync(join(core, "crates", "zmanager-ffi", "Cargo.toml"), "# FFI fixture\n");
+  writeFileSync(join(core, "Cargo.lock"), lockfile(shared));
+  writeFileSync(join(core, "release-build-inputs.lock"),
+    `tzap ${repoUrl} main ${revision}\nforensic-vfs-engine ${forensicUrl} main ${revision}\n`);
+  git(core, "add", ".");
+  git(core, "commit", "-m", "ZManager release manifest");
+  git(core, "tag", "v1.0.0");
+  const coreRevision = git(core, "rev-parse", "HEAD");
+  git(core, "remote", "add", "origin", coreRemote);
+  git(core, "push", "--tags", "origin", "main");
+
+  let forensicPin = revision;
+  if (drift) {
+    writeFileSync(join(seed, "tracked.txt"), "changed dependencies at the same version\n");
+    git(seed, "commit", "-am", "Same version with different dependencies");
+    forensicPin = git(seed, "rev-parse", "HEAD");
+    git(seed, "push", "origin", "main");
+  }
+
+  for (const name of [
+    "check-sibling-repos.sh", "check-shared-dependency-locks.mjs",
+    "ensure-sibling-repos.sh", "release-gate.sh", "update-release-build-inputs.sh",
+  ]) {
+    writeFileSync(join(workspace, "scripts", name), readFileSync(join(repositoryRoot, "scripts", name)));
+  }
+  mkdirSync(join(workspace, "src-tauri"));
+  writeFileSync(join(workspace, "src-tauri", "Cargo.toml"), "# Desktop fixture\n");
+  writeFileSync(join(workspace, "src-tauri", "Cargo.lock"), lockfile([...controlled, ...shared]));
+  writeFileSync(join(workspace, ".gitignore"), "/target/\n");
+  writeFileSync(join(workspace, "release-build-inputs.lock"),
+    `tzap ${repoUrl} main ${revision}\nzmanager ${coreUrl} main ${coreRevision}\nforensic-vfs-engine ${forensicUrl} main ${forensicPin}\n`);
+  git(workspace, "add", ".");
+  git(workspace, "commit", "-m", "Desktop release inputs");
+  const desktopRemote = join(root, "desktop.git");
+  git(root, "init", "--bare", "--initial-branch=main", desktopRemote);
+  git(workspace, "remote", "add", "origin", desktopRemote);
+  git(workspace, "push", "-u", "origin", "main");
+
+  const gitConfig = join(root, "gitconfig");
+  for (const [url, path] of [[repoUrl, remote], [forensicUrl, remote], [coreUrl, coreRemote]]) {
+    git(root, "config", "--file", gitConfig, "--add", `url.${path}.insteadOf`, url);
+  }
+
+  const bin = join(root, "bin");
+  mkdirSync(bin);
+  const gitName = process.platform === "win32" ? "git.exe" : "git";
+  const realGit = process.env.GIT_EXECUTABLE ?? process.env.REAL_GIT ?? process.env.PATH
+    .split(delimiter).map((directory) => join(directory, gitName)).find(existsSync);
+  assert.ok(realGit, "could not locate Git executable on PATH");
+  // Keep fixture fetches on disk while Git reports the canonical URL in the manifest.
+  writeFileSync(join(bin, "git"), `#!/bin/sh
+if [ "$1" = clone ]; then
+  "$REAL_GIT" "$@" || exit $?
+  for arg do
+    case "$arg" in
+      https://fixture.invalid/*) canonical="$arg" ;;
+    esac
+    destination="$arg"
+  done
+  if [ -n "$canonical" ]; then
+    "$REAL_GIT" -C "$destination" remote set-url origin "$canonical"
+  fi
+elif [ "$1" = -C ] && [ "$3" = remote ] && [ "$4" = get-url ]; then
+  exec "$REAL_GIT" -C "$2" config --get "remote.$5.url"
+else
+  exec "$REAL_GIT" "$@"
+fi
+`, { mode: 0o755 });
+  const cargoLog = join(root, "cargo.log");
+  writeFileSync(join(bin, "cargo"), `#!/bin/sh
+printf '%s\\t%s\\n' "$PWD" "$*" >> "$RELEASE_TEST_CARGO_LOG"
+case "$*" in
+  "tree --locked"*) ;;
+  *) exit 90 ;;
+esac
+case "$*" in
+  *zmanager-ffi*) exit "$RELEASE_TEST_FFI_EXIT" ;;
+esac
+`, { mode: 0o755 });
+
+  const env = {
+    ...fixture.env,
+    GIT_CONFIG_GLOBAL: gitConfig,
+    PATH: `${bin}${delimiter}${process.env.PATH}`,
+    REAL_GIT: realGit,
+    RELEASE_TEST_CARGO_LOG: cargoLog,
+    RELEASE_TEST_FFI_EXIT: ffiFails ? "91" : "0",
+    ZMANAGER_RELEASE_TAG: "",
+    ZMANAGER_NOTARIZATION_TEST: "false",
+  };
+  return { ...fixture, env, cargoLog };
+}
+
+function verifyRelease(fixture) {
+  return command(bash, ["scripts/release-gate.sh", "verify"], {
+    cwd: fixture.workspace,
+    env: fixture.env,
+  });
+}
+
+test("pre-tag release verification checks both locked Cargo graphs in a clean sibling layout", (t) => {
+  const fixture = createReleaseFixture(t);
+  const localTzap = initCheckout(fixture);
+  writeFileSync(join(localTzap, "tracked.txt"), "local patch\n");
+
+  assert.match(verifyRelease(fixture), /ready for the desktop release tag/);
+
+  const [desktop, ffi] = readFileSync(fixture.cargoLog, "utf8").trim().split("\n");
+  assert.match(desktop, /desktop\ttree --locked .*src-tauri\/Cargo.toml/);
+  assert.match(ffi, /desktop\ttree --locked .*--features tzap-online .*zmanager-ffi\/Cargo.toml/);
+  assert.equal(readFileSync(join(localTzap, "tracked.txt"), "utf8"), "local patch\n");
+  assert.equal(git(fixture.workspace, "status", "--porcelain"), "");
+});
+
+test("pre-tag release verification rejects a sibling pin that differs from the tagged ZManager manifest", (t) => {
+  const fixture = createReleaseFixture(t, { drift: true });
+
+  assert.throws(() => verifyRelease(fixture), (error) => {
+    assert.match(error.stderr, /forensic-vfs-engine pin differs from ZManager/);
+    return true;
+  });
+  assert.equal(existsSync(fixture.cargoLog), false);
+});
+
+test("pre-tag release verification stops when the locked FFI graph cannot resolve", (t) => {
+  const fixture = createReleaseFixture(t, { ffiFails: true });
+
+  assert.throws(() => verifyRelease(fixture), (error) => {
+    assert.match(error.stderr, /macOS FFI dependency graph/);
+    return true;
+  });
+  assert.match(readFileSync(fixture.cargoLog, "utf8"), /zmanager-ffi\/Cargo.toml/);
+});

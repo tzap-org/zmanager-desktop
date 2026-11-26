@@ -51,8 +51,12 @@ ffi_library="$uniffi_target/$rust_triple/release/libzmanager_ffi.a"
 
 "$repo_root/scripts/sync-uniffi-swift-bindings.sh"
 swift build --package-path "$package" -c release --triple "$swift_package_triple"
+ffi_manifest_args=(--manifest-path "$uniffi_manifest")
+if [[ "${ZMANAGER_BUILD_MODE:-local}" == release ]]; then
+  ffi_manifest_args+=(--locked)
+fi
 CARGO_TARGET_DIR="$uniffi_target" cargo build --release --features tzap-online --target "$rust_triple" \
-  --manifest-path "$uniffi_manifest"
+  "${ffi_manifest_args[@]}"
 bin_dir=$(swift build --package-path "$package" -c release --triple "$swift_package_triple" --show-bin-path)
 version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
 build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")

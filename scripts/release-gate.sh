@@ -15,6 +15,68 @@ lock_entry() {
   awk -v wanted="$1" '$1 == wanted { print $2 " " $4; found=1 } END { if (!found) exit 1 }' "$lock"
 }
 
+verify_inherited_pins() {
+  local zmanager_sha upstream_lock
+  read -r _ zmanager_sha <<< "$(lock_entry zmanager)" || { echo "Release lock is missing zmanager" >&2; return 1; }
+  upstream_lock="$(git -C "$parent/zmanager" show "$zmanager_sha:release-build-inputs.lock")" || {
+    echo "Cannot read release-build-inputs.lock at ZManager $zmanager_sha" >&2
+    return 1
+  }
+  printf '%s\n' "$upstream_lock" | awk -v revision="$zmanager_sha" '
+    function normalize(url) {
+      url = tolower(url)
+      sub(/\/$/, "", url)
+      sub(/\.git$/, "", url)
+      return url
+    }
+    { sub(/\r$/, "") }
+    !NF || $1 ~ /^#/ { next }
+    FILENAME != "-" {
+      if ($1 in desktop) { print "Duplicate Desktop release pin for " $1; failed = 1 }
+      desktop[$1] = normalize($2) " " $4
+      next
+    }
+    {
+      count++
+      if (NF != 4 || $1 !~ /^[a-z0-9][a-z0-9.-]*$/ || $2 !~ /^https?:\/\// || length($4) != 40 || $4 !~ /^[0-9a-f]+$/ || $1 in upstream) {
+        print "Invalid ZManager release input at " revision ": " $0
+        failed = 1
+        next
+      }
+      upstream[$1] = 1
+      expected = normalize($2) " " $4
+      if (!($1 in desktop) || desktop[$1] != expected) {
+        print $1 " pin differs from ZManager " revision ": expected " expected ", Desktop has " (($1 in desktop) ? desktop[$1] : "no pin")
+        failed = 1
+      }
+    }
+    END {
+      if (!count) { print "ZManager release input lock is empty at " revision; failed = 1 }
+      exit failed
+    }
+  ' "$lock" - >&2
+}
+
+verify_in_clean_checkouts() (
+  # Run from a clean copy so Cargo sees only the pinned sibling sources and
+  # the Desktop Cargo configuration used to build the macOS extensions.
+  scratch="$(mktemp -d "${TMPDIR:-/tmp}/zmanager-release-XXXXXXXX")"
+  trap 'rm -rf "$scratch"' EXIT
+  desktop="$scratch/desktop"
+  revision="$(git -C "$root" rev-parse HEAD)"
+  git clone --quiet --shared --no-checkout "$root" "$desktop"
+  git -C "$desktop" checkout --quiet --detach "$revision"
+  cd "$desktop"
+  export ZMANAGER_SIBLING_PARENT_DIR="$scratch"
+  unset ZMANAGER_BUILD_INPUTS_LOCK ZMANAGER_RELEASE_TAG
+  bash scripts/ensure-sibling-repos.sh --mode release
+  cargo tree --locked --features tzap-online --target all --depth 0 \
+    --manifest-path "$scratch/zmanager/crates/zmanager-ffi/Cargo.toml" || {
+    echo "The macOS FFI dependency graph does not resolve with the pinned ZManager Cargo.lock." >&2
+    exit 1
+  }
+)
+
 require_tagged_commit() {
   local name="$1" dir="$parent/$1" url sha tags
   read -r url sha <<< "$(lock_entry "$name")" || { echo "Release lock is missing $name" >&2; return 1; }
@@ -78,12 +140,9 @@ case "$mode" in
     echo "Review, commit, and push release-build-inputs.lock, then run scripts/release-gate.sh verify before tagging desktop."
     ;;
   verify)
-    bash "$check" --strict
-    bash "$update" --check
-    git -C "$root" diff --quiet HEAD -- release-build-inputs.lock || { echo "release-build-inputs.lock must be committed and pushed before tagging" >&2; exit 1; }
-    verify_release_order
-    verify_controlled_release_versions
-    echo "Release inputs are clean, current, pushed, tagged, and ready for the desktop release tag."
+    bash "$check" --strict --product-only
+    verify_in_clean_checkouts
+    echo "Release inputs and locked Cargo graphs are ready for the desktop release tag."
     ;;
   verify-build)
     root_dirty="$(git -C "$root" status --porcelain=v1 --untracked-files=all)"
@@ -97,6 +156,7 @@ case "$mode" in
       [[ "${origin%.git}" == "${url%.git}" ]] || { echo "$name origin differs from the release lock" >&2; exit 1; }
       [[ -z "$(git -C "$dir" status --porcelain=v1 --untracked-files=all)" ]] || { echo "$name checkout is dirty" >&2; exit 1; }
     done < "$lock"
+    verify_inherited_pins
     verify_release_order
     verify_controlled_release_versions
     verify_product_release_tag
