@@ -323,6 +323,11 @@ if [[ -n $zip ]]; then
       [[ -n $source_hash && $source_hash == "$zipped_hash" ]] && pass || \
         fail "ZIP does not contain the inspected application build"
       check "ZIP application is unsigned or tampered" codesign --verify --deep --strict "$zipped_app"
+      if ((require_notarization)); then
+        check "missing staple on the application extracted from the ZIP" xcrun stapler validate "$zipped_app"
+        check "failed Gatekeeper assessment of the application extracted from the ZIP" \
+          spctl --assess --type execute --verbose=4 "$zipped_app"
+      fi
     else
       fail "ZIP cannot be extracted for inspection: $zip"
     fi

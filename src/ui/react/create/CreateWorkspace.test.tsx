@@ -138,8 +138,9 @@ describe("React create workspace", () => {
     );
 
     expect(html).toMatch(/<h1 id="workspace-title"[^>]*>abc\.zip<\/h1>/);
-    expect(html).toContain(
-      'data-crumb-path="" aria-keyshortcuts="Enter Space">abc.zip</button>',
+    const document = new DOMParser().parseFromString(html, "text/html");
+    expect(document.querySelector('button[data-crumb-path=""]')?.textContent).toBe(
+      "abc.zip",
     );
     expect(html).not.toContain(">Files to compress</h1>");
   });

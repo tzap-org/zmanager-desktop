@@ -1,0 +1,70 @@
+name: Desktop Notarization
+
+on:
+  schedule:
+    - cron: "7,37 * * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Check one draft release tag"
+        type: string
+        required: false
+      test_run_id:
+        description: "Release test run ID. Verifies packages without publishing."
+        type: string
+        required: false
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: desktop-notarization
+  cancel-in-progress: false
+
+jobs:
+  resume:
+    name: Resume Apple notarization
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: .node-version
+
+      - name: Check pending releases or verify a test run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          TEST_RUN_ID: ${{ inputs.test_run_id }}
+          MACOS_NOTARY_PRIVATE_KEY_BASE64: ${{ secrets.MACOS_NOTARY_PRIVATE_KEY_BASE64 }}
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+        run: |
+          set -euo pipefail
+          : "${MACOS_NOTARY_PRIVATE_KEY_BASE64:?missing Apple notary API key}"
+          : "${MACOS_NOTARY_KEY_ID:?missing Apple notary key ID}"
+          : "${MACOS_NOTARY_ISSUER_ID:?missing Apple notary issuer ID}"
+          umask 077
+          export APPLE_API_KEY_PATH="$RUNNER_TEMP/zmanager-notary.p8"
+          trap 'rm -f "$APPLE_API_KEY_PATH"' EXIT
+          printf '%s' "$MACOS_NOTARY_PRIVATE_KEY_BASE64" | base64 -D > "$APPLE_API_KEY_PATH"
+          unset MACOS_NOTARY_PRIVATE_KEY_BASE64
+          args=(resume)
+          if [[ -n $TAG ]]; then args+=("--tag=$TAG"); fi
+          if [[ -n $TEST_RUN_ID ]]; then args+=("--test-run-id=$TEST_RUN_ID"); fi
+          python3 scripts/desktop-notarization.py "${args[@]}"
+
+      - name: Upload notarization test evidence
+        if: always() && inputs.test_run_id != ''
+        uses: actions/upload-artifact@v6
+        with:
+          name: zmanager-notarization-test-${{ inputs.test_run_id }}-${{ github.run_attempt }}
+          path: notarization-test/
+          if-no-files-found: ignore
+          retention-days: 14

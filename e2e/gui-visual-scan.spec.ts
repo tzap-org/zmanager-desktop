@@ -337,12 +337,19 @@ test("Close Archive resets Extract to its empty state", async ({ page }) => {
 
   await expect(page.locator("#close-archive")).toBeEnabled();
   await expect(page.locator("#archive-empty-state")).toBeHidden();
+  const pathBar = page.getByRole("region", { name: "Extract to" });
+  const destination = pathBar.getByRole("combobox", { name: "Extract to" });
+  const archiveCrumb = pathBar.getByRole("button", { name: "visual-scan.zip" });
+  await expect(destination).toBeEnabled();
+  await expect(archiveCrumb).toBeVisible();
 
   await page.locator("#close-archive").click();
 
   await expect(page.locator("#archive-empty-state")).toBeVisible();
-  await expect(page.locator("#archive-location")).toBeDisabled();
-  await expect(page.locator("#archive-location")).toHaveValue("");
+  await expect(destination).toBeDisabled();
+  await expect(destination).toHaveValue("");
+  await expect(archiveCrumb).toHaveCount(0);
+  await expect(pathBar.getByRole("button", { name: "Archive root" })).toBeDisabled();
   await expect(page.locator("#close-archive")).toBeDisabled();
 });
 

@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { Button } from "../../components/ui/button";
 import { useShellSearchInputRef } from "../interaction/ShellInteractionContext";
 
 export type WorkspacePathCrumb = Readonly<{
@@ -93,7 +94,7 @@ export function WorkspacePathBar({
         </span>
       </label>
       {pathAccessory ? (
-        <div className="flex min-w-0 items-center gap-2">{pathAccessory}</div>
+        <div className="flex shrink-0 items-center gap-2">{pathAccessory}</div>
       ) : null}
       <div
         id="path-crumbs"
@@ -132,15 +133,18 @@ function PathCrumb({
   return (
     <>
       {showSeparator ? <span aria-hidden="true">&gt;</span> : null}
-      <button
-        className="min-h-7 truncate rounded px-1.5 hover:bg-slate-100 hover:text-slate-950 dark:hover:bg-slate-800 dark:hover:text-white"
+      <Button
+        variant="ghost"
+        size="unset"
+        className="min-h-7 min-w-0 rounded px-1.5 text-xs font-normal text-inherit hover:bg-slate-100 hover:text-slate-950 dark:hover:bg-slate-800 dark:hover:text-white"
         type="button"
         data-crumb-path={path}
         aria-keyshortcuts="Enter Space"
+        title={name}
         onClick={() => onClick?.(path)}
       >
-        {name}
-      </button>
+        <span className="truncate">{name}</span>
+      </Button>
     </>
   );
 }
@@ -158,7 +162,7 @@ function WorkspaceSearchControls({
   }, [search.query]);
 
   return (
-    <div className="flex min-w-0 items-center gap-1.5" role="search">
+    <div className="flex shrink-0 items-center gap-1.5" role="search">
       <label className="min-w-[150px] flex-1">
         <span className="sr-only">{search.entriesLabel}</span>
         <input

@@ -10,17 +10,17 @@ on:
         description: "Tag to publish"
         required: true
       notarization_test:
-        description: "Build and notarize macOS packages without publishing a release"
+        description: "Stage signed macOS packages for the notarization test without creating a release"
         required: false
         type: boolean
         default: false
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 env:
   ZMANAGER_BUILD_MODE: release
@@ -76,76 +76,42 @@ jobs:
 
       - name: Run release verification tests
         if: matrix.profile == 'local'
+        env:
+          ZMANAGER_TZAP_BUILD_ENV: staging
+          ZMANAGER_TZAP_SERVER_BASE_URL: https://staging.tzap.org
         run: |
           npm run test:frontend
           npm run test:architecture
-          npm run test:e2e
+          VITE_TZAP_BUILD_ENV=staging npm run test:e2e
           (cd src-tauri && cargo fmt --check)
           (cd src-tauri && cargo clippy --all-targets --all-features -- -D warnings)
           cargo test --manifest-path src-tauri/Cargo.toml
           cargo test --manifest-path crates/zmanager-shell-contract/Cargo.toml
           swift test --package-path native/macos
 
-      - name: Determine macOS signing mode
-        id: macos_signing
+      - name: Import Developer ID certificate
         env:
           MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
           MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
-          MACOS_NOTARY_PRIVATE_KEY_BASE64: ${{ secrets.MACOS_NOTARY_PRIVATE_KEY_BASE64 }}
-          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
-          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
-          REQUIRE_SIGNING: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-        run: |
-          set -euo pipefail
-          missing=()
-          [[ -n "$MACOS_DEVELOPER_ID_P12_BASE64" ]] || missing+=(MACOS_DEVELOPER_ID_P12_BASE64)
-          [[ -n "$MACOS_DEVELOPER_ID_P12_PASSWORD" ]] || missing+=(MACOS_DEVELOPER_ID_P12_PASSWORD)
-          [[ -n "$MACOS_NOTARY_PRIVATE_KEY_BASE64" ]] || missing+=(MACOS_NOTARY_PRIVATE_KEY_BASE64)
-          [[ -n "$MACOS_NOTARY_KEY_ID" ]] || missing+=(MACOS_NOTARY_KEY_ID)
-          [[ -n "$MACOS_NOTARY_ISSUER_ID" ]] || missing+=(MACOS_NOTARY_ISSUER_ID)
-
-          if ((${#missing[@]} == 0)); then
-            echo "configured=true" >> "$GITHUB_OUTPUT"
-            echo "macOS Developer ID signing and notarization are configured."
-          elif [[ "$REQUIRE_SIGNING" == "true" ]]; then
-            echo "::error::Signing is required for this release/test run. Missing: ${missing[*]}"
-            exit 1
-          else
-            echo "configured=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::macOS release credentials are incomplete; building an ad-hoc-signed testing package. Missing: ${missing[*]}"
-          fi
-
-      - name: Import Developer ID and notary credentials
-        if: steps.macos_signing.outputs.configured == 'true'
-        env:
-          MACOS_DEVELOPER_ID_P12_BASE64: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
-          MACOS_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
-          MACOS_NOTARY_PRIVATE_KEY_BASE64: ${{ secrets.MACOS_NOTARY_PRIVATE_KEY_BASE64 }}
-          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
-          MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
         run: |
           set -euo pipefail
           : "${MACOS_DEVELOPER_ID_P12_BASE64:?missing Developer ID certificate}"
           : "${MACOS_DEVELOPER_ID_P12_PASSWORD:?missing certificate password}"
-          : "${MACOS_NOTARY_PRIVATE_KEY_BASE64:?missing notary API key}"
-          : "${MACOS_NOTARY_KEY_ID:?missing notary key ID}"
-          : "${MACOS_NOTARY_ISSUER_ID:?missing notary issuer ID}"
           keychain="$RUNNER_TEMP/zmanager-release.keychain-db"
           certificate="$RUNNER_TEMP/zmanager-developer-id.p12"
-          api_key="$RUNNER_TEMP/AuthKey_${MACOS_NOTARY_KEY_ID}.p8"
           keychain_password="$(openssl rand -hex 32)"
           printf '%s' "$MACOS_DEVELOPER_ID_P12_BASE64" | base64 -D > "$certificate"
-          printf '%s' "$MACOS_NOTARY_PRIVATE_KEY_BASE64" | base64 -D > "$api_key"
-          chmod 0600 "$certificate" "$api_key"
+          chmod 0600 "$certificate"
+          trap 'rm -f "$certificate"' EXIT
           security create-keychain -p "$keychain_password" "$keychain"
           security set-keychain-settings -lut 21600 "$keychain"
           security unlock-keychain -p "$keychain_password" "$keychain"
-          security import "$certificate" -k "$keychain" -P "$MACOS_DEVELOPER_ID_P12_PASSWORD" -A -t cert -f pkcs12
+          security import "$certificate" -k "$keychain" -P "$MACOS_DEVELOPER_ID_P12_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
           security list-keychains -d user -s "$keychain"
-          identity=$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p' | head -1)
-          [[ $identity == "Developer ID Application:"* ]] || {
-            echo "The configured certificate must be a Developer ID Application identity." >&2
+          identity=$(security find-identity -v -p codesigning "$keychain" | sed -n 's/.*"\(Developer ID Application:.*\)"/\1/p')
+          [[ $identity == "Developer ID Application:"* && $identity != *$'\n'* ]] || {
+            echo "The configured certificate must contain exactly one Developer ID Application identity." >&2
             exit 1
           }
           team_id=$(sed -n 's/.*(\([A-Z0-9][A-Z0-9]*\))$/\1/p' <<< "$identity")
@@ -153,60 +119,61 @@ jobs:
             echo "The configured Developer ID identity does not include a Team ID." >&2
             exit 1
           }
-          xcrun notarytool store-credentials ZManagerCI --key "$api_key" \
-            --key-id "$MACOS_NOTARY_KEY_ID" --issuer "$MACOS_NOTARY_ISSUER_ID" \
-            --keychain "$keychain" --validate
           {
             echo "ZMANAGER_CI_KEYCHAIN=$keychain"
             echo "ZMANAGER_CODESIGN_IDENTITY=$identity"
             echo "ZMANAGER_TEAM_ID=$team_id"
-            echo "ZMANAGER_NOTARY_PROFILE=ZManagerCI"
           } >> "$GITHUB_ENV"
 
-      - name: Build, sign, notarize, staple, and inspect
+      - name: Build and verify signed notarization inputs
         env:
           ZMANAGER_BUILD_NUMBER: ${{ env.ZMANAGER_RELEASE_BUILD_NUMBER }}
-          ZMANAGER_MACOS_STAGE_DIR: /tmp/zmanager-macos-release-${{ matrix.profile }}
+          ZMANAGER_MACOS_STAGE_DIR: ${{ runner.temp }}/zmanager-macos-release
           CARGO_TARGET_DIR: ${{ runner.temp }}/zmbuild-${{ matrix.profile }}
-          ZMANAGER_RELEASE_SIGNED: ${{ steps.macos_signing.outputs.configured }}
-          ZMANAGER_TZAP_BUILD_ENV: prod
+          ZMANAGER_TZAP_BUILD_ENV: ${{ inputs.notarization_test && 'staging' || 'prod' }}
+          ZMANAGER_TZAP_SERVER_BASE_URL: ${{ inputs.notarization_test && 'https://staging.tzap.org' || '' }}
+          TARGET_ARCH: ${{ matrix.arch }}
+          TARGET_PROFILE: ${{ matrix.profile }}
         run: |
           set -euo pipefail
-          if [[ "$ZMANAGER_RELEASE_SIGNED" == "true" ]]; then
-            echo "Building the Developer ID signed and notarized macOS package."
-          else
-            echo "::warning::Building an ad-hoc-signed macOS testing package; it is not suitable for public Gatekeeper distribution."
-            export ZMANAGER_CODESIGN_IDENTITY="-"
-          fi
-          scripts/build-macos.sh --skip-tests --no-install --arch "${{ matrix.arch }}" --profile "${{ matrix.profile }}" --bundle all
+          scripts/build-macos.sh --skip-tests --no-install --arch "$TARGET_ARCH" --profile "$TARGET_PROFILE" --bundle all
           version=$(node -p 'require("./package.json").version')
           product="ZManager"
-          if [[ "${{ matrix.profile }}" == "online" ]]; then product="ZManager-full"; fi
-          stage="/tmp/zmanager-macos-release-${{ matrix.profile }}"
-          app="$stage/${product}-${version}-macos-${{ matrix.arch }}.app"
-          zip="$stage/${product}-${version}-macos-${{ matrix.arch }}.zip"
-          dmg="$stage/${product}-${version}-macos-${{ matrix.arch }}.dmg"
-          report="$stage/${product}-${version}-macos-${{ matrix.arch }}-inspection.json"
-          gate_args=("$app" --expected-arch "${{ matrix.arch }}" --zip "$zip" --dmg "$dmg" --report "$report")
-          if [[ "$ZMANAGER_RELEASE_SIGNED" == "true" ]]; then
-            gate_args+=(--require-developer-id --require-notarization)
-          fi
-          scripts/release-gate-macos.sh "${gate_args[@]}"
-          cd "$stage"
-          shasum -a 256 "${product}-${version}-macos-${{ matrix.arch }}.zip" \
-            "${product}-${version}-macos-${{ matrix.arch }}.dmg" \
-            > "${product}-${version}-macos-${{ matrix.arch }}-SHA256SUMS.txt"
+          if [[ "$TARGET_PROFILE" == "online" ]]; then product="ZManager-full"; fi
+          base="$ZMANAGER_MACOS_STAGE_DIR/$product-$version-macos-$TARGET_ARCH"
+          scripts/release-gate-macos.sh "$base.app" --expected-arch "$TARGET_ARCH" \
+            --zip "$base.zip" --dmg "$base.dmg" --require-developer-id
+          codesign --verify --strict "$base.dmg"
 
-      - name: Upload macOS release artifacts
+      - name: Upload signed macOS inputs
+        id: signed-inputs
         uses: actions/upload-artifact@v6
         with:
-          name: zmanager-macos-${{ matrix.arch }}-${{ matrix.profile == 'online' && 'full' || 'local' }}
+          name: zmanager-macos-${{ matrix.arch }}-${{ matrix.profile }}-${{ github.run_attempt }}
           if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
           path: |
-            /tmp/zmanager-macos-release-${{ matrix.profile }}/*.zip
-            /tmp/zmanager-macos-release-${{ matrix.profile }}/*.dmg
-            /tmp/zmanager-macos-release-${{ matrix.profile }}/*-inspection.json
-            /tmp/zmanager-macos-release-${{ matrix.profile }}/*-SHA256SUMS.txt
+            ${{ runner.temp }}/zmanager-macos-release/*.zip
+            ${{ runner.temp }}/zmanager-macos-release/*.dmg
+
+      - name: Record signed inputs
+        env:
+          SIGNED_ARTIFACT_ID: ${{ steps.signed-inputs.outputs.artifact-id }}
+          TARGET_ARCH: ${{ matrix.arch }}
+          TARGET_PROFILE: ${{ matrix.profile }}
+        run: |
+          python3 scripts/desktop-notarization.py record "$RUNNER_TEMP/zmanager-macos-release" \
+            "$RUNNER_TEMP/notarization-$TARGET_ARCH-$TARGET_PROFILE.json"
+
+      - name: Upload notarization record
+        uses: actions/upload-artifact@v6
+        with:
+          name: zmanager-notary-record-${{ matrix.arch }}-${{ matrix.profile }}
+          path: ${{ runner.temp }}/notarization-*.json
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
 
       - name: Upload sibling build provenance
         if: always()
@@ -500,9 +467,35 @@ jobs:
           if-no-files-found: warn
 
 
-  publish:
-    name: Publish release
+  notarization-test-inputs:
+    name: Record notarization test inputs
+    needs: package-macos
+    if: inputs.notarization_test
     runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v6
+        with:
+          pattern: zmanager-notary-record-*
+          merge-multiple: true
+          path: notary-records
+      - name: Prepare test manifest
+        run: python3 scripts/desktop-notarization.py manifest notary-records desktop-notarization.json --test
+      - uses: actions/upload-artifact@v6
+        with:
+          name: zmanager-notary-test
+          path: desktop-notarization.json
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
+      - name: Show how to resume
+        run: echo "Run Desktop Notarization with test_run_id=$GITHUB_RUN_ID to submit or resume these signed packages." >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Stage draft GitHub release
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     needs:
       - package-macos
       - package-windows
@@ -511,9 +504,19 @@ jobs:
     if: github.event_name != 'workflow_dispatch' || !inputs.notarization_test
 
     steps:
-      - name: Download release artifacts
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - name: Download notarization records
         uses: actions/download-artifact@v6
         with:
+          pattern: zmanager-notary-record-*
+          merge-multiple: true
+          path: notary-records
+      - name: Download Windows and Linux release artifacts
+        uses: actions/download-artifact@v6
+        with:
+          pattern: zmanager-{windows,linux}-*
           path: release-artifacts
 
       - name: Prepare release bundle
@@ -521,7 +524,7 @@ jobs:
           set -euo pipefail
 
           mkdir -p release-bundles
-          release_tag="${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}"
+          release_tag="$ZMANAGER_RELEASE_TAG"
           release_version="${release_tag#v}"
           declare -A seen_names=()
 
@@ -588,21 +591,6 @@ jobs:
                 if [[ "$artifact_dir" == *-full ]]; then variant="full-"; fi
                 normalized_name="zmanager-desktop-${variant}${release_version}-linux-arm64.rpm"
                 ;;
-              zmanager-macos-arm64-local|zmanager-macos-arm64-full|zmanager-macos-x86_64-local|zmanager-macos-x86_64-full)
-                case "$file_name" in
-                  ZManager-${release_version}-macos-*.zip|ZManager-${release_version}-macos-*.dmg|ZManager-${release_version}-macos-*-inspection.json|ZManager-${release_version}-macos-*-SHA256SUMS.txt)
-                    normalized_name="$file_name"
-                    ;;
-                  ZManager-full-${release_version}-macos-*.zip|ZManager-full-${release_version}-macos-*.dmg|ZManager-full-${release_version}-macos-*-inspection.json|ZManager-full-${release_version}-macos-*-SHA256SUMS.txt)
-                    normalized_name="$file_name"
-                    ;;
-                  *)
-                    echo "Skipping unknown macOS artifact: $file_name" >&2
-                    continue
-                    ;;
-                esac
-                ;;
-
               *)
                 echo "Skipping unexpected artifact directory: $artifact_dir" >&2
                 continue
@@ -623,31 +611,6 @@ jobs:
             echo "No packaged artifacts found" >&2
             exit 1
           fi
-
-          required_macos_artifacts=(
-            "ZManager-${release_version}-macos-arm64.zip"
-            "ZManager-${release_version}-macos-arm64.dmg"
-            "ZManager-${release_version}-macos-arm64-inspection.json"
-            "ZManager-${release_version}-macos-arm64-SHA256SUMS.txt"
-            "ZManager-${release_version}-macos-x86_64.zip"
-            "ZManager-${release_version}-macos-x86_64.dmg"
-            "ZManager-${release_version}-macos-x86_64-inspection.json"
-            "ZManager-${release_version}-macos-x86_64-SHA256SUMS.txt"
-            "ZManager-full-${release_version}-macos-arm64.zip"
-            "ZManager-full-${release_version}-macos-arm64.dmg"
-            "ZManager-full-${release_version}-macos-arm64-inspection.json"
-            "ZManager-full-${release_version}-macos-arm64-SHA256SUMS.txt"
-            "ZManager-full-${release_version}-macos-x86_64.zip"
-            "ZManager-full-${release_version}-macos-x86_64.dmg"
-            "ZManager-full-${release_version}-macos-x86_64-inspection.json"
-            "ZManager-full-${release_version}-macos-x86_64-SHA256SUMS.txt"
-          )
-          for required in "${required_macos_artifacts[@]}"; do
-            if [[ ! -f "release-bundles/$required" ]]; then
-              echo "Required macOS release artifact is missing: $required" >&2
-              exit 1
-            fi
-          done
 
           license_bundle="release-bundles/zmanager-desktop-${release_version}-third-party-licenses.zip"
           if [[ ! -f "$license_bundle" ]]; then
@@ -680,28 +643,10 @@ jobs:
             fi
           done
 
-          sha256_file="release-bundles/zmanager-desktop-${release_version}-SHA256SUMS.txt"
-          tmp_sha256="$(mktemp)"
-          find release-bundles -type f -print0 \
-            | xargs -0 sha256sum > "$tmp_sha256"
-          mv "$tmp_sha256" "$sha256_file"
+          echo "Prepared $artifact_count Windows and Linux artifacts"
 
-          echo "Prepared $artifact_count artifacts"
-
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@v3
-        with:
-          tag_name: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
-          name: zmanager-desktop ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.tag || github.ref_name }}
-          body: |
-            Automated release of zmanager-desktop from GitHub Actions.
-
-            - Built from the pinned zmanager dependency commit.
-            - Default artifacts use the local/offline profile. The Microsoft Store MSIX uses this profile; separate `full` artifacts include online features.
-            - Includes macOS arm64/x86_64 ZIP and DMG artifacts, Windows portable and installer binaries, optional local-profile Store MSIX packages, and Linux DEB/RPM packages.
-            - Includes a generated third-party license bundle with Rust, frontend, vendored, and Windows vcpkg notices.
-            - macOS artifacts are Developer ID signed and notarized when release credentials are configured; otherwise they are ad-hoc-signed testing artifacts and are not suitable for public Gatekeeper distribution.
-            - SHA256SUMS file is included for artifact verification.
-          files: |
-            release-bundles/*
-          generate_release_notes: true
+      - name: Create draft for the notarization finalizer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/desktop-notarization.py stage notary-records release-bundles

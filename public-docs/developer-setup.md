@@ -157,11 +157,31 @@ repository or environment secrets. Configure `MACOS_DEVELOPER_ID_P12_BASE64`
 with the base64 encoded Developer ID `.p12` export and
 `MACOS_DEVELOPER_ID_P12_PASSWORD` with its export password. Notarization uses
 `MACOS_NOTARY_PRIVATE_KEY_BASE64` (base64 encoded App Store Connect API `.p8`),
-`MACOS_NOTARY_KEY_ID`, and `MACOS_NOTARY_ISSUER_ID`. The workflow imports these
-into a temporary runner keychain, validates the expected release team, then
-signs and notarizes the artifacts. Never commit the certificate, private key,
-or passwords. Local contributors use identities installed in their own
-Keychain; the source tree contains no signing certificate or private key.
+`MACOS_NOTARY_KEY_ID`, and `MACOS_NOTARY_ISSUER_ID`. The Release workflow
+imports the certificate into a temporary keychain and stages signed inputs in
+GitHub Actions for 90 days. Keep signing material in the configured secrets.
+
+### Resuming macOS notarization
+
+The Release workflow creates a draft after packaging succeeds on all
+platforms. **Desktop Notarization** runs every 30 minutes and can also be
+dispatched with a specific `tag`. It submits the signed DMG for each macOS
+architecture and profile. A submission ID is recorded in the draft so a
+later runner can check the same submission. Keep the draft and its signed
+Actions artifacts while Apple is processing. A request still pending after
+48 hours produces a warning and stays eligible for subsequent checks.
+
+After Apple accepts a DMG, the finalizer staples that DMG and the signed app
+used to create the ZIP. It publishes only after the final packages pass
+signature, ticket, Gatekeeper, and checksum verification. An Apple rejection
+leaves the draft unpublished and prints the issues from the notary log.
+
+For a test, dispatch **Release** with `notarization_test=true` and the tag
+corresponding to the checkout's product version. Then dispatch **Desktop
+Notarization** with that Release run's `test_run_id`. Run it again with the
+same ID to resume. The finalizer uploads test results and verified ZIPs and
+DMGs as Actions artifacts. Use those packages on a clean macOS VM to confirm
+offline first launch through Finder for both download formats.
 
 ## Repository layout
 
