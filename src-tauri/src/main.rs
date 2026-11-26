@@ -144,7 +144,7 @@ fn main() {
                 }))
                 .map_err(|error| std::io::Error::other(format!("failed to attach native inbox emitter: {error:?}")))?;
             let app_data_dir = app.path().app_data_dir().map_err(|error| std::io::Error::other(format!("failed to resolve app data dir: {error}")))?;
-            let local_send = localsend::LocalSendState::new(app_data_dir);
+            let local_send = localsend::LocalSendState::new(app_data_dir, &setup_diagnostics);
             let operation_reaper = app.state::<native_drag_session::NativeDragOperationRegistry>().inner().clone();
             let session_reaper = app.state::<native_drag_session::NativeDragSessionRegistry>().inner().clone();
             let job_registry_for_reaper = app.state::<job_registry::JobRegistry>().inner().clone();
@@ -174,10 +174,8 @@ fn main() {
                 app.handle().clone(),
                 setup_diagnostics.clone(),
             );
-            let share_queue_for_events = share_queue.clone();
             app.manage(local_send.clone());
-            app.manage(share_queue.clone());
-            local_send.register_outgoing_event_sink(std::sync::Arc::new(move |event| share_queue_for_events.on_localsend_event(event)));
+            app.manage(share_queue);
             local_send.start_event_pump(app.handle().clone(), app.state::<job_registry::JobRegistry>().inner().clone(), setup_diagnostics.clone());
             if let Some(window) = app.get_webview_window("main") {
                 platform::configure_main_window(&window)?;
@@ -291,6 +289,9 @@ fn main() {
             share_queue.request_shutdown();
             app_handle.state::<localsend::LocalSendState>().shutdown();
             share_queue.join_workers();
+            if !app_handle.state::<job_registry::JobRegistry>().shutdown_nested_archive_roots(std::time::Duration::from_secs(2)) {
+                let _ = exit_diagnostics.record("process", "nestedArchiveCleanupDeferred", diagnostics::fields([]));
+            }
             platform::shutdown();
         }
     });

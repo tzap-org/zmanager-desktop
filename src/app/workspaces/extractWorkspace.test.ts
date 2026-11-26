@@ -3,6 +3,16 @@ import { describe, expect, it } from "vitest";
 import { createExtractWorkspace, extractModeForSelection } from "./extractWorkspace";
 
 describe("extract workspace", () => {
+  it("preserves a destination within an archive and resets it for another archive", () => {
+    const workspace = createExtractWorkspace();
+    workspace.applyDefaults({ ...defaults, destinationPath: "D:/first" }, "first.zip");
+    workspace.setOptions({ destinationPath: "D:/chosen" });
+
+    expect(workspace.applyDefaults({ ...defaults, destinationPath: "D:/first" }, "first.zip").destinationPath).toBe("D:/chosen");
+    expect(workspace.applyDefaults({ ...defaults, destinationPath: "D:/second" }, "second.zip").destinationPath).toBe("D:/second");
+  });
+
+
   const defaults = {
     destinationPath: "C:/output/photos",
     pathMode: "full" as const,
@@ -26,7 +36,7 @@ describe("extract workspace", () => {
       usesGlobalDefaults: false,
     });
 
-    expect(workspace.applyDefaults({ ...defaults, destinationPath: "E:/new-archive" })).toMatchObject({
+    expect(workspace.applyDefaults({ ...defaults, destinationPath: "E:/new-archive" }, "new-archive.zip")).toMatchObject({
       destinationPath: "E:/new-archive",
       overwrite: "rename",
       usesGlobalDefaults: false,
@@ -56,7 +66,7 @@ describe("extract workspace", () => {
       tzapAllowDegraded: false,
       tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
-      password: "secret",
+      password: " secret ",
     });
   });
 
@@ -98,7 +108,7 @@ describe("extract workspace", () => {
     expect(workspace.beginTzapVerification().tzapVerification).toMatchObject({
       state: "checking",
       checkCurrentStatus: true,
-      trustedCaCertificatePaths: ["C:/certs/root.pem"],
+      trustedCaCertificatePaths: [" C:/certs/root.pem ", "C:/certs/root.pem"],
     });
     expect(workspace.acceptTzapVerification({
       outcome: "trusted",

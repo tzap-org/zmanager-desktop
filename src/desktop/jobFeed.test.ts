@@ -122,7 +122,36 @@ describe("job feed", () => {
     vi.useRealTimers();
   });
 
-  it("replays accepted Jobs from the last acknowledged revision and acknowledges after presentation", async () => {
+  it("replays an earlier failed job after a later job is acknowledged", async () => {
+    const envelope = (revision: number): AcceptedJobEnvelopeDto => ({
+      acceptanceRevision: String(revision),
+      job: { jobId: `job-${revision}`, kind: "zipExtract", status: "queued", createdAt: "2026-01-01T00:00:00Z" },
+      origin: "mainWindow",
+    });
+    const first = envelope(1);
+    const second = envelope(2);
+    const pending = new Map([[1, first], [2, second]]);
+    mocks.subscribeAcceptedJobs.mockImplementation(async (lastAcceptanceRevision, channel) => {
+      for (const [revision, job] of pending) {
+        if (revision > Number(lastAcceptanceRevision)) channel.onmessage?.(job);
+      }
+      return "subscription-accepted";
+    });
+    mocks.acknowledgeAcceptedJob.mockImplementation(async ({ acceptanceRevision }) => {
+      pending.delete(Number(acceptanceRevision));
+    });
+    const accept = vi.fn<(value: AcceptedJobEnvelopeDto) => Promise<boolean>>().mockResolvedValue(true);
+    accept.mockResolvedValueOnce(false);
+    const subscription = await createTauriJobFeed({ reconnectDelayMs: 10 }).subscribeAcceptedJobs(accept);
+    try {
+      await vi.waitFor(() => expect(pending.size).toBe(0));
+      expect(accept.mock.calls.map(([job]) => job.acceptanceRevision)).toEqual(["1", "2", "1"]);
+    } finally {
+      await subscription.unsubscribe();
+    }
+  });
+
+  it(" acknowledges after presentation", async () => {
     mocks.subscribeAcceptedJobs
       .mockResolvedValueOnce("subscription-accepted-1")
       .mockResolvedValueOnce("subscription-accepted-2");

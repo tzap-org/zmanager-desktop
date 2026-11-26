@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 mod generated;
 pub use generated::{
     MIN_SUPPORTED_SHELL_ACTION_REQUEST_VERSION, SHELL_ACTION_POLICIES, SHELL_ACTION_REQUEST_VERSION, ShellActionKind, ShellActionPolicy,
-    ShellActionWindowDisposition,
+    ShellActionWindowDisposition, SUPPORTED_ARCHIVE_SUFFIXES,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -70,89 +70,9 @@ impl fmt::Display for ShellActionContractError {
 
 impl std::error::Error for ShellActionContractError {}
 
-pub const SUPPORTED_ARCHIVE_SUFFIXES: &[&str] = &[
-    ".vol000.tzap",
-    ".cpio.lzma",
-    ".cpio.bz2",
-    ".cpio.zst",
-    ".tar.lzma",
-    ".cpio.gz",
-    ".cpio.xz",
-    ".tar.b64",
-    ".tar.bz2",
-    ".tar.lrz",
-    ".tar.lz4",
-    ".tar.lzo",
-    ".tar.zst",
-    ".7z.001",
-    ".sevenz",
-    ".tar.br",
-    ".tar.gz",
-    ".tar.lz",
-    ".tar.uu",
-    ".tar.xz",
-    ".mtree",
-    ".tar.z",
-    ".tlzma",
-    ".ustar",
-    ".appx",
-    ".cpgz",
-    ".cpio",
-    ".epub",
-    ".lzma",
-    ".tbz2",
-    ".tzap",
-    ".tzst",
-    ".vmdk",
-    ".zipx",
-    ".aar",
-    ".aea",
-    ".apk",
-    ".b64",
-    ".bz2",
-    ".cab",
-    ".cb7",
-    ".cbr",
-    ".cbt",
-    ".cbz",
-    ".deb",
-    ".ipa",
-    ".iso",
-    ".jar",
-    ".lha",
-    ".lz4",
-    ".lzh",
-    ".lzo",
-    ".msi",
-    ".pax",
-    ".rar",
-    ".rpm",
-    ".tar",
-    ".taz",
-    ".tbz",
-    ".tgz",
-    ".txz",
-    ".udf",
-    ".vhd",
-    ".war",
-    ".xar",
-    ".xpi",
-    ".zip",
-    ".zst",
-    ".7z",
-    ".ar",
-    ".br",
-    ".gz",
-    ".lz",
-    ".uu",
-    ".xz",
-    ".a",
-    ".z",
-];
-
 pub fn base_name_without_archive_extension(path: &str) -> &str {
     let name = path.rsplit(['/', '\\']).next().unwrap_or(path);
-    let lower = name.to_lowercase();
+    let lower = name.to_ascii_lowercase();
     for suffix in SUPPORTED_ARCHIVE_SUFFIXES {
         if lower.ends_with(suffix) && name.len() > suffix.len() {
             return &name[..name.len() - suffix.len()];

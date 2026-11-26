@@ -23,6 +23,7 @@ describe("archive workspace load state", () => {
     expect(workspace.getSnapshot()).toMatchObject({
       currentArchivePath: "",
       browseState: "idle",
+      searchSupported: true,
       status: { key: "browse.statusIdle" },
       error: null,
       entries: [],
@@ -30,6 +31,17 @@ describe("archive workspace load state", () => {
       totalSize: null,
       listingRevision: 0,
     });
+  });
+
+  it("disables archive search when the active format does not support it", () => {
+    const workspace = createArchiveWorkspace();
+    workspace.loadSucceeded({ archivePath: "C:/tmp/data.tzap", entries, entryCount: entries.length });
+
+    const snapshot = workspace.setSearchSupported(false);
+
+    expect(snapshot.searchSupported).toBe(false);
+    expect(snapshot.command.canSearchEntries).toBe(false);
+    expect(workspace.setSearchSupported(true).command.canSearchEntries).toBe(true);
   });
 
   it("resets only submitted archive-operation state after an accepted start", () => {
@@ -64,7 +76,7 @@ describe("archive workspace load state", () => {
       password: "secret",
     } as Parameters<typeof workspace.beginLoading>[0] & { password: string });
 
-    expect(snapshot.currentArchivePath).toBe("C:/tmp/photos.zip");
+    expect(snapshot.currentArchivePath).toBe(" C:/tmp/photos.zip ");
     expect(snapshot.browseState).toBe("loading");
     expect(snapshot.status).toEqual({ key: "browse.statusLoading" });
     expect(snapshot.entries).toEqual([]);

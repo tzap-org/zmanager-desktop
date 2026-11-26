@@ -141,7 +141,7 @@ describe("drop intent classifier", () => {
   });
 
   it("rejects empty and multi-archive open drops without guessing", () => {
-    expect(classifyDropIntent([" ", ""], "unknown")).toEqual({
+    expect(classifyDropIntent(["", ""], "unknown")).toEqual({
       kind: "rejectUnsupportedDrop",
       surface: "unknown",
       reason: "emptyDrop",

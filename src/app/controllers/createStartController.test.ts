@@ -120,14 +120,14 @@ describe("create start controller", () => {
       destinationCollisionStrategy: "rename",
       passwordInput: {
         password: " secret ",
-        passwordConfirm: "secret",
+        passwordConfirm: " secret ",
       },
     });
 
     expect(harness.startCreate).toHaveBeenCalledWith(expect.objectContaining({
       sources: ["C:/work/project"],
       destinationPath: "C:/out/project.zip",
-      password: "secret",
+      password: " secret ",
       destinationCollisionStrategy: "rename",
     }));
     expect(harness.calls.started).toHaveLength(1);
@@ -213,12 +213,12 @@ describe("create start controller", () => {
     await harness.controller.runCreate({
       passwordInput: {
         password: " react secret ",
-        passwordConfirm: "react secret",
+        passwordConfirm: " react secret ",
       },
     });
 
     expect(harness.startCreate).toHaveBeenCalledWith(expect.objectContaining({
-      password: "react secret",
+      password: " react secret ",
     }));
   });
 

@@ -151,7 +151,7 @@ impl NativeFileDragAdapter for LinuxPlatform {
 }
 
 fn linux_system_file_icon_data_url(entry: &SystemFileIconRequestEntry) -> Option<String> {
-    let _lookup_key = if entry.is_directory { "inode/directory" } else { entry.path.trim() };
+    let _lookup_key = if entry.is_directory { "inode/directory" } else { entry.path.as_str() };
 
     None
 }

@@ -330,10 +330,7 @@ source scripts/pinned-openssl.sh
 zmanager_configure_pinned_openssl
 
 if ((!skip_tests)); then
-  npm run test:frontend
-  (cd src-tauri && cargo fmt --check)
-  (cd src-tauri && cargo clippy --release --all-targets --all-features -- -D warnings)
-  (cd src-tauri && cargo test --release)
+  bash scripts/verify-linux-build.sh
 fi
 
 cargo_target_dir="${CARGO_TARGET_DIR:-$repo_root/src-tauri/target}"

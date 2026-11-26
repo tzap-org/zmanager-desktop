@@ -119,7 +119,7 @@ struct NativeFileDragDestinationEvent {
 }
 
 fn system_file_icon_data_url(entry: &SystemFileIconRequestEntry) -> Option<String> {
-    let lookup_path = if entry.is_directory { "folder" } else { entry.path.trim() };
+    let lookup_path = if entry.is_directory { "folder" } else { entry.path.as_str() };
     let lookup_path = if lookup_path.is_empty() { "file" } else { lookup_path };
 
     let wide_path = wide_null(lookup_path);

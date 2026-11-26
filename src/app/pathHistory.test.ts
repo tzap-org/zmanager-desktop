@@ -32,10 +32,10 @@ function memoryStorage(initial: Record<string, string> = {}): PathHistoryStorage
 }
 
 describe("path history helpers", () => {
-  it("trims blanks and deduplicates while preserving first occurrence", () => {
-    expect(normalizePathHistory([" C:/out ", "", "C:/tmp", "C:/out", "  ", "C:/tmp "])).toEqual([
-      "C:/out",
-      "C:/tmp",
+  it("deduplicates literal paths and drops empty entries", () => {
+    expect(normalizePathHistory(["/tmp/out ", "", "/tmp/out", "/tmp/out "])).toEqual([
+      "/tmp/out ",
+      "/tmp/out",
     ]);
   });
 
@@ -44,15 +44,15 @@ describe("path history helpers", () => {
   });
 
   it("moves a duplicate record to the front", () => {
-    expect(recordPathHistoryEntry(["C:/one", "C:/two", "C:/three"], " C:/two ", 10)).toEqual([
+    expect(recordPathHistoryEntry(["C:/one", "C:/two", "C:/three"], "C:/two", 10)).toEqual([
       "C:/two",
       "C:/one",
       "C:/three",
     ]);
   });
 
-  it("ignores blank records", () => {
-    expect(recordPathHistoryEntry(["C:/one"], "   ", 10)).toBeNull();
+  it("ignores empty records", () => {
+    expect(recordPathHistoryEntry(["C:/one"], "", 10)).toBeNull();
   });
 
   it("caps extract destination history at ten entries", () => {
@@ -168,9 +168,9 @@ describe("path history helpers", () => {
 
   it("loads normalized path histories from injected storage", () => {
     const storage = memoryStorage({
-      [PATH_HISTORY_STORAGE_KEYS.extractDestination]: JSON.stringify([" C:/out ", "", "C:/out", "C:/tmp"]),
+      [PATH_HISTORY_STORAGE_KEYS.extractDestination]: JSON.stringify(["C:/out", "", "C:/out", "C:/tmp"]),
       [PATH_HISTORY_STORAGE_KEYS.createDestination]: JSON.stringify(["1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11"]),
-      [PATH_HISTORY_STORAGE_KEYS.recentArchive]: JSON.stringify(["A", 42, " B ", "A"]),
+      [PATH_HISTORY_STORAGE_KEYS.recentArchive]: JSON.stringify(["A", 42, "B", "A"]),
     });
     const store = createPathHistoryStore(storage);
 
@@ -185,14 +185,14 @@ describe("path history helpers", () => {
     const storage = memoryStorage();
     const store = createPathHistoryStore(storage);
 
-    const snapshot = store.recordRecentArchiveHistory(" C:/archives/app.zip ");
+    const snapshot = store.recordRecentArchiveHistory("C:/archives/app.zip ");
 
     expect(snapshot).toEqual({
       extractDestinationHistory: [],
       createDestinationHistory: [],
-      recentArchiveHistory: ["C:/archives/app.zip"],
+      recentArchiveHistory: ["C:/archives/app.zip "],
     });
-    expect(storage.values.get(PATH_HISTORY_STORAGE_KEYS.recentArchive)).toBe(JSON.stringify(["C:/archives/app.zip"]));
+    expect(storage.values.get(PATH_HISTORY_STORAGE_KEYS.recentArchive)).toBe(JSON.stringify(["C:/archives/app.zip "]));
     expect(Object.isFrozen(snapshot)).toBe(true);
     expect(Object.isFrozen(snapshot?.recentArchiveHistory)).toBe(true);
     expect(Object.getPrototypeOf(snapshot)).toBe(Object.prototype);
@@ -200,11 +200,11 @@ describe("path history helpers", () => {
     expect(JSON.parse(JSON.stringify(snapshot))).toEqual(snapshot);
   });
 
-  it("ignores blank records without writing storage", () => {
+  it("ignores empty records without writing storage", () => {
     const storage = memoryStorage();
     const store = createPathHistoryStore(storage);
 
-    expect(store.recordExtractDestinationHistory("   ")).toBeNull();
+    expect(store.recordExtractDestinationHistory("")).toBeNull();
     expect(storage.values.size).toBe(0);
   });
 

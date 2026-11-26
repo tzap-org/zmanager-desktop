@@ -260,6 +260,7 @@ export type ArchiveWorkspaceViewState = {
 export type ArchiveWorkspaceSnapshot = ArchiveWorkspaceListingMetadata & {
   currentArchivePath: string;
   browseState: BrowseState;
+  searchSupported: boolean;
   status: ArchiveWorkspaceMessagePayload;
   error: ArchiveWorkspaceError | null;
   passwordRetry: ArchiveWorkspacePasswordRetry | null;
@@ -330,6 +331,7 @@ export type ArchiveWorkspace = {
   acceptTreePage(entries: readonly ArchiveEntryDto[]): ArchiveWorkspaceSnapshot;
   loadFailed(error: CommandErrorDto | ArchiveWorkspaceUnknownLoadFailure): ArchiveWorkspaceSnapshot;
   setBrowseState(browseState: BrowseState, fallbackText?: string): ArchiveWorkspaceSnapshot;
+  setSearchSupported(supported: boolean): ArchiveWorkspaceSnapshot;
   navigateToFolder(folderPath: string): ArchiveWorkspaceSnapshot;
   navigateBack(): ArchiveWorkspaceSnapshot;
   navigateUp(): ArchiveWorkspaceSnapshot;
@@ -436,11 +438,12 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
     },
 
     beginLoading(input) {
-      const archivePath = input.archivePath.trim();
+      const archivePath = input.archivePath;
       state = {
         ...state,
         currentArchivePath: archivePath,
         browseState: "loading",
+        searchSupported: true,
         status: { key: "browse.statusLoading" },
         error: null,
         passwordRetry: retryForArchivePath(state.passwordRetry, archivePath),
@@ -475,8 +478,9 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
         rowOptions: state.view.rowOptions,
       });
       state = {
-        currentArchivePath: listing.archivePath.trim(),
+        currentArchivePath: listing.archivePath,
         browseState: entries.length > 0 ? "loaded" : "empty",
+        searchSupported: state.searchSupported,
         status: entries.length > 0
           ? { key: "browse.loadedEntries", values: { count: entries.length } }
           : { key: "browse.validEmpty" },
@@ -496,7 +500,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
       const entries = cloneEntries(page.entries);
       state = {
         ...state,
-        currentArchivePath: page.archivePath.trim(),
+        currentArchivePath: page.archivePath,
         browseState: "loaded",
         status: { key: "browse.loadedEntries", values: { count: page.entryCount } },
         error: null,
@@ -562,6 +566,12 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
         error: browseState === "error" ? state.error : null,
         passwordRetry: browseState === "error" ? null : state.passwordRetry,
       };
+      return currentSnapshot();
+    },
+
+    setSearchSupported(supported) {
+      if (state.searchSupported === supported) return currentSnapshot();
+      state = { ...state, searchSupported: supported };
       return currentSnapshot();
     },
 
@@ -1065,6 +1075,7 @@ function createInitialState(
   return {
     currentArchivePath: "",
     browseState: "idle",
+    searchSupported: true,
     status: { key: "browse.statusIdle" },
     error: null,
     passwordRetry: null,
@@ -1520,7 +1531,7 @@ function selectedListingReferences(state: MutableArchiveWorkspaceState): string[
       for (const descendantPath of fileDescendantEntryPaths(state.treeEntries, selectedPath)) {
         extractPaths.add(descendantPath);
       }
-      if (extractPaths.size === 0 && selectedPath.trim().length > 0) {
+      if (extractPaths.size === 0 && selectedPath.length > 0) {
         extractPaths.add(selectedPath);
       }
       continue;
@@ -1747,7 +1758,7 @@ function commandSnapshotFromState(
     visibleSelectableCount: selection.visibleSelectablePaths.length,
     canUseArchive,
     canListEntries: canUseArchive && state.browseState === "loaded",
-    canSearchEntries: hasArchive && state.browseState === "loaded",
+    canSearchEntries: hasArchive && state.browseState === "loaded" && state.searchSupported,
     canNavigateBack: state.view.navigationHistory.length > 0,
   };
 }
@@ -1772,6 +1783,7 @@ function snapshotFromState(state: MutableArchiveWorkspaceState): ArchiveWorkspac
   return {
     currentArchivePath: state.currentArchivePath,
     browseState: state.browseState,
+    searchSupported: state.searchSupported,
     status: cloneStatus(state.status),
     error: state.error ? { ...state.error } : null,
     passwordRetry: clonePasswordRetry(state.passwordRetry),

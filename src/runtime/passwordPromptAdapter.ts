@@ -7,13 +7,7 @@ export function createBrowserPasswordPromptAdapter(
 ): PasswordPromptAdapter {
   return {
     promptForPassword(message) {
-      const value = windowRef.prompt(message);
-      if (!value) {
-        return null;
-      }
-
-      const trimmed = value.trim();
-      return trimmed ? trimmed : null;
+      return windowRef.prompt(message) || null;
     },
   };
 }

@@ -354,10 +354,7 @@ export CARGO_TARGET_DIR="$cargo_target_dir"
 export OPENSSL_NO_VENDOR="${OPENSSL_NO_VENDOR:-1}"
 
 if ((!skip_tests)); then
-  npm run test:frontend
-  (cd src-tauri && cargo fmt --check)
-  (cd src-tauri && cargo clippy --release --all-targets --all-features -- -D warnings)
-  (cd src-tauri && cargo test --release)
+  bash scripts/verify-linux-build.sh
 fi
 
 cargo_target_dir="${CARGO_TARGET_DIR:-$repo_root/src-tauri/target}"

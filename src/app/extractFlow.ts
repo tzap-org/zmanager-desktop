@@ -106,8 +106,8 @@ export function resolveExtractStartInput(
       entryReferences,
       deduplicateRoot: input.deduplicateRoot,
     }),
-    ...(input.password?.trim() && !input.tzapRecipientKeyId?.trim()
-      ? { password: input.password.trim() }
+    ...(input.password && !input.tzapRecipientKeyId?.trim()
+      ? { password: input.password }
       : {}),
     entryReferences,
     tzapRestorePolicy: input.tzapRestorePolicy ?? "portable",
@@ -123,7 +123,7 @@ export function resolveExtractDestination(
   input: Pick<ExtractStartInput, "destinationBasePath" | "useSubfolder" | "subfolder">,
   joinNativePath: ResolveExtractStartInputContext["joinNativePath"],
 ): string | null {
-  const baseDestination = input.destinationBasePath.trim();
+  const baseDestination = input.destinationBasePath;
   if (!baseDestination) {
     return null;
   }
@@ -132,7 +132,7 @@ export function resolveExtractDestination(
     return baseDestination;
   }
 
-  const subfolder = input.subfolder.trim();
+  const subfolder = input.subfolder;
   return subfolder ? joinNativePath(baseDestination, subfolder) : baseDestination;
 }
 

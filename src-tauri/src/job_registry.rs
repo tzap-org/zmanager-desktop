@@ -108,6 +108,7 @@ struct RegistryState {
     jobs: HashMap<String, JobRecord>,
     preview_roots: VecDeque<PathBuf>,
     nested_archive_roots: VecDeque<PathBuf>,
+    shutting_down: bool,
     catalog_sender: watch::Sender<Arc<JobCatalogSnapshotDto>>,
     accepted_jobs: VecDeque<AcceptedJobEnvelopeDto>,
     accepted_sender: watch::Sender<Arc<Vec<AcceptedJobEnvelopeDto>>>,
@@ -209,6 +210,7 @@ impl RegistryState {
             jobs: HashMap::new(),
             preview_roots: VecDeque::new(),
             nested_archive_roots: VecDeque::new(),
+            shutting_down: false,
             catalog_sender,
             accepted_jobs: VecDeque::new(),
             accepted_sender,
@@ -225,6 +227,9 @@ pub struct JobRegistry {
 }
 
 fn try_create_job_locked(state: &mut RegistryState, kind: JobKindDto) -> Result<(StartJobResponseDto, CancellationToken), &'static str> {
+    if state.shutting_down {
+        return Err("job_registry_shutting_down");
+    }
     let job_id = state.next_job_id.saturating_add(1).to_string();
     state.next_job_id = state.next_job_id.saturating_add(1);
 
@@ -473,20 +478,12 @@ impl JobRegistry {
             return Err("accepted_jobs_forbidden");
         }
         self.with_lock(|state| {
-            if !state
+            let index = state
                 .accepted_jobs
                 .iter()
-                .any(|record| record.job.job_id == job_id && record.acceptance_revision.parse::<u64>().ok() == Some(acceptance_revision))
-            {
-                return Err("accepted_job_not_found");
-            }
-            while state
-                .accepted_jobs
-                .front()
-                .is_some_and(|record| record.acceptance_revision.parse::<u64>().ok().is_some_and(|revision| revision <= acceptance_revision))
-            {
-                state.accepted_jobs.pop_front();
-            }
+                .position(|record| record.job.job_id == job_id && record.acceptance_revision.parse::<u64>().ok() == Some(acceptance_revision))
+                .ok_or("accepted_job_not_found")?;
+            state.accepted_jobs.remove(index);
             publish_accepted_jobs(state);
             Ok(())
         })
@@ -1139,8 +1136,39 @@ impl JobRegistry {
         });
     }
 
-    pub fn register_nested_archive_root(&self, path: PathBuf) {
-        self.with_lock(|state| state.nested_archive_roots.push_back(path));
+    pub fn register_nested_archive_root(&self, path: PathBuf) -> bool {
+        self.with_lock(|state| {
+            if state.shutting_down {
+                let _ = fs::remove_dir_all(path);
+                return false;
+            }
+            state.nested_archive_roots.push_back(path);
+            true
+        })
+    }
+
+    pub fn shutdown_nested_archive_roots(&self, timeout: Duration) -> bool {
+        let job_ids = self.with_lock(|state| {
+            state.shutting_down = true;
+            if state.nested_archive_roots.is_empty() {
+                return Vec::new();
+            }
+            state.jobs.iter().filter(|(_, job)| !job.status.is_terminal()).map(|(id, _)| id.clone()).collect::<Vec<_>>()
+        });
+        for job_id in &job_ids {
+            self.request_cancel(job_id);
+        }
+
+        let deadline = Instant::now() + timeout;
+        while job_ids.iter().any(|job_id| self.current_job_snapshot(job_id).is_some_and(|job| !job.status.is_terminal())) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                // Leave files in place if a worker may still be reading them.
+                return false;
+            }
+            std::thread::sleep(remaining.min(Duration::from_millis(10)));
+        }
+        self.cleanup_nested_archive_roots()
     }
 
     pub fn cleanup_nested_archive_root(&self, path: &Path) -> bool {
@@ -1167,12 +1195,11 @@ impl JobRegistry {
         })
     }
 
-    fn cleanup_nested_archive_roots(&self) {
+    fn cleanup_nested_archive_roots(&self) -> bool {
         self.with_lock(|state| {
-            while let Some(root) = state.nested_archive_roots.pop_front() {
-                let _ = fs::remove_dir_all(root);
-            }
-        });
+            state.nested_archive_roots.retain(|root| fs::remove_dir_all(root).is_err_and(|error| error.kind() != std::io::ErrorKind::NotFound));
+            state.nested_archive_roots.is_empty()
+        })
     }
 }
 
@@ -2156,6 +2183,52 @@ mod tests {
         assert!(registry.cleanup_nested_archive_root(&nested_root), "a retained registration should allow a later cleanup retry");
         assert!(!nested_root.exists(), "successful retry should remove the root");
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn explicit_shutdown_removes_nested_roots_with_live_registry_handles() {
+        let registry = JobRegistry::new();
+        let reaper_handle = registry.clone();
+        let root = temporary_preview_root();
+        let nested = root.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        assert!(registry.register_nested_archive_root(nested.clone()));
+
+        assert!(registry.shutdown_nested_archive_roots(Duration::ZERO));
+        assert!(!nested.exists());
+        assert!(reaper_handle.try_create_unpublished_job(JobKindDto::TestArchive).is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn shutdown_defers_nested_cleanup_while_a_cancelled_job_is_still_running() {
+        let registry = JobRegistry::new();
+        let root = temporary_preview_root();
+        let nested = root.join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        assert!(registry.register_nested_archive_root(nested.clone()));
+        let (job, token) = registry.try_create_unpublished_job(JobKindDto::TestArchive).unwrap();
+
+        assert!(!registry.shutdown_nested_archive_roots(Duration::ZERO));
+        assert!(token.is_cancelled());
+        assert!(nested.exists());
+
+        registry.emit_direct_event(&job.job_id, JobEventDto::cancelled(None, "Cancelled during shutdown."));
+        assert!(registry.shutdown_nested_archive_roots(Duration::ZERO));
+        assert!(!nested.exists());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn acknowledging_a_later_job_retains_an_earlier_pending_job() {
+        let registry = JobRegistry::new();
+        let (first, _) = registry.try_accept_job(JobKindDto::TestArchive, AcceptedJobOriginDto::MainWindow).unwrap();
+        let (second, _) = registry.try_accept_job(JobKindDto::TestArchive, AcceptedJobOriginDto::MainWindow).unwrap();
+        registry.acknowledge_accepted_job("main", &second.job.job_id, second.acceptance_revision.parse().unwrap()).unwrap();
+
+        let (_id, pending, _commands) = registry.register_accepted_subscription("main").unwrap();
+        assert_eq!(pending.borrow().len(), 1);
+        assert_eq!(pending.borrow()[0].job.job_id, first.job.job_id);
     }
 
     #[test]

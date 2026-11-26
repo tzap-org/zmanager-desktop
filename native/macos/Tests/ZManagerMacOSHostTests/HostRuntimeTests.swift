@@ -200,6 +200,30 @@ private func promiseReleaseCallback(_: UnsafeMutableRawPointer?) {}
     #expect(payload["paths"] as? [String] == ["/tmp/demo.zip"])
 }
 
+@Test @MainActor func openDocumentsDecodesLocalURLsAndPlainPaths() throws {
+    var delivered: [Data] = []
+    let lifecycle = NativeHostLifecycle { delivered.append($0) }
+    let event = NSAppleEventDescriptor(
+        eventClass: AEEventClass(kCoreEventClass),
+        eventID: AEEventID(kAEOpenDocuments),
+        targetDescriptor: nil,
+        returnID: AEReturnID(kAutoGenerateReturnID),
+        transactionID: AETransactionID(kAnyTransactionID)
+    )
+    let files = NSAppleEventDescriptor.list()
+    files.insert(NSAppleEventDescriptor(fileURL: URL(fileURLWithPath: "/tmp/a b.zip")), at: 1)
+    files.insert(NSAppleEventDescriptor(string: "file:///tmp/c%20d.zip"), at: 2)
+    files.insert(NSAppleEventDescriptor(string: "file://remote.invalid/tmp/remote.zip"), at: 3)
+    files.insert(NSAppleEventDescriptor(string: "/tmp/plain.zip"), at: 4)
+    event.setParam(files, forKeyword: AEKeyword(keyDirectObject))
+
+    lifecycle.handleOpenDocuments(event, withReplyEvent: NSAppleEventDescriptor())
+    let data = try #require(delivered.first)
+    let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    let payload = try #require(object["payload"] as? [String: Any])
+    #expect(payload["paths"] as? [String] == ["/tmp/a b.zip", "/tmp/c d.zip", "/tmp/plain.zip"])
+}
+
 @Test @MainActor func lifecycleRejectsOversizedEventsWithoutPartialDelivery() {
     var delivered: [Data] = []
     let lifecycle = NativeHostLifecycle { delivered.append($0) }

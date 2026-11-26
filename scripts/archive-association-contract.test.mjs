@@ -1,3 +1,6 @@
+import { spawnSync } from "node:child_process";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
@@ -154,4 +157,79 @@ test("Linux custom MIME types declare icons and map mimetype assets in package c
       "icons/icon.png",
     );
   }
+});
+
+test("Explorer recognition is generated from the complete archive association manifest", async () => {
+  const rust = await text("crates/zmanager-shell-contract/src/generated.rs");
+  const suffixes = rust.match(/pub const SUPPORTED_ARCHIVE_SUFFIXES: &\[&str\] = &\[([^]*?)\];/)?.[1];
+  assert.ok(suffixes, "missing generated archive recognition rules");
+  const actual = [...suffixes.matchAll(/"([^"]+)"/g)].map(([, suffix]) => suffix);
+  const expected = [...new Set([
+    ...manifest.singleExtensions.map((extension) => "." + extension),
+    ...manifest.compoundExtensions.map((extension) => "." + extension),
+    ...manifest.splitArchiveSuffixes,
+  ])];
+  assert.deepEqual(actual.sort(), expected.sort());
+});
+
+test("Linux package inspection fails closed for a missing or rejecting inspector", async (t) => {
+  const scratch = await mkdtemp(path.join(tmpdir(), "zmanager-package-inspection-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  await symlink("/bin/cat", path.join(scratch, "cat"));
+  await symlink("/usr/bin/awk", path.join(scratch, "awk"));
+  for (const [name, output] of [["sha256sum", "hash"], ["realpath", "/package"]]) {
+    await writeFile(path.join(scratch, name), `#!/bin/sh\nprintf '%s\n' '${output}'\n`, { mode: 0o755 });
+  }
+  for (const [extension, inspector] of [["deb", "dpkg-deb"], ["rpm", "rpm"]]) {
+    const artifact = path.join(scratch, `invalid.${extension}`);
+    await writeFile(artifact, "invalid fixture");
+    const inspect = () => spawnSync("/bin/bash", [path.join(root, "scripts/inspect-linux-package.sh"), artifact, "arm64", "0.0.0"], {
+      encoding: "utf8", env: { ...process.env, PATH: scratch },
+    });
+    for (const available of [false, true]) {
+      if (available) await writeFile(path.join(scratch, inspector), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+      const result = inspect();
+      assert.ok(result.stdout, result.error?.message ?? result.stderr);
+      assert.equal(JSON.parse(result.stdout).inspection.status, "fail", `${inspector}, available=${available}`);
+      assert.notEqual(result.status, 0);
+    }
+    if (extension === "rpm") {
+      await writeFile(path.join(scratch, inspector), '#!/bin/sh\n[ "$1" = "-qlp" ]\n', { mode: 0o755 });
+      const result = inspect();
+      assert.notEqual(result.status, 0, "a readable RPM header cannot mask a bad payload");
+      assert.equal(JSON.parse(result.stdout).inspection.status, "fail");
+    }
+    await writeFile(path.join(scratch, inspector), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const result = inspect();
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).inspection.status, "pass");
+  }
+});
+
+test("Linux verification overrides inherited release settings for its subprocesses", async (t) => {
+  const scratch = await mkdtemp(path.join(tmpdir(), "zmanager-linux-verification-"));
+  t.after(() => rm(scratch, { recursive: true, force: true }));
+  const probe = `#!/bin/sh
+printf '%s|%s|%s|%s\n' "$*" "$ZMANAGER_TZAP_BUILD_ENV" "$ZMANAGER_TZAP_SERVER_BASE_URL" "$VITE_TZAP_BUILD_ENV"
+`;
+  for (const command of ["npm", "cargo"]) {
+    await writeFile(path.join(scratch, command), probe, { mode: 0o755 });
+  }
+  const result = spawnSync("/bin/bash", [path.join(root, "scripts/verify-linux-build.sh")], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      PATH: `${scratch}${path.delimiter}${process.env.PATH}`,
+      ZMANAGER_TZAP_BUILD_ENV: "prod",
+      ZMANAGER_TZAP_SERVER_BASE_URL: "https://release-fixture.invalid",
+      VITE_TZAP_BUILD_ENV: "prod",
+    },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.stdout.trim().split("\n"), [
+    "run test:frontend",
+    "fmt --check",
+    "clippy --release --all-targets --all-features -- -D warnings",
+    "test --release",
+  ].map((command) => `${command}|staging|https://staging.tzap.org|staging`));
 });

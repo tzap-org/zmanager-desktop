@@ -22,7 +22,15 @@ export type ArchiveLoadOptions = Readonly<{ preserveState?: boolean }>;
 
 export type ArchiveLoadControllerWorkspace = Pick<
   ArchiveWorkspace,
-  "acceptPage" | "acceptTreePage" | "beginLoading" | "getSnapshot" | "loadFailed" | "requestPasswordRetry" | "setBrowseState"
+  | "acceptPage"
+  | "acceptTreePage"
+  | "beginLoading"
+  | "clearSearch"
+  | "getSnapshot"
+  | "loadFailed"
+  | "requestPasswordRetry"
+  | "setBrowseState"
+  | "setSearchSupported"
 >;
 
 export type ArchiveLoadControllerOptions = Readonly<{
@@ -35,6 +43,7 @@ export type ArchiveLoadControllerOptions = Readonly<{
   closeArchiveIndex(request: ArchiveIndexSessionRequest): Promise<void>;
   toCommandError(error: unknown): CommandErrorDto | null;
   renderLoading(snapshot: ArchiveWorkspaceSnapshot): void;
+  renderCapability(snapshot: ArchiveWorkspaceSnapshot): void;
   renderPage(snapshot: ArchiveWorkspaceSnapshot): void;
   renderLoadError(snapshot: ArchiveWorkspaceSnapshot, message: string): void;
   failedListMessage(): string;
@@ -57,6 +66,8 @@ const LIST_ARCHIVE_OPERATION: ArchiveWorkspacePasswordRetryOperation = "listArch
 const VISIBLE_PAGE_LIMIT = 200;
 const MAX_TREE_SUMMARY_ENTRIES = 2_048;
 
+type BrowseIntent = Readonly<{ parentPath: string; query: string | null }>;
+
 function requestWithPassword(archivePath: string, password: string | undefined): ListArchiveRequest {
   return { archivePath, ...(password ? { password } : {}) };
 }
@@ -66,6 +77,7 @@ export function createArchiveLoadController(options: ArchiveLoadControllerOption
     sessionId: string;
     revision: string;
     archivePath: string;
+    searchSupported: boolean;
     entryCount: number;
     totalSize: number | null;
     parentPath: string;
@@ -76,6 +88,7 @@ export function createArchiveLoadController(options: ArchiveLoadControllerOption
     query: string | null;
   } | null = null;
   let generation = 0;
+  let pendingBrowse: BrowseIntent | null = null;
   let pageRequestId = 0;
   let lastRenderedPageSignature: string | null = null;
 
@@ -95,30 +108,36 @@ export function createArchiveLoadController(options: ArchiveLoadControllerOption
     previousCursors: readonly (string | null)[] = [],
     query: string | null = null,
     renderUnchanged = true,
+    expectedBrowse?: BrowseIntent,
   ): Promise<ArchiveChildrenPageDto | null> {
     const session = active;
     if (!session) return null;
     const requestId = ++pageRequestId;
     const sort = options.workspace.getSnapshot().view.sort;
-    const page = await (query === null ? options.getArchiveChildren({
-      sessionId: session.sessionId,
-      parentPath,
-      ...(cursor ? { cursor } : {}),
-      limit: VISIBLE_PAGE_LIMIT,
-      sortKey: sort.key,
-      sortAscending: sort.ascending,
-    }) : options.searchArchiveIndex({
-      sessionId: session.sessionId,
-      query,
-      ...(cursor ? { cursor } : {}),
-      limit: VISIBLE_PAGE_LIMIT,
-      sortKey: sort.key,
-      sortAscending: sort.ascending,
-    }));
-    if (requestId !== pageRequestId || expectedGeneration !== generation || active?.sessionId !== page.sessionId) return null;
+    const stillCurrent = () => requestId === pageRequestId
+      && expectedGeneration === generation
+      && active?.sessionId === session.sessionId
+      && (!expectedBrowse || pendingBrowse === expectedBrowse);
+    let page: ArchiveChildrenPageDto;
+    try {
+      const paging = {
+        sessionId: session.sessionId,
+        ...(cursor ? { cursor } : {}),
+        limit: VISIBLE_PAGE_LIMIT,
+        sortKey: sort.key,
+        sortAscending: sort.ascending,
+      };
+      page = query === null
+        ? await options.getArchiveChildren({ ...paging, parentPath })
+        : await options.searchArchiveIndex({ ...paging, query });
+    } catch (error) {
+      if (!stillCurrent()) return null;
+      throw error;
+    }
+    if (!stillCurrent() || page.sessionId !== session.sessionId) return null;
     active = {
       ...session,
-      parentPath: page.parentPath,
+      parentPath,
       cursor,
       nextCursor: page.nextCursor ?? null,
       previousCursors,
@@ -156,129 +175,141 @@ export function createArchiveLoadController(options: ArchiveLoadControllerOption
   }
 
   async function loadArchive(request: ListArchiveRequest, loadOptions: ArchiveLoadOptions = {}): Promise<void> {
-    let password = request.password?.trim();
+    let password = request.password;
     const preserveState = loadOptions.preserveState ?? false;
-    const preservedFolder = preserveState ? options.workspace.getSnapshot().view.currentFolder : "";
+    const view = options.workspace.getSnapshot().view;
+    const requestGeneration = ++generation;
+    const currentBrowse = {
+      parentPath: view.currentFolder,
+      query: view.flatView || view.searchQuery ? active?.query ?? null : null,
+    };
+    pendingBrowse = preserveState ? pendingBrowse ?? currentBrowse : { parentPath: "", query: null };
     options.enterExtractWorkspace();
 
-    while (true) {
-      const requestGeneration = ++generation;
-      await closeActive();
-      lastRenderedPageSignature = null;
-      options.renderLoading(options.workspace.beginLoading({
-        archivePath: request.archivePath,
-        preserveListing: preserveState,
-        tableColumns: options.resolveDefaultTableColumns(request.archivePath),
-      }));
+    try {
+      while (requestGeneration === generation) {
+        await closeActive();
+        if (requestGeneration !== generation) return;
+        lastRenderedPageSignature = null;
+        options.renderLoading(options.workspace.beginLoading({
+          archivePath: request.archivePath,
+          preserveListing: preserveState,
+          tableColumns: options.resolveDefaultTableColumns(request.archivePath),
+        }));
 
-      try {
-        const started = await options.startArchiveIndex(requestWithPassword(request.archivePath, password));
-        if (requestGeneration !== generation) {
-          await options.closeArchiveIndex({ sessionId: started.sessionId }).catch(() => undefined);
-          return;
-        }
-        active = {
-          sessionId: started.sessionId,
-          revision: started.snapshot.revision,
-          archivePath: started.snapshot.archivePath,
-          entryCount: started.snapshot.discoveredEntries,
-          totalSize: null,
-          parentPath: "",
-          cursor: null,
-          nextCursor: null,
-          previousCursors: [],
-          pageNumber: 1,
-          query: null,
-        };
-        let terminal = started.snapshot;
-        while (terminal.status === "indexing") {
-          terminal = await options.waitArchiveIndex({
-            sessionId: started.sessionId,
-            afterRevision: terminal.revision,
-          });
-          if (requestGeneration !== generation || active?.sessionId !== terminal.sessionId) return;
+        try {
+          const started = await options.startArchiveIndex(requestWithPassword(request.archivePath, password));
+          if (requestGeneration !== generation) {
+            await options.closeArchiveIndex({ sessionId: started.sessionId }).catch(() => undefined);
+            return;
+          }
+          let terminal = started.snapshot;
           active = {
-            sessionId: terminal.sessionId,
+            sessionId: started.sessionId,
             revision: terminal.revision,
             archivePath: terminal.archivePath,
+            searchSupported: started.snapshot.format !== "tzap",
             entryCount: terminal.discoveredEntries,
-            totalSize: terminal.discoveredBytes ?? null,
-            parentPath: preservedFolder,
+            totalSize: null,
+            parentPath: "",
             cursor: null,
             nextCursor: null,
             previousCursors: [],
             pageNumber: 1,
             query: null,
           };
-          if (terminal.status === "indexing" && terminal.discoveredEntries > 0) {
-            await acceptFolder(
-              preservedFolder,
-              requestGeneration,
-              null,
-              1,
-              [],
-              null,
-              false,
-            );
+          if (!active.searchSupported && pendingBrowse && pendingBrowse.query !== null) {
+            pendingBrowse = { parentPath: pendingBrowse.parentPath, query: null };
+            options.renderCapability(options.workspace.clearSearch());
           }
-        }
-        if (requestGeneration !== generation || active?.sessionId !== terminal.sessionId) return;
-        if (terminal.status === "failed" || terminal.status === "cancelled") {
-          throw terminal.latestFailure ?? new Error("Archive indexing failed.");
-        }
-        active = {
-          sessionId: terminal.sessionId,
-          revision: terminal.revision,
-          archivePath: terminal.archivePath,
-          entryCount: terminal.finalEntryCount ?? terminal.discoveredEntries,
-          totalSize: terminal.finalTotalBytes ?? null,
-          parentPath: preservedFolder,
-          cursor: null,
-          nextCursor: null,
-          previousCursors: [],
-          pageNumber: 1,
-          query: null,
-        };
-        const initialPage = await acceptFolder(preservedFolder, requestGeneration);
-        if ((terminal.finalEntryCount ?? 0) === 0 && initialPage?.childCount === 0) {
-          options.renderPage(options.workspace.setBrowseState("empty"));
-        }
-        return;
-      } catch (error) {
-        if (requestGeneration !== generation) return;
-        const commandError = options.toCommandError(error);
-        const retry = options.workspace.requestPasswordRetry({ operation: LIST_ARCHIVE_OPERATION, error: commandError });
-        if (!retry) {
-          options.renderLoadError(
-            options.workspace.loadFailed(commandError ?? { kind: "unknown" }),
-            commandError ? options.loadErrorMessage(commandError, { includeHint: true }) : options.failedListMessage(),
-          );
+          options.renderCapability(options.workspace.setSearchSupported(active.searchSupported));
+          while (terminal.status === "indexing") {
+            terminal = await options.waitArchiveIndex({
+              sessionId: started.sessionId,
+              afterRevision: terminal.revision,
+            });
+            if (requestGeneration !== generation || active?.sessionId !== terminal.sessionId) return;
+            active = {
+              ...active,
+              revision: terminal.revision,
+              entryCount: terminal.discoveredEntries,
+              totalSize: terminal.discoveredBytes ?? null,
+            };
+            const intent: BrowseIntent | null = pendingBrowse;
+            if (intent && intent.query === null && terminal.status === "indexing" && terminal.discoveredEntries > 0) {
+              await acceptFolder(intent.parentPath, requestGeneration, null, 1, [], null, false, intent);
+            }
+          }
+          if (requestGeneration !== generation || active?.sessionId !== terminal.sessionId) return;
+          if (terminal.status === "failed" || terminal.status === "cancelled") {
+            throw terminal.latestFailure ?? new Error("Archive indexing failed.");
+          }
+          active = {
+            ...active,
+            revision: terminal.revision,
+            entryCount: terminal.finalEntryCount ?? terminal.discoveredEntries,
+            totalSize: terminal.finalTotalBytes ?? null,
+          };
+          while (requestGeneration === generation && pendingBrowse) {
+            const intent: BrowseIntent | null = pendingBrowse;
+            const page = await acceptFolder(intent.parentPath, requestGeneration, null, 1, [], intent.query, true, intent);
+            if (requestGeneration !== generation) return;
+            if (intent !== pendingBrowse) continue;
+            if (intent.query === null && (terminal.finalEntryCount ?? 0) === 0 && page?.childCount === 0) {
+              options.renderPage(options.workspace.setBrowseState("empty"));
+            }
+            return;
+          }
           return;
+        } catch (error) {
+          if (requestGeneration !== generation) return;
+          const commandError = options.toCommandError(error);
+          const retry = options.workspace.requestPasswordRetry({ operation: LIST_ARCHIVE_OPERATION, error: commandError });
+          if (!retry) {
+            options.renderLoadError(
+              options.workspace.loadFailed(commandError ?? { kind: "unknown" }),
+              commandError ? options.loadErrorMessage(commandError, { includeHint: true }) : options.failedListMessage(),
+            );
+            return;
+          }
+          await closeActive();
+          if (requestGeneration !== generation) return;
+          const nextPassword = options.promptForPasswordRetry(retry);
+          if (!nextPassword) {
+            options.renderLoadError(
+              options.workspace.loadFailed(commandError ?? { kind: "unknown" }),
+              commandError?.message ?? options.failedListMessage(),
+            );
+            return;
+          }
+          password = nextPassword;
         }
-        await closeActive();
-        const nextPassword = options.promptForPasswordRetry(retry);
-        if (!nextPassword) {
-          options.renderLoadError(
-            options.workspace.loadFailed(commandError ?? { kind: "unknown" }),
-            commandError?.message ?? options.failedListMessage(),
-          );
-          return;
-        }
-        password = nextPassword;
       }
+    } finally {
+      if (requestGeneration === generation) pendingBrowse = null;
     }
+  }
+
+  async function browse(intent: BrowseIntent): Promise<void> {
+    if (pendingBrowse) {
+      pendingBrowse = intent;
+      return;
+    }
+    await acceptFolder(intent.parentPath, generation, null, 1, [], intent.query);
   }
 
   return {
     loadArchive,
-    async loadFolder(parentPath) {
-      await acceptFolder(parentPath, generation);
-    },
-    async loadSearch(query) {
-      const session = active;
-      if (session) {
-        await acceptFolder(session.parentPath, generation, null, 1, [], query);
+    loadFolder: (parentPath) => browse({ parentPath, query: null }),
+    loadSearch(query) {
+      if (active && !active.searchSupported) {
+        options.renderPage(options.workspace.clearSearch());
+        return Promise.resolve();
       }
+      return browse({
+        parentPath: pendingBrowse?.parentPath ?? active?.parentPath ?? "",
+        query,
+      });
     },
     async loadTreeFolder(parentPath) {
       const session = active;
@@ -301,7 +332,7 @@ export function createArchiveLoadController(options: ArchiveLoadControllerOption
     },
     async loadNextPage() {
       const session = active;
-      if (!session?.nextCursor) return;
+      if (pendingBrowse || !session?.nextCursor) return;
       await acceptFolder(
         session.parentPath,
         generation,
@@ -313,7 +344,7 @@ export function createArchiveLoadController(options: ArchiveLoadControllerOption
     },
     async loadPreviousPage() {
       const session = active;
-      if (!session || session.previousCursors.length === 0) return;
+      if (pendingBrowse || !session || session.previousCursors.length === 0) return;
       const previousCursors = [...session.previousCursors];
       const cursor = previousCursors.pop() ?? null;
       await acceptFolder(
@@ -327,6 +358,7 @@ export function createArchiveLoadController(options: ArchiveLoadControllerOption
     },
     async close() {
       generation += 1;
+      pendingBrowse = null;
       await closeActive();
     },
   };

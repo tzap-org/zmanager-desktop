@@ -188,7 +188,7 @@ describe("preferences helpers", () => {
       },
       volumeSizePresets: DEFAULT_APP_PREFERENCES.volumeSizePresets,
       defaultOutputLocation: "customFolder",
-      customOutputFolderPath: "C:/Archives",
+      customOutputFolderPath: " C:/Archives ",
       customExtractFolderPath: "",
       defaultExtractionBehavior: "extractToFolder",
       defaultExtractPathMode: "current",
@@ -210,7 +210,7 @@ describe("preferences helpers", () => {
       flatViewDefault: true,
       tableSortKey: "size",
       tableSortAscending: false,
-      tzapEnvironment: "prod",
+      tzapEnvironment: resolveTzapEnvironment(undefined),
       lanShareAlias: DEFAULT_APP_PREFERENCES.lanShareAlias,
       lanShareEnableReceiving: DEFAULT_APP_PREFERENCES.lanShareEnableReceiving,
       lanShareReceiveFolderPath: DEFAULT_APP_PREFERENCES.lanShareReceiveFolderPath,
@@ -262,7 +262,7 @@ describe("preferences helpers", () => {
           },
         },
         defaultOutputLocation: "sourceFolder",
-        customOutputFolderPath: "   ",
+        customOutputFolderPath: "",
         defaultExtractionBehavior: "extractHere",
         previewCleanupPolicy: "whenAppCloses",
         showParentFolderItem: false,
@@ -326,7 +326,7 @@ describe("preferences helpers", () => {
     });
   });
 
-  it("normalizes patches and resolves default create directories", () => {
+  it("preserves literal folder paths in patches and resolves default create directories", () => {
     const preferences = preferencesWithPatch(DEFAULT_APP_PREFERENCES, {
       defaultOutputLocation: "customFolder",
       customOutputFolderPath: " /tmp/archives ",
@@ -344,7 +344,7 @@ describe("preferences helpers", () => {
       },
     });
 
-    expect(preferences.customOutputFolderPath).toBe("/tmp/archives");
+    expect(preferences.customOutputFolderPath).toBe(" /tmp/archives ");
     expect(createDefaultsForFormat(preferences, "zip")).toEqual({
       cleanSource: false,
       respectGitignore: false,
@@ -357,11 +357,11 @@ describe("preferences helpers", () => {
       promptForPassword: true,
       zipCompression: "deflate",
     });
-    expect(defaultCreateDirectory(preferences)).toBe("/tmp/archives");
+    expect(defaultCreateDirectory(preferences)).toBe(" /tmp/archives ");
     expect(defaultCreateDirectory(DEFAULT_APP_PREFERENCES)).toBeNull();
   });
 
-  it("normalizes patches from dialog saves", () => {
+  it("preserves folder paths from dialog saves", () => {
     const dialogPreferences: AppPreferences = {
       ...DEFAULT_APP_PREFERENCES,
       customOutputFolderPath: " /tmp/dialog-output ",
@@ -369,7 +369,7 @@ describe("preferences helpers", () => {
 
     const preferences = preferencesWithPatch(DEFAULT_APP_PREFERENCES, dialogPreferences);
 
-    expect(preferences.customOutputFolderPath).toBe("/tmp/dialog-output");
+    expect(preferences.customOutputFolderPath).toBe(" /tmp/dialog-output ");
   });
 
   it("treats zero volume defaults as no split", () => {
@@ -446,7 +446,7 @@ describe("preferences helpers", () => {
     expect(PREFERENCE_KEYS.locale).toBe("zmanager.locale");
   });
 
-  it("round-trips LAN Sharing preferences and trims the receive folder path", () => {
+  it("round-trips LAN Sharing preferences without changing the receive folder path", () => {
     const storage = memoryStorage();
 
     saveAppPreferences(
@@ -462,30 +462,30 @@ describe("preferences helpers", () => {
 
     expect(storage.values.get(PREFERENCE_KEYS.lanShareAlias)).toBe("Frank's Desktop");
     expect(storage.values.get(PREFERENCE_KEYS.lanShareEnableReceiving)).toBe("false");
-    expect(storage.values.get(PREFERENCE_KEYS.lanShareReceiveFolderPath)).toBe("/tmp/lan-received");
+    expect(storage.values.get(PREFERENCE_KEYS.lanShareReceiveFolderPath)).toBe("  /tmp/lan-received  ");
     expect(storage.values.get(PREFERENCE_KEYS.lanShareAutoExtract)).toBe("false");
 
     const loaded = loadAppPreferences(storage);
     expect(loaded.lanShareAlias).toBe("Frank's Desktop");
     expect(loaded.lanShareEnableReceiving).toBe(false);
-    expect(loaded.lanShareReceiveFolderPath).toBe("/tmp/lan-received");
+    expect(loaded.lanShareReceiveFolderPath).toBe("  /tmp/lan-received  ");
     expect(loaded.lanShareAutoExtract).toBe(false);
   });
 
-  it("removes the LAN Sharing receive folder key when blank, like the other custom folder paths", () => {
+  it("removes the LAN Sharing receive folder key when empty, like the other custom folder paths", () => {
     const storage = memoryStorage({ [PREFERENCE_KEYS.lanShareReceiveFolderPath]: "/tmp/old-receive-folder" });
 
-    saveAppPreferences({ ...DEFAULT_APP_PREFERENCES, lanShareReceiveFolderPath: "   " }, storage);
+    saveAppPreferences({ ...DEFAULT_APP_PREFERENCES, lanShareReceiveFolderPath: "" }, storage);
 
     expect(storage.values.has(PREFERENCE_KEYS.lanShareReceiveFolderPath)).toBe(false);
     expect(loadAppPreferences(storage).lanShareReceiveFolderPath).toBe("");
   });
 
-  it("trims the LAN Sharing receive folder path when patched", () => {
+  it("preserves the LAN Sharing receive folder path when patched", () => {
     const preferences = preferencesWithPatch(DEFAULT_APP_PREFERENCES, {
       lanShareReceiveFolderPath: "  /tmp/patched-lan-folder  ",
     });
 
-    expect(preferences.lanShareReceiveFolderPath).toBe("/tmp/patched-lan-folder");
+    expect(preferences.lanShareReceiveFolderPath).toBe("  /tmp/patched-lan-folder  ");
   });
 });

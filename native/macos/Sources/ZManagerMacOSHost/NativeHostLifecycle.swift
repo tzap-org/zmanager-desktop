@@ -145,20 +145,38 @@ final class NativeHostLifecycle: NSObject {
         }
     }
 
-    @objc private func handleOpenDocuments(
+    @objc func handleOpenDocuments(
         _ event: NSAppleEventDescriptor,
         withReplyEvent _: NSAppleEventDescriptor
     ) {
         guard let descriptor = event.paramDescriptor(forKeyword: AEKeyword(keyDirectObject)) else { return }
-        var paths: [String] = []
-        if descriptor.numberOfItems > 0 {
-            for index in 1 ... descriptor.numberOfItems {
-                if let value = descriptor.atIndex(index)?.stringValue { paths.append(value) }
-            }
-        } else if let value = descriptor.stringValue {
-            paths.append(value)
-        }
+        let count = min(descriptor.numberOfItems, 1_024)
+        let paths = count > 0
+            ? (1 ... count).compactMap { descriptor.atIndex($0).flatMap(openDocumentPath) }
+            : openDocumentPath(descriptor).map { [$0] } ?? []
         emitOpenPaths(paths)
+    }
+
+    private func openDocumentPath(_ descriptor: NSAppleEventDescriptor) -> String? {
+        switch descriptor.descriptorType {
+        case DescType(typeFileURL), DescType(typeAlias), DescType(typeFSRef):
+            return descriptor.fileURLValue.flatMap(localFilePath)
+        default:
+            break
+        }
+        guard let value = descriptor.stringValue else { return nil }
+        if value.lowercased().hasPrefix("file:") {
+            return URL(string: value).flatMap(localFilePath)
+        }
+        return value
+    }
+
+    private func localFilePath(_ url: URL) -> String? {
+        guard url.isFileURL, url.path.hasPrefix("/") else { return nil }
+        if let host = url.host, !host.isEmpty, host.lowercased() != "localhost" {
+            return nil
+        }
+        return url.path
     }
 
     @objc private func handleReopen(_: NSAppleEventDescriptor, withReplyEvent _: NSAppleEventDescriptor) {

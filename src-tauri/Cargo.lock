@@ -8810,6 +8810,7 @@ dependencies = [
  "gtk",
  "keyring",
  "libc",
+ "localsend-rs",
  "openssl",
  "png",
  "reqwest",

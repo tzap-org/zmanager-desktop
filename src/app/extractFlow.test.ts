@@ -111,7 +111,7 @@ describe("extract flow helpers", () => {
 
   it("resolves explicit dialog input into request-ready destination and strip depth", () => {
     const resolved = resolveExtractStartInput({
-      destinationBasePath: " C:/tmp/out ",
+      destinationBasePath: "/tmp/out ",
       useSubfolder: true,
       subfolder: "review",
       pathMode: "current",
@@ -132,7 +132,7 @@ describe("extract flow helpers", () => {
     });
 
     expect(resolved).toEqual({
-      destination: "C:/tmp/out/review",
+      destination: "/tmp/out /review",
       destinationValid: true,
       overwrite: "ask",
       stripComponents: 2,
@@ -147,7 +147,7 @@ describe("extract flow helpers", () => {
 
   it("rejects empty base destinations before subfolder joining", () => {
     const resolved = resolveExtractStartInput({
-      destinationBasePath: " ",
+      destinationBasePath: "",
       useSubfolder: true,
       subfolder: "ignored",
       pathMode: "full",

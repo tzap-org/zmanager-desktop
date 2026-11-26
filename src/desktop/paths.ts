@@ -11,19 +11,18 @@ function toWindowsSeparators(path: string): string {
 }
 
 export function normalizeDroppedPath(rawPath: string): string {
-  const trimmed = rawPath.trim();
-  if (!trimmed) {
+  if (!rawPath) {
     return "";
   }
 
-  if (!trimmed.startsWith("file://")) {
-    return trimmed;
+  if (!rawPath.startsWith("file://")) {
+    return rawPath;
   }
 
   try {
-    const url = new URL(trimmed);
+    const url = new URL(rawPath);
     if (url.protocol !== "file:") {
-      return trimmed;
+      return rawPath;
     }
 
     const decodedPath = decodeFileUrlPath(url);
@@ -37,13 +36,12 @@ export function normalizeDroppedPath(rawPath: string): string {
 
     return decodedPath;
   } catch {
-    return trimmed;
+    return rawPath;
   }
 }
 
 export function normalizeDroppedPaths(paths: readonly string[]): string[] {
   return paths
     .map(normalizeDroppedPath)
-    .map((path) => path.trim())
     .filter(Boolean);
 }

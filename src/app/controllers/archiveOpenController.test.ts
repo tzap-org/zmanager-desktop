@@ -76,13 +76,13 @@ describe("archive open controller", () => {
   it("publishes extract destination history only when the store records a value", () => {
     const harness = createHarness();
 
-    harness.controller.recordExtractDestinationHistory(" C:/out ");
-    harness.controller.recordExtractDestinationHistory("   ");
+    harness.controller.recordExtractDestinationHistory("C:/out ");
+    harness.controller.recordExtractDestinationHistory("");
 
     expect(harness.publishPathHistorySnapshot).toHaveBeenCalledTimes(1);
     expect(harness.publishPathHistorySnapshot).toHaveBeenCalledWith(
       expect.objectContaining({
-        extractDestinationHistory: ["C:/out"],
+        extractDestinationHistory: ["C:/out "],
       }),
     );
   });
@@ -90,13 +90,13 @@ describe("archive open controller", () => {
   it("publishes create destination history only when the store records a value", () => {
     const harness = createHarness();
 
-    harness.controller.recordCreateDestinationHistory(" C:/created/app.zip ");
+    harness.controller.recordCreateDestinationHistory("C:/created/app.zip ");
     harness.controller.recordCreateDestinationHistory("");
 
     expect(harness.publishPathHistorySnapshot).toHaveBeenCalledTimes(1);
     expect(harness.publishPathHistorySnapshot).toHaveBeenCalledWith(
       expect.objectContaining({
-        createDestinationHistory: ["C:/created/app.zip"],
+        createDestinationHistory: ["C:/created/app.zip "],
       }),
     );
   });
@@ -106,7 +106,7 @@ describe("archive open controller", () => {
 
     harness.controller.recordRecentArchiveHistory(" C:/archives/app.zip ");
 
-    expect(harness.pathHistoryStore.getSnapshot().recentArchiveHistory).toEqual(["C:/archives/app.zip"]);
+    expect(harness.pathHistoryStore.getSnapshot().recentArchiveHistory).toEqual([" C:/archives/app.zip "]);
     expect(harness.publishPathHistorySnapshot).not.toHaveBeenCalled();
   });
 
@@ -133,23 +133,23 @@ describe("archive open controller", () => {
       "current: C:/archives/app.zip ",
       "load: C:/archives/app.zip ",
     ]);
-    expect(harness.pathHistoryStore.getSnapshot().recentArchiveHistory).toEqual(["C:/archives/app.zip"]);
+    expect(harness.pathHistoryStore.getSnapshot().recentArchiveHistory).toEqual([" C:/archives/app.zip "]);
     expect(harness.loadArchive).toHaveBeenCalledWith({ archivePath: " C:/archives/app.zip " });
   });
 
-  it("trims explicit paths and noops on empty paths", async () => {
+  it("preserves explicit paths and noops on empty paths", async () => {
     const harness = createHarness();
 
-    await harness.controller.openArchiveFromPath("   ");
-    await harness.controller.openArchiveFromPath("  C:/archives/from-input.7z  ");
+    await harness.controller.openArchiveFromPath("");
+    await harness.controller.openArchiveFromPath("/tmp/from-input.7z ");
 
     expect(harness.loadArchive).toHaveBeenCalledTimes(1);
     expect(harness.calls).toEqual([
       "clear-preview",
-      "current:C:/archives/from-input.7z",
-      "load:C:/archives/from-input.7z",
+      "current:/tmp/from-input.7z ",
+      "load:/tmp/from-input.7z ",
     ]);
-    expect(harness.pathHistoryStore.getSnapshot().recentArchiveHistory).toEqual(["C:/archives/from-input.7z"]);
+    expect(harness.pathHistoryStore.getSnapshot().recentArchiveHistory).toEqual(["/tmp/from-input.7z "]);
   });
 
   it("reports unsupported status when clipboard reads are unavailable", async () => {
@@ -164,9 +164,9 @@ describe("archive open controller", () => {
     expect(harness.loadArchive).not.toHaveBeenCalled();
   });
 
-  it("reports no archive open when clipboard text is empty after trimming quotes", async () => {
+  it("reports no archive open when clipboard text contains only paired empty quotes", async () => {
     const harness = createHarness();
-    harness.readClipboardText.mockResolvedValueOnce("  ''  ");
+    harness.readClipboardText.mockResolvedValueOnce("''");
 
     await harness.controller.openArchiveFromClipboard();
 
@@ -187,6 +187,19 @@ describe("archive open controller", () => {
     ]);
     expect(harness.pathHistoryStore.getSnapshot().recentArchiveHistory).toEqual([
       "C:/archives/from-clipboard.zip",
+    ]);
+  });
+
+  it("preserves meaningful whitespace in an unquoted clipboard path", async () => {
+    const harness = createHarness();
+    harness.readClipboardText.mockResolvedValueOnce("/tmp/archive.zip ");
+
+    await harness.controller.openArchiveFromClipboard();
+
+    expect(harness.calls).toEqual([
+      "clear-preview",
+      "current:/tmp/archive.zip ",
+      "load:/tmp/archive.zip ",
     ]);
   });
 

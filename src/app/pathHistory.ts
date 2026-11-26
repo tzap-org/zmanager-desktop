@@ -37,12 +37,11 @@ export function normalizePathHistory(entries: PathHistoryEntries): string[] {
   const seen = new Set<string>();
 
   for (const entry of entries) {
-    const normalizedEntry = entry.trim();
-    if (!normalizedEntry || seen.has(normalizedEntry)) {
+    if (!entry || seen.has(entry)) {
       continue;
     }
-    seen.add(normalizedEntry);
-    normalizedEntries.push(normalizedEntry);
+    seen.add(entry);
+    normalizedEntries.push(entry);
   }
 
   return normalizedEntries;
@@ -57,13 +56,12 @@ export function recordPathHistoryEntry(
   recordedPath: string,
   maxEntries: number,
 ): string[] | null {
-  const normalizedPath = recordedPath.trim();
-  if (!normalizedPath) {
+  if (!recordedPath) {
     return null;
   }
 
   return setPathHistoryEntries(
-    [normalizedPath, ...currentEntries.filter((entry) => entry !== normalizedPath)],
+    [recordedPath, ...currentEntries.filter((entry) => entry !== recordedPath)],
     maxEntries,
   );
 }

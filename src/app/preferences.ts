@@ -367,11 +367,7 @@ function loadCreateFormatDefaults(value: string | null): CreateFormatDefaultsMap
 }
 
 function cleanPath(value: string | null): string {
-  return value?.trim() ?? "";
-}
-
-function storedString(value: unknown, fallback: string): string {
-  return typeof value === "string" ? value.trim() : fallback;
+  return value ?? "";
 }
 
 function loadVolumeSizePresets(value: string | null): number[] {
@@ -549,19 +545,19 @@ export function saveAppPreferences(preferences: AppPreferences, storage = resolv
   storage.setItem(PREFERENCE_KEYS.lanShareEnableReceiving, String(preferences.lanShareEnableReceiving));
   storage.setItem(PREFERENCE_KEYS.lanShareAutoExtract, String(preferences.lanShareAutoExtract));
 
-  const customOutputFolderPath = preferences.customOutputFolderPath.trim();
+  const customOutputFolderPath = preferences.customOutputFolderPath;
   if (customOutputFolderPath) {
     storage.setItem(PREFERENCE_KEYS.customOutputFolderPath, customOutputFolderPath);
   } else {
     storage.removeItem(PREFERENCE_KEYS.customOutputFolderPath);
   }
-  const customExtractFolderPath = preferences.customExtractFolderPath.trim();
+  const customExtractFolderPath = preferences.customExtractFolderPath;
   if (customExtractFolderPath) {
     storage.setItem(PREFERENCE_KEYS.customExtractFolderPath, customExtractFolderPath);
   } else {
     storage.removeItem(PREFERENCE_KEYS.customExtractFolderPath);
   }
-  const lanShareReceiveFolderPath = preferences.lanShareReceiveFolderPath.trim();
+  const lanShareReceiveFolderPath = preferences.lanShareReceiveFolderPath;
   if (lanShareReceiveFolderPath) {
     storage.setItem(PREFERENCE_KEYS.lanShareReceiveFolderPath, lanShareReceiveFolderPath);
   } else {
@@ -586,15 +582,15 @@ export function preferencesWithPatch(
     })(),
     customOutputFolderPath:
       patch.customOutputFolderPath !== undefined
-        ? patch.customOutputFolderPath.trim()
+        ? patch.customOutputFolderPath
         : preferences.customOutputFolderPath,
     customExtractFolderPath:
       patch.customExtractFolderPath !== undefined
-        ? patch.customExtractFolderPath.trim()
+        ? patch.customExtractFolderPath
         : preferences.customExtractFolderPath,
     lanShareReceiveFolderPath:
       patch.lanShareReceiveFolderPath !== undefined
-        ? patch.lanShareReceiveFolderPath.trim()
+        ? patch.lanShareReceiveFolderPath
         : preferences.lanShareReceiveFolderPath,
     defaultTzapRestorePolicy: isOneOf(
       TZAP_RESTORE_POLICIES,
@@ -681,5 +677,5 @@ export function defaultCreateDirectory(preferences: AppPreferences): string | nu
     return null;
   }
 
-  return preferences.customOutputFolderPath.trim() || null;
+  return preferences.customOutputFolderPath || null;
 }

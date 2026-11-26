@@ -447,16 +447,15 @@ fn parse_quick_action_args(args: impl IntoIterator<Item = OsString>) -> ParseOut
 }
 
 fn read_quick_action_request_file(request_file_path: &str) -> Result<QuickActionRequestDto, QuickActionError> {
-    let trimmed_path = request_file_path.trim();
-    if trimmed_path.is_empty() {
+    if request_file_path.is_empty() {
         return Err(QuickActionError::invalid("--shell-action-request requires a file path"));
     }
-    if trimmed_path.contains("://") {
-        return Err(QuickActionError::invalid(format!("quick-action request path must be local: {trimmed_path}")));
+    if request_file_path.contains("://") {
+        return Err(QuickActionError::invalid(format!("quick-action request path must be local: {request_file_path}")));
     }
 
-    let content = fs::read(trimmed_path).map_err(|error| QuickActionError::invalid(format!("unable to read quick-action request: {error}")))?;
-    let _ = fs::remove_file(trimmed_path);
+    let content = fs::read(request_file_path).map_err(|error| QuickActionError::invalid(format!("unable to read quick-action request: {error}")))?;
+    let _ = fs::remove_file(request_file_path);
     if content.len() > MAX_SHELL_ACTION_REQUEST_BYTES {
         return Err(QuickActionError::invalid(format!("shell-action request exceeds the {} byte limit", MAX_SHELL_ACTION_REQUEST_BYTES)));
     }
@@ -561,12 +560,11 @@ fn normalize_local_paths(paths: Vec<String>) -> Result<Vec<String>, QuickActionE
     let mut normalized = Vec::new();
 
     for path in paths {
-        let path = path.trim();
         if path.is_empty() {
             continue;
         }
 
-        let path = normalize_local_path(path)?;
+        let path = normalize_local_path(&path)?;
         normalized.push(path);
     }
 

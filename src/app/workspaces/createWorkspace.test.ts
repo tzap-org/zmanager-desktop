@@ -240,25 +240,24 @@ describe("create workspace source state", () => {
     expect(Object.isFrozen(snapshot.options.readiness)).toBe(true);
   });
 
-  it("adds trimmed unique sources while preserving insertion order", () => {
+  it("adds literal unique sources while preserving insertion order", () => {
     const workspace = createCreateWorkspace();
 
     const result = workspace.addSources([
-      " C:/work/project ",
+      "/tmp/project ",
       "",
       "C:/work/photos",
       "C:/work/project",
       null,
       42,
-      "  ",
     ]);
 
     expect(result.changed).toBe(true);
-    expect(result.addedSources).toEqual(["C:/work/project", "C:/work/photos"]);
+    expect(result.addedSources).toEqual(["/tmp/project ", "C:/work/photos", "C:/work/project"]);
     expect(result.removedSources).toEqual([]);
-    expect(result.snapshot.sources).toEqual(["C:/work/project", "C:/work/photos"]);
+    expect(result.snapshot.sources).toEqual(["/tmp/project ", "C:/work/photos", "C:/work/project"]);
     expect(result.snapshot).toMatchObject({
-      sourceCount: 2,
+      sourceCount: 3,
       hasSources: true,
       isEmpty: false,
     });
@@ -268,7 +267,7 @@ describe("create workspace source state", () => {
     const workspace = createCreateWorkspace();
     workspace.addSources(["C:/work/project", "C:/work/photos"]);
 
-    const result = workspace.addSources([" C:/work/photos ", "C:/work/music"]);
+    const result = workspace.addSources(["C:/work/photos", "C:/work/music"]);
 
     expect(result.changed).toBe(true);
     expect(result.addedSources).toEqual(["C:/work/music"]);
@@ -283,7 +282,7 @@ describe("create workspace source state", () => {
     const workspace = createCreateWorkspace();
     workspace.addSources(["C:/work/project"]);
 
-    const result = workspace.addSources([" ", " C:/work/project "]);
+    const result = workspace.addSources(["", "C:/work/project"]);
 
     expect(result.changed).toBe(false);
     expect(result.addedSources).toEqual([]);
@@ -294,7 +293,7 @@ describe("create workspace source state", () => {
     const workspace = createCreateWorkspace();
     workspace.addSources(["C:/work/project", "C:/work/photos"]);
 
-    const result = workspace.setSources([" C:/work/music ", "C:/work/project", "C:/work/music"]);
+    const result = workspace.setSources(["C:/work/music", "C:/work/project", "C:/work/music"]);
 
     expect(result.changed).toBe(true);
     expect(result.addedSources).toEqual(["C:/work/music"]);
@@ -306,7 +305,7 @@ describe("create workspace source state", () => {
     const workspace = createCreateWorkspace();
     workspace.addSources(["C:/work/project", "C:/work/photos"]);
 
-    const result = workspace.setSources([" C:/work/project ", "C:/work/photos"]);
+    const result = workspace.setSources(["C:/work/project", "C:/work/photos"]);
 
     expect(result.changed).toBe(false);
     expect(result.addedSources).toEqual([]);
@@ -320,7 +319,7 @@ describe("create workspace source state", () => {
 
     const result = workspace.removeSources([
       "",
-      " C:/work/photos ",
+      "C:/work/photos",
       "C:/work/missing",
       null,
     ]);
@@ -530,7 +529,7 @@ describe("create workspace plan lifecycle", () => {
 
   it("builds serializable plan requests from sources and option input", () => {
     const workspace = createCreateWorkspace();
-    workspace.addSources([" C:/work/project ", "C:/work/photos"]);
+    workspace.addSources(["C:/work/project", "C:/work/photos"]);
 
     const result = workspace.beginPlan({
       cleanSource: true,
@@ -549,9 +548,9 @@ describe("create workspace plan lifecycle", () => {
       sources: ["C:/work/project", "C:/work/photos"],
       cleanSource: true,
       respectGitignore: false,
-      excludeNames: ["node_modules"],
-      excludeArchivePaths: ["project/tmp"],
-      includeArchivePaths: ["project/tmp/keep.txt"],
+      excludeNames: [" node_modules "],
+      excludeArchivePaths: [" project/tmp "],
+      includeArchivePaths: [" project/tmp/keep.txt "],
       followSymlinks: true,
     });
     expect(result.snapshot.plan).toMatchObject({
@@ -751,7 +750,7 @@ describe("create workspace plan navigation", () => {
       ["entry", "project/readme.md", "readme.md"],
     ]);
 
-    const nested = workspace.navigateToFolder(" project/src ");
+    const nested = workspace.navigateToFolder("project/src");
 
     expect(nested.accepted).toBe(true);
     expect(nested.snapshot.view.currentFolder).toBe("project/src");
@@ -980,7 +979,7 @@ describe("create workspace inclusion state", () => {
   it("excludes and re-includes a single planned file", () => {
     const workspace = readyWorkspace();
 
-    const excluded = workspace.setPathIncluded(" project/readme.md ", false);
+    const excluded = workspace.setPathIncluded("project/readme.md", false);
 
     expect(excluded.changed).toBe(true);
     expect(excluded.snapshot.inclusion.excludedArchivePaths).toEqual(["project/readme.md"]);
@@ -1608,7 +1607,7 @@ describe("create workspace start request", () => {
 
     const result = workspace.buildStartCreateRequest({
       password: " secret ",
-      passwordConfirm: "secret",
+      passwordConfirm: " secret ",
       destinationCollisionStrategy: "rename",
     });
 
@@ -1627,7 +1626,7 @@ describe("create workspace start request", () => {
       replaceExisting: true,
       destinationCollisionStrategy: "rename",
       preserveMetadata: false,
-      password: "secret",
+      password: " secret ",
       compressionLevel: 7,
       volumeSize: 4096,
       tzapRecoveryPercentage: 12,
@@ -1635,9 +1634,9 @@ describe("create workspace start request", () => {
       tzapCertificates: {
         signingSelection: {
           mode: "oneTimeCertificateAndKey",
-          certificatePath: "C:/certs/signer.pem",
+          certificatePath: " C:/certs/signer.pem ",
           privateKeyPath: "C:/certs/signer-key.pem",
-          chainPaths: ["C:/certs/intermediate-1.pem", "C:/certs/intermediate-2.pem"],
+          chainPaths: ["C:/certs/intermediate-1.pem", " C:/certs/intermediate-2.pem"],
         },
       },
       tzapBootstrapSidecar: false,
@@ -1806,7 +1805,7 @@ describe("create workspace start request", () => {
 
   it("builds quick create requests through the workspace helper", () => {
     const result = buildQuickCreateStartRequest({
-      sources: [" C:/work/project ", "C:/work/project", ""],
+      sources: ["C:/work/project", "C:/work/project", ""],
       destinationPath: "C:/out/project",
       format: "sevenZ",
       cleanSource: false,
@@ -1832,7 +1831,7 @@ describe("create workspace start request", () => {
       replaceExisting: true,
       destinationCollisionStrategy: "rename",
       preserveMetadata: false,
-      password: "secret",
+      password: " secret ",
       compressionLevel: 9,
       volumeSize: 2048,
       sevenZSolid: true,
@@ -1852,7 +1851,7 @@ describe("create workspace start request", () => {
     });
     expect(buildQuickCreateStartRequest({
       sources: ["C:/work/project"],
-      destinationPath: " ",
+      destinationPath: "",
       format: "zip",
       cleanSource: true,
       replaceExisting: false,

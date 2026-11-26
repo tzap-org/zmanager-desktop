@@ -18,33 +18,28 @@ fi
 
 sha256=$(sha256sum "$artifact_path" | awk '{print $1}')
 
-package_kind="deb"
-if [[ "$artifact_path" == *.rpm ]]; then
-  package_kind="rpm"
-fi
+case "$artifact_path" in
+  *.deb) package_kind=deb; inspector=dpkg-deb; inspector_args=(-c) ;;
+  *.rpm) package_kind=rpm; inspector=rpm; inspector_args=(-qlp) ;;
+  *) echo "Unsupported package type: $artifact_path" >&2; exit 1 ;;
+esac
 
-# Basic inspection
-inspection_status="pass"
-inspection_details="Artifact is present and readable."
+inspect_contents() {
+  # RPM can list file names from the header even with a truncated payload.
+  if [[ "$package_kind" == rpm ]]; then
+    rpm --checksig --nosignature "$artifact_path" || return
+  fi
+  "$inspector" "${inspector_args[@]}" "$artifact_path"
+}
 
-if [[ "$package_kind" == "deb" ]]; then
-  if command -v dpkg-deb >/dev/null 2>&1; then
-    if dpkg-deb -c "$artifact_path" >/dev/null 2>&1; then
-      inspection_details="dpkg-deb successfully read package contents."
-    else
-      inspection_status="fail"
-      inspection_details="dpkg-deb failed to read package contents."
-    fi
-  fi
-elif [[ "$package_kind" == "rpm" ]]; then
-  if command -v rpm >/dev/null 2>&1; then
-    if rpm -qlp "$artifact_path" >/dev/null 2>&1; then
-      inspection_details="rpm successfully read package contents."
-    else
-      inspection_status="fail"
-      inspection_details="rpm failed to read package contents."
-    fi
-  fi
+inspection_status="fail"
+if ! command -v "$inspector" >/dev/null 2>&1; then
+  inspection_details="$inspector is required to inspect package contents."
+elif inspect_contents >/dev/null; then
+  inspection_status="pass"
+  inspection_details="$inspector successfully read package contents."
+else
+  inspection_details="$inspector failed to read package contents."
 fi
 
 cat <<EOF
@@ -70,8 +65,8 @@ cat <<EOF
     "details": "$inspection_details"
   },
   "registration": {
-    "status": "pass",
-    "details": "MIME and desktop entries are handled by package manager during install."
+    "status": "not-applicable",
+    "details": "Registration is checked after installation."
   },
   "installedState": {},
   "exercisedScenarios": [],
@@ -79,3 +74,5 @@ cat <<EOF
   "testCommand": "inspect-linux-package.sh"
 }
 EOF
+
+[[ "$inspection_status" == pass ]]

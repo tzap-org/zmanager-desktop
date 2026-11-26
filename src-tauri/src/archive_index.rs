@@ -48,6 +48,7 @@ struct SessionRecord {
     password: Option<String>,
 }
 
+#[derive(Clone)]
 struct ArchiveIndex {
     entries: HashMap<String, ArchiveEntryDto>,
     children: HashMap<String, BTreeSet<String>>,
@@ -68,7 +69,7 @@ impl ArchiveIndexRegistry {
     }
 
     pub fn start(&self, request: StartArchiveIndexRequest) -> Result<ArchiveIndexStartResponseDto, CommandErrorDto> {
-        let archive_path = request.archive_path.trim().to_string();
+        let archive_path = request.archive_path;
         if archive_path.is_empty() {
             return Err(CommandErrorDto::invalid_request("archivePath cannot be empty"));
         }
@@ -85,7 +86,7 @@ impl ArchiveIndexRegistry {
                 Some("Check that the archive path exists and is accessible.".to_string()),
             ));
         }
-        let password = request.password.map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+        let password = request.password.filter(|value| !value.is_empty());
 
         let (session_id, snapshot, cancelled, index) = {
             let mut state = self.state.lock().unwrap_or_else(|error| error.into_inner());
@@ -226,13 +227,7 @@ impl ArchiveIndexRegistry {
                 let mut index = index_mutex.lock().unwrap_or_else(|e| e.into_inner());
                 // Double-checked locking to prevent TOCTOU race condition
                 if !index.loaded_directories.contains(&parent_path) {
-                    for entry in listing.entries {
-                        let _ = index.insert(entry);
-                    }
-                    index.loaded_directories.insert(parent_path.clone());
-                    // For an empty root directory that has no entries, we might not get any entries, but we still marked it loaded.
-                    // However, we must ensure it exists in `children` map so we don't get an empty set incorrectly.
-                    index.children.entry(parent_path.clone()).or_default();
+                    insert_directory_listing(&mut index, &parent_path, listing.entries)?;
                 }
             }
         }
@@ -348,13 +343,12 @@ impl ArchiveIndexRegistry {
     /// cancelled sessions are excluded so a superseded attempt cannot provide
     /// stale credentials to a later command.
     pub fn password_for_archive(&self, archive_path: &str) -> Option<String> {
-        let normalized_archive_path = archive_path.trim();
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         state
             .sessions
             .values()
             .filter(|record| {
-                record.snapshot.archive_path == normalized_archive_path
+                record.snapshot.archive_path == archive_path
                     && record.snapshot.status != ArchiveIndexStatusDto::Failed
                     && record.snapshot.status != ArchiveIndexStatusDto::Cancelled
             })
@@ -363,14 +357,13 @@ impl ArchiveIndexRegistry {
     }
 
     pub fn drag_entries(&self, archive_path: &str, entry_paths: &[String]) -> Result<Option<Vec<ArchiveEntryDto>>, CommandErrorDto> {
-        let normalized_archive_path = archive_path.trim();
-        let on_demand_archive = archive_browser::supports_on_demand_directories(normalized_archive_path);
+        let on_demand_archive = archive_browser::supports_on_demand_directories(archive_path);
         let state = self.state.lock().unwrap_or_else(|error| error.into_inner());
         let Some(record) = state
             .sessions
             .values()
             .filter(|record| {
-                record.snapshot.archive_path == normalized_archive_path
+                record.snapshot.archive_path == archive_path
                     && record.snapshot.status != ArchiveIndexStatusDto::Failed
                     && record.snapshot.status != ArchiveIndexStatusDto::Cancelled
             })
@@ -416,8 +409,7 @@ impl ArchiveIndexRegistry {
     }
 
     pub fn drag_all_entries(&self, archive_path: &str, excluded_entry_paths: &[String]) -> Result<Option<Vec<ArchiveEntryDto>>, CommandErrorDto> {
-        let normalized_archive_path = archive_path.trim();
-        if archive_browser::supports_on_demand_directories(normalized_archive_path) {
+        if archive_browser::supports_on_demand_directories(archive_path) {
             // On-demand sessions contain only the directories the user has
             // visited. Archive-wide drag must always enumerate the complete
             // archive instead of returning a partial cached result.
@@ -428,7 +420,7 @@ impl ArchiveIndexRegistry {
             .sessions
             .values()
             .filter(|record| {
-                record.snapshot.archive_path == normalized_archive_path
+                record.snapshot.archive_path == archive_path
                     && record.snapshot.status != ArchiveIndexStatusDto::Failed
                     && record.snapshot.status != ArchiveIndexStatusDto::Cancelled
             })
@@ -617,6 +609,20 @@ impl ArchiveIndex {
     fn statistics(&self) -> ArchiveIndexStatistics {
         ArchiveIndexStatistics { entry_count: self.entry_count, total_bytes: self.has_total.then_some(self.total_bytes) }
     }
+}
+
+fn insert_directory_listing(index: &mut ArchiveIndex, parent_path: &str, entries: Vec<BrowserEntry>) -> Result<(), CommandErrorDto> {
+    // Admission limits must not leave a partially cached directory that is
+    // subsequently reported as loaded. Publish only a fully admitted listing.
+    let mut updated = index.clone();
+    for entry in entries {
+        updated.insert(entry)?;
+    }
+    updated.loaded_directories.insert(parent_path.to_string());
+    // Preserve an explicit empty child set for valid but empty directories.
+    updated.children.entry(parent_path.to_string()).or_default();
+    *index = updated;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1388,7 +1394,8 @@ mod tests {
             },
         );
 
-        assert_eq!(registry.password_for_archive(" C:/archives/passworded.rar ").as_deref(), Some("live-password"));
+        assert_eq!(registry.password_for_archive("C:/archives/passworded.rar").as_deref(), Some("live-password"));
+        assert_eq!(registry.password_for_archive("C:/archives/passworded.rar "), None);
         assert_eq!(registry.password_for_archive("C:/archives/other.rar"), None);
     }
 
@@ -1512,6 +1519,23 @@ mod tests {
         metadata_limited.estimated_metadata_bytes = MAX_ARCHIVE_INDEX_METADATA_BYTES - 1;
         let metadata_error = metadata_limited.insert(entry("metadata.txt", BrowserEntryKind::File)).expect_err("metadata limit should reject the next entry");
         assert_eq!(metadata_error.code, "operation_failed");
+    }
+
+    #[test]
+    fn on_demand_directory_limit_failure_does_not_publish_partial_entries_or_loaded_state() {
+        let mut index = ArchiveIndex::new();
+        index.entry_count = MAX_ARCHIVE_INDEX_ENTRIES - 1;
+        let error = insert_directory_listing(
+            &mut index,
+            "large",
+            vec![entry("large/first.txt", BrowserEntryKind::File), entry("large/overflow.txt", BrowserEntryKind::File)],
+        )
+        .expect_err("the directory listing should exceed the bounded index");
+
+        assert_eq!(error.code, "operation_failed");
+        assert!(!index.loaded_directories.contains("large"));
+        assert!(!index.entries.contains_key("large/first.txt"));
+        assert_eq!(index.entry_count, MAX_ARCHIVE_INDEX_ENTRIES - 1);
     }
 
     #[tokio::test]

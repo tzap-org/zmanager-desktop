@@ -113,7 +113,7 @@ pub fn system_file_icons(request: SystemFileIconRequest) -> SystemFileIconRespon
 // Runs off the main thread: filesystem metadata and read_dir.
 #[tauri::command(async)]
 pub fn validate_directory(request: ValidateDirectoryRequest) -> ValidateDirectoryResponse {
-    let path = request.path.trim();
+    let path = &request.path;
     if path.is_empty() {
         return ValidateDirectoryResponse { exists: false, is_directory: false, accessible: false };
     }
@@ -406,24 +406,19 @@ fn start_create_internal_with_resolver(
     resolve_tzap: impl FnOnce() -> Result<Option<crate::account::ResolvedTzapCreateInputs>, CommandErrorDto> + Send + 'static,
 ) -> Result<StartJobResponseDto, CommandErrorDto> {
     let sources = normalize_non_empty_paths(&request.sources)?;
-    let requested_destination_path = ensure_non_empty_path(request.destination_path, "destinationPath")?.trim().to_string();
-    let destination_path = if !request.replace_existing || request.destination_collision_strategy == DestinationCollisionStrategyDto::Rename {
-        next_available_destination_file_path(&requested_destination_path)
-    } else {
-        requested_destination_path
-    };
+    let destination_path = ensure_non_empty_path(request.destination_path, "destinationPath")?;
+    let replace_destination = request.replace_existing && request.destination_collision_strategy != DestinationCollisionStrategyDto::Rename;
 
     if destination_path.ends_with('/') || destination_path.ends_with('\\') {
         return Err(CommandErrorDto::invalid_request("destinationPath must include a file name, not just a directory"));
     }
 
-    let destination_path = ensure_non_empty_path(destination_path, "destinationPath")?;
     if let Ok(metadata) = std::fs::metadata(&destination_path) {
-        if metadata.is_dir() {
+        if replace_destination && metadata.is_dir() {
             return Err(CommandErrorDto::invalid_request(format!("destinationPath must be a file path, not a directory: {destination_path}")));
         }
     } else {
-        let parent = Path::new(&destination_path).parent().unwrap_or(Path::new(""));
+        let parent = Path::new(&destination_path).parent().filter(|path| !path.as_os_str().is_empty()).unwrap_or(Path::new("."));
         if !parent.exists() {
             return Err(CommandErrorDto::not_found(
                 format!("destination directory does not exist: {destination_path}"),
@@ -451,7 +446,7 @@ fn start_create_internal_with_resolver(
         crate::dto::ArchiveFormatDto::AppleArchive => JobKindDto::AppleArchiveCreate,
     };
 
-    let password = request.password.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned);
+    let password = request.password.filter(|value| !value.is_empty());
     if request.volume_count.is_some_and(|value| value < 2) {
         return Err(CommandErrorDto::invalid_request("volumeCount must be at least 2 or omitted"));
     }
@@ -471,7 +466,7 @@ fn start_create_internal_with_resolver(
         }
         if let Some(crate::dto::TzapSigningSelectionDto::OneTimeCertificateAndKey { certificate_path, private_key_path, .. }) =
             certificates.signing_selection.as_ref()
-            && (certificate_path.trim().is_empty() || private_key_path.trim().is_empty())
+            && (certificate_path.is_empty() || private_key_path.is_empty())
         {
             return Err(CommandErrorDto::invalid_request("TZAP signing requires both a certificate and a matching private key"));
         }
@@ -494,19 +489,14 @@ fn start_create_internal_with_resolver(
         return Err(CommandErrorDto::invalid_request("volume-loss tolerance must be less than volumeCount"));
     }
 
-    let reservation = if request.replace_existing && request.destination_collision_strategy != DestinationCollisionStrategyDto::Rename {
-        destination_reservation::try_reserve(PathBuf::from(&destination_path)).ok_or_else(|| {
-            CommandErrorDto::new("destination_busy", "The destination is already being created", None::<String>, ErrorSeverityDto::Warning, true)
-        })?
+    let reservation = if replace_destination {
+        destination_reservation::try_reserve(PathBuf::from(&destination_path))
     } else {
-        let mut candidate = PathBuf::from(&destination_path);
-        loop {
-            if let Some(reservation) = destination_reservation::try_reserve(candidate.clone()) {
-                break reservation;
-            }
-            candidate = PathBuf::from(next_available_destination_file_path(&candidate.to_string_lossy()));
-        }
-    };
+        destination_file_candidates(&destination_path)
+            .filter_map(destination_reservation::try_reserve)
+            .find(|reservation| destination_file_is_available(reservation.path()))
+    }
+    .ok_or_else(|| CommandErrorDto::new("destination_busy", "No destination file name is available", None::<String>, ErrorSeverityDto::Warning, true))?;
     let destination_path = reservation.path().to_string_lossy().into_owned();
 
     let (accepted_job, token) = registry.try_accept_job(kind, crate::job_dto::AcceptedJobOriginDto::MainWindow).map_err(subscription_error)?;
@@ -1005,7 +995,7 @@ fn start_extract_internal_with_origin_and_spawner(
     if recipient_private_key.is_some() && !entry_paths.is_empty() {
         return Err(CommandErrorDto::invalid_request("Recipient-key extraction currently requires a whole-archive operation"));
     }
-    let password = request.password.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty());
+    let password = request.password.filter(|value| !value.is_empty());
     let format_kind = zmanager_core::archive_format::detect_archive_format(&archive_path);
     if recipient_private_key.is_some() && password.is_some() {
         return Err(CommandErrorDto::invalid_request("Choose either a recipient key or an archive password for extraction"));
@@ -1758,13 +1748,7 @@ pub fn preview_entry(
 ) -> Result<PreviewEntryResponse, CommandErrorDto> {
     let archive_path = ensure_non_empty_path(request.archive_path, "archivePath")?;
     let entry_path = ensure_non_empty_path(request.entry_path, "entryPath")?;
-    let password = request
-        .password
-        .and_then(|value| {
-            let trimmed = value.trim().to_owned();
-            (!trimmed.is_empty()).then_some(trimmed)
-        })
-        .or_else(|| archive_index_registry.password_for_archive(&archive_path));
+    let password = request.password.filter(|value| !value.is_empty()).or_else(|| archive_index_registry.password_for_archive(&archive_path));
 
     let retain_for_navigation = request.retain_for_navigation;
     let report = archive_browser::preview_entry_with_options(
@@ -1790,7 +1774,9 @@ pub fn preview_entry(
     }
 
     if request.retain_for_navigation {
-        registry.register_nested_archive_root(report.cleanup_root.clone());
+        if !registry.register_nested_archive_root(report.cleanup_root.clone()) {
+            return Err(CommandErrorDto::cancelled("The application is closing."));
+        }
     } else {
         registry.replace_preview_root(report.cleanup_root.clone());
     }
@@ -2002,7 +1988,7 @@ pub async fn start_native_file_drag(
             CommandErrorDto::invalid_request("entry exclusions require select-all drag"),
         ));
     }
-    let password = request.password.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty());
+    let password = request.password.filter(|value| !value.is_empty());
 
     let kind = native_drag_job_kind(&archive_path);
     let cancellation = registry.cancellation_token(&job_id).ok_or_else(|| CommandErrorDto::not_found("native drag job no longer exists", None::<String>))?;
@@ -2362,7 +2348,7 @@ fn start_test_archive_internal(request: TestArchiveRequest, registry: &JobRegist
     let registry_for_thread = registry.clone();
     let job_id = response.job_id.clone();
 
-    let password = request.password.map(|value| value.trim().to_owned()).filter(|value| !value.is_empty());
+    let password = request.password.filter(|value| !value.is_empty());
 
     thread::spawn(move || {
         registry_for_thread.emit_direct_event(
@@ -3008,11 +2994,9 @@ fn normalize_non_empty_paths(paths: &[String]) -> Result<Vec<PathBuf>, CommandEr
     let mut normalized = Vec::new();
 
     for path in paths {
-        let trimmed = path.trim();
-        if trimmed.is_empty() {
-            continue;
+        if !path.is_empty() {
+            normalized.push(PathBuf::from(path));
         }
-        normalized.push(PathBuf::from(trimmed));
     }
 
     if normalized.is_empty() {
@@ -3027,7 +3011,7 @@ fn normalize_optional_entry_paths(paths: Option<Vec<String>>) -> Result<Vec<Stri
         return Ok(Vec::new());
     };
 
-    let normalized = paths.into_iter().map(|path| path.trim().to_string()).filter(|path| !path.is_empty()).collect::<Vec<_>>();
+    let normalized = normalize_entry_paths(paths);
 
     if normalized.is_empty() {
         return Err(CommandErrorDto::invalid_request("at least one selected entry path is required"));
@@ -3037,7 +3021,7 @@ fn normalize_optional_entry_paths(paths: Option<Vec<String>>) -> Result<Vec<Stri
 }
 
 fn normalize_entry_paths(paths: Vec<String>) -> Vec<String> {
-    paths.into_iter().map(|path| path.trim().to_string()).filter(|path| !path.is_empty()).collect()
+    paths.into_iter().filter(|path| !path.is_empty()).collect()
 }
 
 fn validate_source_paths_exist(sources: &[PathBuf]) -> Result<(), CommandErrorDto> {
@@ -3057,7 +3041,6 @@ fn validate_source_paths_exist(sources: &[PathBuf]) -> Result<(), CommandErrorDt
 }
 
 fn ensure_non_empty_path(value: String, field: &str) -> Result<String, CommandErrorDto> {
-    let value = value.trim().to_string();
     if value.is_empty() {
         return Err(CommandErrorDto::invalid_request(format!("{field} cannot be empty")));
     }
@@ -3084,24 +3067,23 @@ pub(crate) fn next_available_destination_directory_path(path: &str) -> String {
     path.to_string()
 }
 
-pub(crate) fn next_available_destination_file_path(path: &str) -> String {
+fn destination_file_candidates(path: &str) -> impl Iterator<Item = PathBuf> + '_ {
     let candidate = Path::new(path);
-    if !candidate.exists() {
-        return path.to_string();
-    }
-
     let parent = candidate.parent().unwrap_or(Path::new(""));
     let file_name = candidate.file_name().and_then(|value| value.to_str()).unwrap_or(path);
     let (stem, suffix) = split_file_collision_name(file_name);
+    std::iter::once(candidate.to_path_buf()).chain((2..10_000).map(move |index| parent.join(format!("{stem} {index}{suffix}"))))
+}
 
-    for index in 2..10_000 {
-        let renamed = parent.join(format!("{stem} {index}{suffix}"));
-        if !renamed.exists() {
-            return renamed.to_string_lossy().to_string();
-        }
-    }
+fn destination_file_is_available(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
+}
 
-    path.to_string()
+#[cfg(test)]
+fn next_available_destination_file_path(path: &str) -> String {
+    destination_file_candidates(path)
+        .find(|candidate| destination_file_is_available(candidate))
+        .map_or_else(|| path.to_owned(), |candidate| candidate.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
@@ -3649,19 +3631,10 @@ mod tests {
     }
 
     #[test]
-    fn normalize_non_empty_paths_trims_and_rejects_empty_values() {
-        let normalized = normalize_non_empty_paths(&["  C:/tmp/src ".to_string(), "   ".to_string(), "".to_string(), "C:/tmp/dest".to_string()])
-            .expect("non-empty paths should parse");
-
-        assert_eq!(normalized.len(), 2);
-        assert_eq!(normalized[0].to_string_lossy(), "C:/tmp/src".to_string());
-        assert_eq!(normalized[1].to_string_lossy(), "C:/tmp/dest".to_string());
-    }
-
-    #[test]
-    fn normalize_non_empty_paths_rejects_only_blank_paths() {
-        let result = normalize_non_empty_paths(&["".to_string(), "   ".to_string()]);
-        assert!(result.is_err());
+    fn normalize_non_empty_paths_preserves_literal_whitespace() {
+        let normalized = normalize_non_empty_paths(&["/tmp/source ".to_owned(), " ".to_owned(), "".to_owned()]).unwrap();
+        assert_eq!(normalized, [PathBuf::from("/tmp/source "), PathBuf::from(" ")]);
+        assert!(normalize_non_empty_paths(&[String::new()]).is_err());
     }
 
     #[test]
@@ -3680,10 +3653,10 @@ mod tests {
     }
 
     #[test]
-    fn ensure_non_empty_path_trims_whitespace() {
-        assert_eq!(ensure_non_empty_path("  C:/tmp/archive.zip  ".to_string(), "archivePath").expect("path should trim to valid value"), "C:/tmp/archive.zip");
-
-        assert!(ensure_non_empty_path("   ".to_string(), "archivePath").is_err(), "blank path should not pass",);
+    fn ensure_non_empty_path_preserves_whitespace_and_rejects_empty_paths() {
+        let path = "/tmp/ archive.zip ".to_owned();
+        assert_eq!(ensure_non_empty_path(path.clone(), "archivePath").unwrap(), path);
+        assert!(ensure_non_empty_path(String::new(), "archivePath").is_err());
     }
 
     #[test]
@@ -3691,8 +3664,8 @@ mod tests {
         let very_long_leaf = format!("{}{}", "nested/", "a".repeat(1024),);
         let win_like = format!("C:\\tmp\\{very_long_leaf}.zip");
 
-        let normalized = normalize_non_empty_paths(&[r"  C:\tmp\my archive.zip  ".to_string(), win_like.clone()])
-            .expect("windows-like and long-like paths should normalize");
+        let normalized =
+            normalize_non_empty_paths(&[r"C:\tmp\my archive.zip".to_string(), win_like.clone()]).expect("windows-like and long-like paths should normalize");
 
         assert_eq!(normalized[0].to_string_lossy(), "C:\\tmp\\my archive.zip");
         assert_eq!(normalized[1].to_string_lossy(), win_like);
@@ -3823,9 +3796,41 @@ mod tests {
     }
 
     #[test]
+    fn start_create_renames_past_a_destination_reserved_before_it_exists() {
+        let workspace = create_temp_workspace("concurrent-reservation");
+        let source = workspace.join("input.txt");
+        fs::write(&source, "source").unwrap();
+        let destination = workspace.join("backup.tar.gz");
+        let reservation = crate::destination_reservation::try_reserve(&destination).unwrap();
+        let request: StartCreateRequest = serde_json::from_value(serde_json::json!({
+            "sources": [source],
+            "destinationPath": destination,
+            "format": "tarGz",
+            "cleanSource": false,
+            "replaceExisting": false,
+            "preserveMetadata": false
+        }))
+        .unwrap();
+        let registry = JobRegistry::new();
+        let worker_registry = registry.clone();
+        let (started, accepted) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || started.send(start_create_internal(request, &worker_registry)).unwrap());
+
+        let response = accepted.recv_timeout(Duration::from_secs(2));
+        drop(reservation);
+        worker.join().unwrap();
+        let created = response.expect("a reserved candidate must not block another create").unwrap();
+        let (result, _) = wait_for_job_terminal(&registry, &created.job_id);
+        assert_eq!(result.status, JobStatusDto::Completed);
+        assert!(!destination.exists());
+        assert!(workspace.join("backup 2.tar.gz").is_file());
+        let _ = fs::remove_dir_all(workspace);
+    }
+
+    #[test]
     fn recovery_smoke_create_open_test_extract_zip_end_to_end() {
         let workspace = create_temp_workspace("recovery-smoke");
-        let source = workspace.join("source");
+        let source = workspace.join(" source");
         let nested = source.join("nested");
         let destination_archive = workspace.join("created.zip");
         let extract_destination = workspace.join("extracted");
@@ -3874,8 +3879,8 @@ mod tests {
         let listing = list_archive(crate::dto::ListArchiveRequest { archive_path: destination_archive.to_string_lossy().to_string(), password: None })
             .expect("smoke archive should list");
         let listed_paths = listing.entries.iter().map(|entry| entry.path.as_str()).collect::<Vec<_>>();
-        assert!(listed_paths.contains(&"source/hello.txt"));
-        assert!(listed_paths.contains(&"source/nested/readme.md"));
+        assert!(listed_paths.contains(&" source/hello.txt"));
+        assert!(listed_paths.contains(&" source/nested/readme.md"));
 
         let test_job = start_test_archive_internal(
             TestArchiveRequest { archive_path: destination_archive.to_string_lossy().to_string(), entry_paths: None, password: None },
@@ -3908,9 +3913,9 @@ mod tests {
         .expect("smoke extract should start");
         let (extract_poll, _) = wait_for_job_terminal(&registry, &extract_job.job_id);
         assert_eq!(extract_poll.status, JobStatusDto::Completed);
-        assert_eq!(fs::read_to_string(extract_destination.join("source").join("hello.txt")).expect("extracted hello should be readable"), "hello smoke");
+        assert_eq!(fs::read_to_string(extract_destination.join(" source").join("hello.txt")).expect("extracted hello should be readable"), "hello smoke");
         assert_eq!(
-            fs::read_to_string(extract_destination.join("source").join("nested").join("readme.md"),).expect("extracted nested file should be readable"),
+            fs::read_to_string(extract_destination.join(" source").join("nested").join("readme.md"),).expect("extracted nested file should be readable"),
             "# smoke"
         );
 
@@ -4012,7 +4017,7 @@ mod tests {
                 follow_symlinks: false,
                 replace_existing: true,
                 destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
-                password: Some("smoke-secret".to_string()),
+                password: Some(" smoke-secret ".to_string()),
                 compression_level: None,
                 volume_size: None,
                 volume_count: None,
@@ -4036,7 +4041,7 @@ mod tests {
 
         let listing = list_archive(crate::dto::ListArchiveRequest {
             archive_path: destination_archive.to_string_lossy().to_string(),
-            password: Some("smoke-secret".to_string()),
+            password: Some(" smoke-secret ".to_string()),
         })
         .expect("valid password should list protected archive");
 
@@ -4074,7 +4079,7 @@ mod tests {
             StartExtractRequest {
                 archive_path: destination_archive.to_string_lossy().to_string(),
                 destination_path: workspace.join("invalid-password").to_string_lossy().to_string(),
-                password: Some("wrong-password".to_string()),
+                password: Some("smoke-secret".to_string()),
                 recipient_key_id: None,
                 overwrite: OverwritePolicyDto::Replace,
                 destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,
@@ -4098,7 +4103,7 @@ mod tests {
             "invalid password extract should fail with invalid_password",
         );
         assert!(
-            invalid_password_events.iter().filter_map(|event| event.message.as_deref()).all(|message| !message.contains("wrong-password")),
+            invalid_password_events.iter().filter_map(|event| event.message.as_deref()).all(|message| !message.contains("smoke-secret")),
             "invalid password diagnostics must not leak the attempted password",
         );
 
@@ -4108,7 +4113,7 @@ mod tests {
             StartExtractRequest {
                 archive_path: destination_archive.to_string_lossy().to_string(),
                 destination_path: valid_extract_destination.to_string_lossy().to_string(),
-                password: Some("smoke-secret".to_string()),
+                password: Some(" smoke-secret ".to_string()),
                 recipient_key_id: None,
                 overwrite: OverwritePolicyDto::Replace,
                 destination_collision_strategy: DestinationCollisionStrategyDto::Refuse,

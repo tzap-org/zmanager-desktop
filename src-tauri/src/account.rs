@@ -1113,7 +1113,7 @@ pub fn account_import_signing_identity(
     app: AppHandle,
     runtime: State<'_, AccountRuntime>,
 ) -> Result<AccountSnapshotDto, CommandErrorDto> {
-    let identity_path = request.identity_path.trim();
+    let identity_path = &request.identity_path;
     if identity_path.is_empty() {
         return Err(CommandErrorDto::invalid_request("identityPath must not be empty"));
     }
@@ -1775,7 +1775,7 @@ pub fn resolve_tzap_create_inputs(
             true,
         ),
         Some(crate::dto::TzapSigningSelectionDto::OneTimeCertificateAndKey { certificate_path, private_key_path, chain_paths, password }) => {
-            if certificate_path.trim().is_empty() || private_key_path.trim().is_empty() {
+            if certificate_path.is_empty() || private_key_path.is_empty() {
                 return Err(account_error("account_signing_identity_invalid", "TZAP signing requires both a certificate and a matching private key"));
             }
             if password.as_ref().is_some_and(|value| !value.is_empty()) {

@@ -131,7 +131,7 @@ export function PreferencesDialog() {
 
   const customOutputSelected = draft.defaultOutputLocation === "customFolder";
   const customOutputMissing =
-    customOutputSelected && !draft.customOutputFolderPath.trim();
+    customOutputSelected && !draft.customOutputFolderPath;
   const visiblePages = PAGES.filter(
     (page) => page.id !== "lanSharing" || snapshot.runtime.isLocalSendAvailable,
   );

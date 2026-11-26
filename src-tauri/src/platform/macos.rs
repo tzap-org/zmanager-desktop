@@ -490,35 +490,61 @@ fn shell_action_receipt_marker() -> Option<PathBuf> {
 }
 
 fn shell_action_has_been_received() -> bool {
-    shell_action_receipt_marker().is_some_and(|marker| marker.exists())
+    shell_action_receipt_marker().is_some_and(|marker| shell_action_receipt_is_valid(&marker))
+}
+
+const SHELL_ACTION_RECEIPT_CONTENTS: &[u8] = b"validated-shell-action-v1";
+
+fn shell_action_receipt_is_valid(marker: &Path) -> bool {
+    std::fs::read(marker).is_ok_and(|contents| contents == SHELL_ACTION_RECEIPT_CONTENTS)
 }
 
 fn record_shell_action_receipt() {
     let Some(marker) = shell_action_receipt_marker() else { return };
-    if marker.exists() {
+    if shell_action_receipt_is_valid(&marker) {
         return;
     }
     if let Some(parent) = marker.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(&marker, b"");
+    let _ = std::fs::write(&marker, SHELL_ACTION_RECEIPT_CONTENTS);
 }
 
 fn ingest_macos_native_event(event: crate::native_launch_inbox::NativeInboundEvent, inbox: &crate::native_launch_inbox::NativeLaunchInbox) {
-    if event.kind == crate::native_launch_inbox::NativeInboundEventKind::ShellActionRequest {
-        record_shell_action_receipt();
-    }
-    let event = match normalize_macos_inbound_event(event, MacOsPlatform::consume_shell_action_request) {
+    ingest_macos_native_event_with(event, inbox, MacOsPlatform::consume_shell_action_request, record_shell_action_receipt);
+}
+
+fn ingest_macos_native_event_with(
+    event: crate::native_launch_inbox::NativeInboundEvent,
+    inbox: &crate::native_launch_inbox::NativeLaunchInbox,
+    consume_token: impl FnOnce(&str) -> Result<Vec<u8>, String>,
+    record_receipt: impl FnOnce(),
+) {
+    let event = match normalize_macos_inbound_event(event, consume_token) {
         Ok(event) => event,
         Err(error_code) => {
             record_shell_action_stage("requestRejected", None, None, Some(error_code));
             return;
         }
     };
+    ingest_normalized_macos_native_event(event, inbox, record_receipt);
+}
+
+fn ingest_normalized_macos_native_event(
+    event: crate::native_launch_inbox::NativeInboundEvent,
+    inbox: &crate::native_launch_inbox::NativeLaunchInbox,
+    record_receipt: impl FnOnce(),
+) {
+    let is_shell_action_request = event.kind == crate::native_launch_inbox::NativeInboundEventKind::ShellActionRequest;
     let (action, path_count) = shell_action_diagnostic_fields(&event);
     let disposition = shell_action_disposition(&event);
     match inbox.ingest(event) {
-        Ok(()) => record_shell_action_stage_with_disposition("inboxAccepted", action.as_deref(), path_count, None, disposition),
+        Ok(()) => {
+            if is_shell_action_request {
+                record_receipt();
+            }
+            record_shell_action_stage_with_disposition("inboxAccepted", action.as_deref(), path_count, None, disposition)
+        }
         Err(error) => record_shell_action_stage_with_disposition("inboxRejected", action.as_deref(), path_count, Some(inbox_error_code(&error)), disposition),
     }
 }
@@ -867,6 +893,55 @@ mod tests {
         let events = inbox.pending_events("main");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, crate::native_launch_inbox::NativeInboundEventKind::HostedAuthCallback);
+    }
+
+    #[test]
+    fn finder_receipt_is_written_only_after_a_valid_request_is_accepted() {
+        let inbox = crate::native_launch_inbox::NativeLaunchInbox::new();
+        inbox.attach_emitter(std::sync::Arc::new(|_, _| Ok(()))).unwrap();
+        inbox.frontend_ready("main").unwrap();
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        let event = crate::native_launch_inbox::NativeInboundEvent {
+            version: crate::native_launch_inbox::NATIVE_INBOUND_EVENT_VERSION,
+            event_id: "event-123456789012".to_string(),
+            kind: crate::native_launch_inbox::NativeInboundEventKind::ShellActionRequest,
+            idempotency_key: None,
+            timestamp_unix_ms: now,
+            payload: crate::native_launch_inbox::NativeInboundPayload::ShellActionRequest(crate::native_launch_inbox::ShellActionRequestPayload {
+                request: crate::dto::QuickActionRequestDto { kind: crate::dto::QuickActionKindDto::Open, paths: vec!["/tmp/archive.zip".to_string()] },
+            }),
+        };
+        let recorded = std::cell::Cell::new(false);
+
+        ingest_normalized_macos_native_event(event, &inbox, || recorded.set(true));
+
+        assert!(recorded.get());
+        assert_eq!(inbox.pending_events("main").len(), 1);
+    }
+
+    #[test]
+    fn invalid_finder_request_does_not_record_the_receipt() {
+        let inbox = crate::native_launch_inbox::NativeLaunchInbox::new();
+        let event = shell_action_event_from_url(&tauri::Url::parse("zmanager://shell-request/invalid-token").unwrap(), 41, 1_234, 2).unwrap();
+        let recorded = std::cell::Cell::new(false);
+
+        ingest_macos_native_event_with(event, &inbox, |_| Err("missing request".to_string()), || recorded.set(true));
+
+        assert!(!recorded.get());
+        assert!(inbox.pending_events("main").is_empty());
+    }
+
+    #[test]
+    fn legacy_empty_finder_receipt_does_not_prove_a_valid_request_was_received() {
+        let root = std::env::temp_dir().join(format!("zmanager-finder-receipt-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let marker = root.join("shell-action-received");
+        std::fs::write(&marker, b"").unwrap();
+        assert!(!shell_action_receipt_is_valid(&marker));
+
+        std::fs::write(&marker, SHELL_ACTION_RECEIPT_CONTENTS).unwrap();
+        assert!(shell_action_receipt_is_valid(&marker));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     fn candidate(path: &str) -> NativeFileDragCandidate {

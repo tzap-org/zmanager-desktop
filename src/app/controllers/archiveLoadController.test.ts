@@ -43,7 +43,7 @@ function createHarness(overrides: Partial<ArchiveLoadControllerOptions> = {}) {
     complete: true,
     childCount: 1,
   }));
-  const close = vi.fn(async () => undefined);
+  const close = vi.fn(async (): Promise<void> => {});
   const controller = createArchiveLoadController({
     workspace,
     enterExtractWorkspace: vi.fn(),
@@ -61,6 +61,7 @@ function createHarness(overrides: Partial<ArchiveLoadControllerOptions> = {}) {
     closeArchiveIndex: close,
     toCommandError: (error) => error && typeof error === "object" && "code" in error ? error as CommandErrorDto : null,
     renderLoading: (snapshot) => calls.loading.push(snapshot),
+    renderCapability: vi.fn(),
     renderPage: (snapshot) => calls.pages.push(snapshot),
     renderLoadError: (_snapshot, message) => calls.errors.push(message),
     failedListMessage: () => "Could not index archive.",
@@ -76,6 +77,58 @@ function createHarness(overrides: Partial<ArchiveLoadControllerOptions> = {}) {
 }
 
 describe("archive load controller", () => {
+  it("never publishes a refresh after the archive closes during session shutdown", async () => {
+    const harness = createHarness();
+    const path = terminal().archivePath;
+    await harness.controller.loadArchive({ archivePath: path });
+    let finishClose!: () => void;
+    harness.close.mockImplementationOnce(() => new Promise<void>((resolve) => { finishClose = resolve; }));
+
+    const refresh = harness.controller.loadArchive({ archivePath: path }, { preserveState: true });
+    await harness.controller.close();
+    harness.workspace.reset();
+    finishClose();
+    await refresh;
+
+    expect(harness.start).toHaveBeenCalledOnce();
+    expect(harness.workspace.getSnapshot().currentArchivePath).toBe("");
+    expect(harness.calls.loading).toHaveLength(1);
+  });
+
+  it("uses navigation requested while a refresh is replacing the index", async () => {
+    const harness = createHarness();
+    const path = terminal().archivePath;
+    await harness.controller.loadArchive({ archivePath: path });
+    let finishClose!: () => void;
+    harness.close.mockImplementationOnce(() => new Promise<void>((resolve) => { finishClose = resolve; }));
+
+    const refresh = harness.controller.loadArchive({ archivePath: path }, { preserveState: true });
+    await harness.controller.loadFolder("docs");
+    finishClose();
+    await refresh;
+
+    expect(harness.get).toHaveBeenLastCalledWith(expect.objectContaining({ parentPath: "docs" }));
+    expect(harness.workspace.getSnapshot().view.currentFolder).toBe("docs");
+  });
+
+  it("ignores a superseded page error and renders the newer folder", async () => {
+    const harness = createHarness();
+    const archivePath = terminal().archivePath;
+    await harness.controller.loadArchive({ archivePath });
+    let rejectOldPage!: (error: Error) => void;
+    harness.get.mockImplementationOnce(() => new Promise((_, reject) => { rejectOldPage = reject; }));
+    const refresh = harness.controller.loadArchive({ archivePath }, { preserveState: true });
+    await vi.waitFor(() => expect(harness.get).toHaveBeenCalledTimes(2));
+
+    await harness.controller.loadFolder("docs");
+    rejectOldPage(new Error("superseded page request"));
+    await refresh;
+
+    expect(harness.get).toHaveBeenLastCalledWith(expect.objectContaining({ parentPath: "docs" }));
+    expect(harness.workspace.getSnapshot().view.currentFolder).toBe("docs");
+    expect(harness.calls.errors).toEqual([]);
+  });
+
   it("publishes opening immediately and keeps only the bounded page in workspace state", async () => {
     let resolveWait!: (snapshot: ArchiveIndexSnapshotDto) => void;
     const waiting = new Promise<ArchiveIndexSnapshotDto>((resolve) => { resolveWait = resolve; });
@@ -132,6 +185,34 @@ describe("archive load controller", () => {
     await harness.controller.loadArchive({ archivePath: "C:/archives/empty.tzap" });
 
     expect(harness.workspace.getSnapshot().browseState).toBe("empty");
+  });
+
+  it("disables search and avoids the unsupported search command for TZAP archives", async () => {
+    const search = vi.fn(async (): Promise<ArchiveChildrenPageDto> => ({
+      sessionId: "archive-1",
+      revision: "2",
+      parentPath: "",
+      entries: [],
+      complete: true,
+      childCount: 0,
+    }));
+    const harness = createHarness({ searchArchiveIndex: search });
+    await harness.controller.loadArchive({ archivePath: "C:/archives/demo.tzap" });
+    harness.workspace.setSearchQuery("needle");
+    await harness.controller.loadSearch("needle");
+    expect(search).toHaveBeenCalledOnce();
+
+    harness.start.mockResolvedValue({
+      sessionId: "archive-1",
+      snapshot: terminal({ revision: "3", status: "ready", format: "tzap" }),
+    });
+    await harness.controller.loadArchive({ archivePath: "C:/archives/demo.tzap" }, { preserveState: true });
+    expect(harness.workspace.getSnapshot().command.canSearchEntries).toBe(false);
+    expect(harness.workspace.getSnapshot().view.searchQuery).toBe("");
+    await harness.controller.loadSearch("needle");
+
+    expect(search).toHaveBeenCalledOnce();
+    expect(harness.workspace.getSnapshot().view.searchQuery).toBe("");
   });
 
   it("renders current-folder rows from an indexing revision without waiting for the whole archive", async () => {

@@ -89,23 +89,18 @@ test("macOS application bundles claim both native URL schemes", () => {
   assert.match(releaseGate, /CFBundleURLSchemes.*\["zmanager", "tzap"\]/s);
 });
 
-test("release packaging scripts validate Rust in the release profile", () => {
-  const scripts = [
-    "scripts/build-macos.sh",
-    "scripts/build-linux-ubuntu-deb.sh",
-    "scripts/build-linux-fedora-rpm.sh",
-  ];
-
-  for (const scriptPath of scripts) {
-    const script = readFileSync(resolve(root, scriptPath), "utf8");
-    assert.match(script, /cargo test --release\)/, `${scriptPath} must run release tests`);
-    if (!scriptPath.endsWith("build-macos.sh")) {
-      assert.match(
-        script,
-        /cargo clippy --release --all-targets --all-features/,
-        `${scriptPath} must run release clippy`,
-      );
-    }
+test("release packaging scripts verify Rust in the release profile and stage Linux test inputs", () => {
+  assert.match(readFileSync(resolve(root, "scripts/build-macos.sh"), "utf8"), /cargo test --release\)/);
+  const linuxVerification = readFileSync(resolve(root, "scripts/verify-linux-build.sh"), "utf8");
+  assert.match(linuxVerification, /export ZMANAGER_TZAP_BUILD_ENV=staging/);
+  assert.match(linuxVerification, /export ZMANAGER_TZAP_SERVER_BASE_URL=https:\/\/staging\.tzap\.org/);
+  assert.match(linuxVerification, /export VITE_TZAP_BUILD_ENV=staging/);
+  assert.match(linuxVerification, /npm run test:frontend/);
+  assert.match(linuxVerification, /cargo fmt --check/);
+  assert.match(linuxVerification, /cargo clippy --release --all-targets --all-features/);
+  assert.match(linuxVerification, /cargo test --release/);
+  for (const scriptPath of ["scripts/build-linux-ubuntu-deb.sh", "scripts/build-linux-fedora-rpm.sh"]) {
+    assert.match(readFileSync(resolve(root, scriptPath), "utf8"), /if \(\(!skip_tests\)\); then\s+bash scripts\/verify-linux-build\.sh/);
   }
 });
 

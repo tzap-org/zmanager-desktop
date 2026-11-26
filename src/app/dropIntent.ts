@@ -127,15 +127,14 @@ export function classifyDropIntent(
 
 function classifyDroppedPath(droppedPath: DroppedPath): ClassifiedDropPath | null {
   const path = typeof droppedPath === "string" ? droppedPath : droppedPath.path;
-  const trimmedPath = path.trim();
-  if (!trimmedPath) {
+  if (!path) {
     return null;
   }
 
   const kind = typeof droppedPath === "string" ? "unknown" : (droppedPath.kind ?? "unknown");
   return {
-    path: trimmedPath,
-    archive: kind !== "directory" && isSupportedArchivePath(trimmedPath),
+    path,
+    archive: kind !== "directory" && isSupportedArchivePath(path),
   };
 }
 

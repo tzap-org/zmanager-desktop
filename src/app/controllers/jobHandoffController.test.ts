@@ -74,6 +74,29 @@ describe("job handoff controller", () => {
     expect(acknowledgeAcceptedJob).toHaveBeenCalledWith(accepted);
   });
 
+  it.each([false, true])("resets once when the feed presents first (already presented: %s)", async (alreadyPresented) => {
+    let finish!: () => void;
+    const presentTaskWindow = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const resetSubmittedState = vi.fn();
+    const controller = createJobHandoffController({
+      recordAccepted: vi.fn(),
+      presentTaskWindow,
+      reportPresentationFailure: vi.fn(),
+    });
+    const feed = controller.handoffAcceptedJob({ acceptanceRevision: "8", job, origin: "mainWindow" });
+    if (alreadyPresented) {
+      finish();
+      await feed;
+    }
+
+    const response = controller.handoffAcceptedJob(job, { resetSubmittedState });
+    const duplicate = controller.handoffAcceptedJob(job, { resetSubmittedState });
+    expect(resetSubmittedState).toHaveBeenCalledOnce();
+    finish();
+    await Promise.all([feed, response, duplicate]);
+    expect(presentTaskWindow).toHaveBeenCalledOnce();
+  });
+
   it("treats the synchronous response and accepted-feed envelope as one delivery", async () => {
     const presentTaskWindow = vi.fn(async () => {});
     const acknowledgeAcceptedJob = vi.fn(async () => {});

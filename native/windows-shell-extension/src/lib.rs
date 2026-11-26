@@ -945,6 +945,13 @@ mod tests {
         assert!(archive_actions.contains(&ExplorerAction::Compress));
 
         // One non-archive in the selection drops the extraction actions.
+        for name in ["disk.WIM", "disk.vhdx", "disk.qcow2", "installer.dmg", "bundle.tar.zst"] {
+            let supported = directory.join(name);
+            fs::write(&supported, b"format recognition fixture").unwrap();
+            let actions = handler.classic_actions_for_paths(&[supported.to_string_lossy().into_owned()]);
+            assert!(actions.contains(&ExplorerAction::ExtractHere), "Explorer should recognize {name}");
+        }
+
         let mixed_actions = handler.classic_actions_for_paths(&[archive_path, plain_path]);
         assert!(!mixed_actions.contains(&ExplorerAction::ExtractHere));
         assert!(!mixed_actions.contains(&ExplorerAction::Open));

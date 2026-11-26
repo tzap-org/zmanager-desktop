@@ -45,6 +45,7 @@ zmanager-shell-contract = { path = "../crates/zmanager-shell-contract" }
 zmanager-core = { path = "../../zmanager/crates/zmanager-core", package = "zmanager-core" }
 zmanager-tzap-hosted = { path = "../../zmanager/crates/zmanager-tzap-hosted", features = ["keyring"] }
 zmanager-localsend = { path = "../../zmanager/crates/zmanager-localsend" }
+localsend-rs = { path = "../../localsend-rs", default-features = false, features = ["https"] }
 reqwest = { version = "0.13.4", default-features = false, features = ["blocking", "json", "rustls-no-provider"], optional = true }
 rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"], optional = true }
 tauri-plugin-deep-link = "2.6.2"

@@ -111,13 +111,12 @@ export function getCreateArchiveExtension(path: string): string | null {
 }
 
 export function withCreateArchiveExtension(path: string, format: CreateArchiveFormat, hasPassword = false): string {
-  const trimmed = path.trim();
-  if (!trimmed) {
-    return trimmed;
+  if (!path) {
+    return path;
   }
 
   const allowedExtensions = CREATE_FORMAT_ALLOWED_EXTENSIONS[format];
-  const existingExtension = getCreateArchiveExtension(trimmed);
+  const existingExtension = getCreateArchiveExtension(path);
 
   // If the existing extension is already recognized for this format
   if (existingExtension && allowedExtensions.includes(existingExtension)) {
@@ -125,22 +124,22 @@ export function withCreateArchiveExtension(path: string, format: CreateArchiveFo
     if (format === "appleArchive") {
       const isCurrentlyAea = existingExtension === "aea";
       const wantsAea = hasPassword;
-      if (isCurrentlyAea === wantsAea) return trimmed;
+      if (isCurrentlyAea === wantsAea) return path;
       // Swap: strip existing extension, append the correct one
-      const basePath = trimmed.slice(0, -(existingExtension.length + 1));
+      const basePath = path.slice(0, -(existingExtension.length + 1));
       return `${basePath}.${getCreateFormatExtension(format, hasPassword)}`;
     }
-    return trimmed;
+    return path;
   }
 
   // Has an unrecognized extension → replace it
   if (existingExtension) {
-    const basePath = trimmed.slice(0, -(existingExtension.length + 1));
+    const basePath = path.slice(0, -(existingExtension.length + 1));
     return `${basePath}.${getCreateFormatExtension(format, hasPassword)}`;
   }
 
   // No recognized extension → append
-  return `${trimmed}.${getCreateFormatExtension(format, hasPassword)}`;
+  return `${path}.${getCreateFormatExtension(format, hasPassword)}`;
 }
 
 export function suggestedCreateArchiveName(
@@ -151,7 +150,7 @@ export function suggestedCreateArchiveName(
 ): string {
   const firstSource = sources[0];
   const sourceName = firstSource ? getArchiveName(firstSource, fallback) : fallback;
-  const safeName = sourceName.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_").trim() || fallback;
+  const safeName = sourceName.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "_") || fallback;
   return `${safeName}.${getCreateFormatExtension(format, hasPassword)}`;
 }
 
@@ -200,7 +199,7 @@ export function normalizeTzapVolumeCount(value?: number): number | undefined {
 }
 
 function parseDirectoryPath(directory: string): ParsedDirectoryPath | null {
-  const trimmed = directory.trim().replace(/[\\/]+$/, "");
+  const trimmed = directory.replace(/[\\/]+$/, "");
   if (!trimmed) {
     return null;
   }
@@ -499,7 +498,7 @@ export function createArchiveUnavailableReason(
   if (input.includedEntryCount !== undefined && input.includedEntryCount === 0) {
     return "needsIncludedEntries";
   }
-  if (input.destinationPath.trim().length === 0) {
+  if (input.destinationPath.length === 0) {
     return "needsDestination";
   }
   if (input.planState === "loading") {
@@ -657,7 +656,7 @@ function sourcePathForCreatePlanArchivePath(
 }
 
 function normalizedNativePathForCompare(path: string): string {
-  const normalized = path.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
   return /^[A-Za-z]:\//.test(normalized) || normalized.startsWith("//")
     ? normalized.toLowerCase()
     : normalized;

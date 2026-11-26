@@ -38,7 +38,11 @@ export type ArchiveOpenController = Readonly<{
 }>;
 
 function stripSurroundingQuotes(value: string): string {
-  return value.trim().replace(/^["']|["']$/g, "");
+  const trimmed = value.trim();
+  if (trimmed.length >= 2 && ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'")))) {
+    return trimmed.slice(1, -1);
+  }
+  return value;
 }
 
 export function createArchiveOpenController(
@@ -65,12 +69,11 @@ export function createArchiveOpenController(
   }
 
   async function openArchiveFromPath(archivePath: string): Promise<void> {
-    const selected = archivePath.trim();
-    if (!selected) {
+    if (!archivePath) {
       return;
     }
 
-    await openSelectedArchivePath(selected);
+    await openSelectedArchivePath(archivePath);
   }
 
   async function openSelectedArchivePath(selected: string): Promise<void> {

@@ -67,7 +67,6 @@ import {
 } from "../app/controllers/startupController";
 import { createAccountController } from "../app/controllers/accountController";
 import { HOSTED_CAPABILITIES_ENABLED } from "../app/hostedCapabilities";
-import { initializeDeepLinkAdapter } from "../desktop/deepLinkAdapter";
 import { createDefaultHandlerController } from "../app/controllers/defaultHandlerController";
 import { createLocalSendDiscoveryController } from "../app/controllers/localSendDiscoveryController";
 import { createShareQueueController } from "../app/controllers/shareQueueController";
@@ -778,12 +777,11 @@ const createRuntimeActions = createCreateRuntimeActions({
   },
   removeSelectedSources: (fallbackSourcePath) => {
     const selectedSourcePaths = selectedCompressSourcePaths();
-    const trimmedFallbackSourcePath = fallbackSourcePath?.trim();
     removeCreateSources(
       selectedSourcePaths.length > 0
         ? selectedSourcePaths
-        : trimmedFallbackSourcePath
-          ? [trimmedFallbackSourcePath]
+        : fallbackSourcePath
+          ? [fallbackSourcePath]
           : [],
     );
     publishReactSnapshot();
@@ -984,6 +982,7 @@ const archiveLoadController = createArchiveLoadController({
     publishArchiveSnapshot(snapshot);
     setOperationalMessage("status.loadingArchive");
   },
+  renderCapability: publishArchiveSnapshot,
   renderPage: (snapshot) => {
     if (activeArchiveLoadTiming && !activeArchiveLoadTiming.firstPageRecorded) {
       activeArchiveLoadTiming.firstPageRecorded = true;
@@ -999,7 +998,6 @@ const archiveLoadController = createArchiveLoadController({
     }
     clearTrackedPreviewState();
     contextMenuRuntime.hide();
-    applyExtractPreferenceDefaults(topLevelArchivePath || snapshot.currentArchivePath);
     publishArchiveSnapshot(snapshot);
     setOperationalMessage("archive.loaded");
   },
@@ -1787,7 +1785,7 @@ function createDestinationSuggestionOptions() {
 }
 
 function joinNativePath(parentPath: string, childName: string): string {
-  const trimmedParent = parentPath.trim().replace(/[\\/]+$/, "");
+  const trimmedParent = parentPath.replace(/[\\/]+$/, "");
   if (!trimmedParent) {
     return childName;
   }
@@ -1800,13 +1798,12 @@ function suggestedCreateArchiveDefaultPath(_sources = createWorkspace.getSnapsho
 }
 
 function createOutputFolderDefaultPath(destinationPath: string): string {
-  const trimmed = destinationPath.trim();
-  return nativeParentPath(trimmed || suggestedCreateArchiveDefaultPath());
+  return nativeParentPath(destinationPath || suggestedCreateArchiveDefaultPath());
 }
 
 function extractionDefaultsForArchive(archivePath: string): ExtractWorkspaceDefaults {
   const parent = nativeParentPath(archivePath);
-  const configuredBase = appPreferences.customExtractFolderPath.trim() || defaultCreateDirectory(appPreferences) || parent;
+  const configuredBase = appPreferences.customExtractFolderPath || defaultCreateDirectory(appPreferences) || parent;
   const folderName = baseNameWithoutKnownArchiveExtension(archivePath);
   const extractionAction = appPreferences.defaultExtractionBehavior === "extractHere"
     ? "extractHere"
@@ -1828,12 +1825,12 @@ function extractionDefaultsForArchive(archivePath: string): ExtractWorkspaceDefa
   };
 }
 
-function applyExtractPreferenceDefaults(archivePath = archiveCurrentPath()) {
-  extractWorkspace.applyDefaults(extractionDefaultsForArchive(archivePath));
+function applyExtractPreferenceDefaults(archivePath = topLevelArchivePath || archiveCurrentPath()) {
+  extractWorkspace.applyDefaults(extractionDefaultsForArchive(archivePath), archivePath);
 }
 
 function nativeParentPath(path: string): string {
-  const trimmed = path.trim().replace(/[\\/]+$/, "");
+  const trimmed = path.replace(/[\\/]+$/, "");
   const slash = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
   return slash > 0 ? trimmed.slice(0, slash) : "";
 }
@@ -2524,7 +2521,7 @@ function renderBrowse() {
 }
 
 function browserCreatePlanPreview(paths: string[]): CreatePlanResponse {
-  const planEntries: CreatePlanEntryDto[] = Array.from(new Set(paths.map((path) => path.trim()).filter(Boolean)))
+  const planEntries: CreatePlanEntryDto[] = Array.from(new Set(paths.filter(Boolean)))
     .map((path) => {
       const name = getPathBasename(path) || path;
       const looksLikeFile = Boolean(pathExtension(path)) || isSupportedArchivePath(path);
@@ -2953,10 +2950,7 @@ function setDropOverlayForSurface(surface: DropIntentSurface) {
 }
 
 function setDropOverlayForPaths(paths: readonly DroppedPath[]) {
-  const filteredPaths = paths
-    .map((path) => (typeof path === "string" ? path.trim() : path.path.trim()))
-    .filter(Boolean);
-  if (filteredPaths.length === 0) {
+  if (!paths.some((path) => typeof path === "string" ? path : path.path)) {
     setDropOverlayForSurface(currentDropSurface());
     return;
   }
@@ -3031,9 +3025,6 @@ function handleDropDecision(decision: DropIntentDecision, chosenAction?: "openAr
 }
 
 function handleDroppedPaths(paths: readonly DroppedPath[]) {
-  const trimmedPaths = paths
-    .map((path) => (typeof path === "string" ? path.trim() : path.path.trim()))
-    .filter(Boolean);
   if (isCreateSubmissionInFlight()) {
     setOperationalMessage("drop.waitForStart");
     setDropOverlay("active", {
@@ -3045,7 +3036,7 @@ function handleDroppedPaths(paths: readonly DroppedPath[]) {
   }
 
   const surface = currentDropSurface();
-  const decision = classifyDropIntent(trimmedPaths, surface);
+  const decision = classifyDropIntent(paths, surface);
   handleDropDecision(decision);
 }
 
@@ -3708,7 +3699,7 @@ async function copyAboutDiagnostics() {
 
 async function validatePreferencesDraft(draft: AppPreferences): Promise<boolean> {
   const customOutputSelected = draft.defaultOutputLocation === "customFolder";
-  const customOutputPath = draft.customOutputFolderPath.trim();
+  const customOutputPath = draft.customOutputFolderPath;
   if (!customOutputSelected) {
     return true;
   }
@@ -4032,7 +4023,7 @@ function showCreateWorkspace() {
     applyCreatePreferenceDefaults();
   }
   const { createDestinationHistory } = pathHistoryStore.getSnapshot();
-  if (!createWorkspace.getSnapshot().options.destinationPath.trim() && createDestinationHistory[0]) {
+  if (!createWorkspace.getSnapshot().options.destinationPath && createDestinationHistory[0]) {
     publishCreateWorkspaceSnapshot(createWorkspace.setDestinationPathIfBlank(createDestinationHistory[0]).snapshot);
   }
   setWorkspaceMode("compress");
@@ -4047,6 +4038,7 @@ async function loadArchive(request: ListArchiveRequest, options: ArchiveLoadOpti
   if (nestedArchiveStack.length === 0 && (!topLevelArchivePath || request.archivePath !== topLevelArchivePath)) {
     topLevelArchivePath = request.archivePath;
   }
+  applyExtractPreferenceDefaults();
   const timing = {
     startedAt: performance.now(),
     firstPageRecorded: false,
@@ -4135,7 +4127,7 @@ function addSources(paths: string[]) {
   if (!result.changed) {
     return;
   }
-  if (!previousSnapshot.hasSources && sourceSnapshot.hasSources && !sourceSnapshot.options.destinationPath.trim()) {
+  if (!previousSnapshot.hasSources && sourceSnapshot.hasSources && !sourceSnapshot.options.destinationPath) {
     sourceSnapshot = createWorkspace.suggestDestinationPathIfBlank(createDestinationSuggestionOptions()).snapshot;
   }
   publishCreateWorkspaceSnapshot(sourceSnapshot);
@@ -4340,9 +4332,6 @@ async function initializeDeferredDesktopRuntime() {
   await startupController.initializeDesktopRuntime();
   syncLocalSendReceiverWithPreferences();
 
-  initializeDeepLinkAdapter(accountController).catch(error => {
-    console.error("Failed to initialize deep link adapter", error);
-  });
 }
 
 async function handleHostedAuthCallback(
@@ -4477,7 +4466,7 @@ function closeCurrentArchive(): void {
   extractWorkspace.applyDefaults({
     ...extractionDefaultsForArchive(""),
     destinationPath: "",
-  });
+  }, "");
   publishArchiveSnapshot();
 }
 
@@ -4576,10 +4565,10 @@ async function chooseCreateTzapCertificate(target: "recipients" | "identity" | "
 }
 
 async function validateCreateTzapIdentity(identityPath: string, password: string) {
-  if (!identityPath.trim()) return;
+  if (!identityPath) return;
   try {
     const result = await validateTzapSigningIdentityCommand({
-      identityPath: identityPath.trim(),
+      identityPath,
       ...(password ? { password } : {}),
     });
     const chainNote = result.chainCertificateCount > 0

@@ -35,8 +35,8 @@ describe("quick action helpers", () => {
     expect(quickActionWindowDisposition("extractHere")).toBe("disposableTask");
   });
 
-  it("deduplicates and trims quick-action paths", () => {
-    expect(uniqueQuickActionPaths([" a ", "", "b", "a", " b "])).toEqual(["a", "b"]);
+  it("deduplicates literal quick-action paths", () => {
+    expect(uniqueQuickActionPaths(["a ", "", "b", "a ", " b"])).toEqual(["a ", "b", " b"]);
   });
 
   it("builds quick create destinations from preferences", () => {

@@ -226,7 +226,7 @@ describe("quick action controller", () => {
     });
 
     await harness.controller.startQuickCreate(
-      ["C:/work/report.txt", " C:/work/report.txt ", "C:/work/images"],
+      ["C:/work/report.txt", "C:/work/report.txt", "C:/work/images"],
       "zip",
       false,
     );

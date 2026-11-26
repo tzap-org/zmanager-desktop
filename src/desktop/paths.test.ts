@@ -3,10 +3,8 @@ import { describe, expect, it } from "vitest";
 import { normalizeDroppedPath, normalizeDroppedPaths } from "./paths";
 
 describe("desktop dropped path normalization", () => {
-  it("passes native paths through after trimming", () => {
-    expect(normalizeDroppedPath("  C:\\Users\\Frank\\Archive Folder\\report.zip  ")).toBe(
-      "C:\\Users\\Frank\\Archive Folder\\report.zip",
-    );
+  it("preserves whitespace in literal native paths", () => {
+    expect(normalizeDroppedPath("/tmp/report.zip ")).toBe("/tmp/report.zip ");
   });
 
   it("normalizes Windows drive file URIs into command-ready paths", () => {
@@ -27,8 +25,8 @@ describe("desktop dropped path normalization", () => {
     );
   });
 
-  it("filters blank dropped paths after normalization", () => {
-    expect(normalizeDroppedPaths(["", "  ", "file:///C:/tmp/archive.zip"])).toEqual([
+  it("filters empty dropped paths after normalization", () => {
+    expect(normalizeDroppedPaths(["", "file:///C:/tmp/archive.zip"])).toEqual([
       "C:\\tmp\\archive.zip",
     ]);
   });

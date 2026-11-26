@@ -48,7 +48,7 @@ export type QuickActionHandlers = {
 };
 
 export function uniqueQuickActionPaths(paths: string[]): string[] {
-  return Array.from(new Set(paths.map((path) => path.trim()).filter(Boolean)));
+  return Array.from(new Set(paths.filter(Boolean)));
 }
 
 export function quickActionWindowDisposition(

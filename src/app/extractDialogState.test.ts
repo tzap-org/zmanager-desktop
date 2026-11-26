@@ -48,7 +48,7 @@ describe("extract dialog state", () => {
       tzapAllowDegraded: false,
       tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
-      password: "secret",
+      password: " secret ",
     });
   });
 });

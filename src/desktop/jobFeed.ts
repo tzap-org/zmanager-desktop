@@ -143,23 +143,23 @@ export function createTauriJobFeed(
       );
     },
     async subscribeAcceptedJobs(accept) {
-      let lastAcceptanceRevision = "0";
       let disposed = false;
       let reconnecting: Promise<void> | null = null;
       let activeSubscriptionId: string | null = null;
       let connectionGeneration = 0;
       let retryTimer: ReturnType<typeof setTimeout> | null = null;
-      let lastDeliveredRevision = lastAcceptanceRevision;
       let deliveryChain = Promise.resolve();
 
       const connect = async (): Promise<void> => {
         const generation = ++connectionGeneration;
         const channel = new Channel<AcceptedJobEnvelopeDto>();
+        let highestReceivedRevision = "0";
         channel.onmessage = (envelope) => {
           if (disposed || generation !== connectionGeneration) return;
-          if (!newer(envelope.acceptanceRevision, lastDeliveredRevision)) return;
-          lastDeliveredRevision = envelope.acceptanceRevision;
+          if (!newer(envelope.acceptanceRevision, highestReceivedRevision)) return;
+          highestReceivedRevision = envelope.acceptanceRevision;
           deliveryChain = deliveryChain.then(async () => {
+            if (disposed || generation !== connectionGeneration) return;
             const presented = await accept(envelope);
             if (presented === false) {
               throw new Error("accepted Job presentation was not claimed");
@@ -168,13 +168,13 @@ export function createTauriJobFeed(
               jobId: envelope.job.jobId,
               acceptanceRevision: envelope.acceptanceRevision,
             });
-            lastAcceptanceRevision = envelope.acceptanceRevision;
           }).catch((error) => {
-            lastDeliveredRevision = lastAcceptanceRevision;
-            void reconnect(error);
+            if (generation === connectionGeneration) scheduleReconnect(error);
           });
         };
-        const subscriptionId = await subscribeAcceptedJobs(lastAcceptanceRevision, channel);
+        // The backend keeps unacknowledged jobs, including older jobs whose
+        // presentation failed while later jobs were delivered.
+        const subscriptionId = await subscribeAcceptedJobs("0", channel);
         if (disposed || generation !== connectionGeneration) {
           await unsubscribeJob({ subscriptionId }).catch(() => undefined);
           return;
@@ -191,15 +191,14 @@ export function createTauriJobFeed(
         }, reconnectDelayMs);
       };
 
-      const reconnect = (cause?: unknown): Promise<void> => {
+      const reconnect = (): Promise<void> => {
         if (disposed) return Promise.resolve();
         if (reconnecting) return reconnecting;
-        if (cause !== undefined) options.onConnectionError?.(cause);
         reconnecting = (async () => {
           const previous = activeSubscriptionId;
           activeSubscriptionId = null;
           connectionGeneration += 1;
-          if (previous && previous.startsWith("subscription-")) {
+          if (previous) {
             await unsubscribeJob({ subscriptionId: previous }).catch(() => undefined);
           }
           try {
@@ -228,7 +227,7 @@ export function createTauriJobFeed(
           await reconnecting?.catch(() => undefined);
           const subscriptionId = activeSubscriptionId;
           activeSubscriptionId = null;
-          if (subscriptionId && subscriptionId.startsWith("subscription-")) {
+          if (subscriptionId) {
             await unsubscribeJob({ subscriptionId }).catch(() => undefined);
           }
         },

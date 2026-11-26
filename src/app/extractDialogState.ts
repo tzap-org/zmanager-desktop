@@ -77,7 +77,7 @@ export function extractStartInputFromDialogForm(
     tzapAllowDegraded: form.tzapAllowDegraded,
     tzapAllowAbsoluteSymlinks: form.tzapAllowAbsoluteSymlinks,
     ignoreSymlinks: form.ignoreSymlinks,
-    ...(password.trim() ? { password: password.trim() } : {}),
+    ...(password ? { password } : {}),
   };
 }
 

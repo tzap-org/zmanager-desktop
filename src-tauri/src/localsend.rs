@@ -7,15 +7,20 @@
 //! polls. The loop auto-extracts received archives via the same internal
 //! entry point as `start_extract` when the user enables that option.
 
+use std::collections::HashMap;
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use localsend_rs::client::client::ProgressCallback;
+use localsend_rs::{DeviceInfo, DeviceInfoBuilder, LocalSendClient, Protocol, TlsCertificate, TlsTrustPolicy};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
+use tokio::sync::watch;
 
 use crate::diagnostics::DiagnosticLog;
 use crate::dto::{DestinationCollisionStrategyDto, OverwritePolicyDto, StartExtractRequest, TzapRestorePolicyDto};
@@ -25,8 +30,6 @@ use crate::job_registry::JobRegistry;
 const LOCALSEND_EVENT_NAME: &str = "zmanager-localsend-event";
 const LEGACY_DEFAULT_ALIAS: &str = "ZManager Desktop";
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(150);
-
-type LocalSendEventSink = Arc<dyn Fn(LocalSendEventDto) + Send + Sync>;
 
 // ---------------------------------------------------------------------
 // Managed state
@@ -45,20 +48,25 @@ pub struct LocalSendState {
     receive_config: Arc<Mutex<Option<ReceiveConfig>>>,
     poll_stop: Arc<Mutex<Option<Arc<AtomicBool>>>>,
     poll_thread: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
-    outgoing_event_sink: Arc<Mutex<Option<LocalSendEventSink>>>,
+    send_certificate: Option<Arc<TlsCertificate>>,
 }
 
 impl LocalSendState {
-    pub fn new(app_data_dir: PathBuf) -> Self {
+    pub fn new(app_data_dir: PathBuf, diagnostics: &DiagnosticLog) -> Self {
         let registry = zmanager_localsend::registry();
         let default_alias = default_device_alias();
-        // A LocalSend device is its certificate fingerprint, so this identity
-        // has to outlive the process: without it we are a new device to every
-        // peer on every launch. A failure here falls back to a per-process
-        // identity.
-        if let Err(error) = registry.set_identity_dir(&app_data_dir) {
-            eprintln!("zmanager-localsend: LocalSend identity will not persist across restarts: {error}");
-        }
+        // Receive, discovery, and send use the same persisted TLS identity.
+        let send_certificate = registry
+            .set_identity_dir(&app_data_dir)
+            .and_then(|()| {
+                localsend_rs::load_or_generate_tls_certificate(app_data_dir.join("certificate.pem"), app_data_dir.join("private-key.pem")).map_err(Into::into)
+            })
+            .inspect_err(|_| {
+                let _ = diagnostics.record("localSend", "identityUnavailable", crate::diagnostics::fields([]));
+            })
+            .ok()
+            .or_else(|| localsend_rs::generate_tls_certificate().ok())
+            .map(Arc::new);
 
         Self {
             registry,
@@ -66,12 +74,8 @@ impl LocalSendState {
             receive_config: Arc::new(Mutex::new(None)),
             poll_stop: Arc::new(Mutex::new(None)),
             poll_thread: Arc::new(Mutex::new(None)),
-            outgoing_event_sink: Arc::new(Mutex::new(None)),
+            send_certificate,
         }
-    }
-
-    pub(crate) fn register_outgoing_event_sink(&self, sink: LocalSendEventSink) {
-        *self.outgoing_event_sink.lock().unwrap_or_else(|error| error.into_inner()) = Some(sink);
     }
 
     pub(crate) fn start_event_pump(&self, app: AppHandle, job_registry: JobRegistry, diagnostics: DiagnosticLog) {
@@ -87,35 +91,49 @@ impl LocalSendState {
         *self.poll_thread.lock().unwrap_or_else(|error| error.into_inner()) = Some(thread);
     }
 
-    pub(crate) fn send_file_for_share(
+    pub(crate) async fn send_file_for_share(
         &self,
-        send_id: &str,
         alias: &str,
         target: LocalSendDeviceInfoDto,
         file_path: &Path,
-    ) -> Result<LocalSendSendFileResultDto, CommandErrorDto> {
-        if !file_path.is_file() {
-            return Err(CommandErrorDto::not_found("share artifact is no longer a regular file", None));
-        }
-        let request = zmanager_localsend::SendFileRequest {
-            send_id: send_id.to_string(),
-            alias: self.advertised_alias(alias),
-            self_port: default_localsend_port(),
-            https: true,
-            target: target.into(),
-            file_path: file_path.to_path_buf(),
-            pin: None,
-        };
-        self.registry.send_file(request).map(LocalSendSendFileResultDto::from).map_err(map_localsend_error)
+        cancelled: watch::Receiver<bool>,
+        progress: ProgressCallback,
+    ) -> Result<(), CommandErrorDto> {
+        // The queue owns cancellation before the future can be polled.
+        // Await the transport directly so dropping the future stops the send
+        // without relying on an abort registration inside a blocking bridge.
+        cancellable_send(cancelled, async {
+            if !file_path.is_file() {
+                return Err(CommandErrorDto::not_found("share artifact is no longer a regular file", None));
+            }
+            let target = DeviceInfo::from(zmanager_localsend::DeviceInfoDto::from(target));
+            let sender = DeviceInfoBuilder::new(self.advertised_alias(alias), default_localsend_port()).protocol(Protocol::Https).build();
+            let client = if target.protocol == Protocol::Https {
+                let policy = TlsTrustPolicy::PinnedFingerprint(target.fingerprint.clone());
+                match self.send_certificate.as_deref() {
+                    Some(certificate) => LocalSendClient::with_trust_policy_and_client_certificate(sender, policy, certificate),
+                    None => LocalSendClient::with_trust_policy(sender, policy),
+                }
+                .map_err(map_transport_error)?
+            } else {
+                LocalSendClient::new(sender)
+            };
+            let metadata = localsend_rs::build_file_metadata(file_path).await.map_err(map_transport_error)?;
+            let file_id = metadata.id.clone();
+            let prepared = client.prepare_upload(&target, HashMap::from([(file_id.clone(), metadata)]), None).await.map_err(map_transport_error)?;
+            let token =
+                prepared.files.get(&file_id).ok_or_else(|| CommandErrorDto::invalid_request("receiver did not return an upload token for the offered file"))?;
+            client
+                .upload_file_with_rate_limit(&target, &prepared.session_id, &file_id, token, file_path, Some(progress), None)
+                .await
+                .map_err(map_transport_error)
+        })
+        .await
     }
 
     fn advertised_alias(&self, alias: &str) -> String {
         let alias = alias.trim();
         if alias.is_empty() || alias.eq_ignore_ascii_case(LEGACY_DEFAULT_ALIAS) { self.default_alias.clone() } else { alias.to_owned() }
-    }
-
-    pub(crate) fn cancel_send_for_share(&self, send_id: &str) -> Result<(), CommandErrorDto> {
-        self.registry.cancel_send(&zmanager_localsend::CancelSendRequest { send_id: send_id.to_string() }).map_err(map_localsend_error)
     }
 
     /// Stops the event pump and the receiver, if either is running. Safe to
@@ -375,17 +393,16 @@ impl From<LocalSendRespondToTransferRequestDto> for zmanager_localsend::RespondT
     }
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct LocalSendSendFileResultDto {
-    pub session_id: String,
-    pub file_id: String,
+async fn cancellable_send<T>(mut cancelled: watch::Receiver<bool>, send: impl Future<Output = Result<T, CommandErrorDto>>) -> Result<T, CommandErrorDto> {
+    tokio::select! {
+        biased;
+        _ = cancelled.wait_for(|cancelled| *cancelled) => Err(CommandErrorDto::cancelled("The LAN transfer was cancelled")),
+        result = send => result,
+    }
 }
 
-impl From<zmanager_localsend::SendFileResult> for LocalSendSendFileResultDto {
-    fn from(value: zmanager_localsend::SendFileResult) -> Self {
-        Self { session_id: value.session_id, file_id: value.file_id }
-    }
+fn map_transport_error(error: localsend_rs::LocalSendError) -> CommandErrorDto {
+    map_localsend_error(error.into())
 }
 
 fn map_localsend_error(error: zmanager_localsend::LocalSendBridgeError) -> CommandErrorDto {
@@ -449,7 +466,7 @@ pub fn localsend_start_receiver(
     state: State<'_, LocalSendState>,
     _job_registry: State<'_, JobRegistry>,
 ) -> Result<(), CommandErrorDto> {
-    let receive_folder = resolve_receive_folder(&app, request.receive_folder_path.trim())?;
+    let receive_folder = resolve_receive_folder(&app, &request.receive_folder_path)?;
     fs::create_dir_all(&receive_folder).map_err(|error| crate::commands::map_io_error(receive_folder.to_string_lossy().into_owned(), error))?;
 
     state
@@ -486,20 +503,6 @@ fn spawn_event_pump(app: AppHandle, shared: LocalSendState, job_registry: JobReg
     while !stop_flag.load(Ordering::Relaxed) {
         let drained = shared.registry.poll_events();
         for event in drained.events {
-            if let zmanager_localsend::QueuedEvent::FileSendProgress { send_id, session_id, file_id, file_name, bytes_sent, total_bytes, rate_bytes_per_second } =
-                &event
-                && let Some(sink) = shared.outgoing_event_sink.lock().unwrap_or_else(|error| error.into_inner()).clone()
-            {
-                sink(LocalSendEventDto::FileSendProgress {
-                    send_id: send_id.clone(),
-                    session_id: session_id.clone(),
-                    file_id: file_id.clone(),
-                    file_name: file_name.clone(),
-                    bytes_sent: *bytes_sent,
-                    total_bytes: *total_bytes,
-                    rate_bytes_per_second: *rate_bytes_per_second,
-                });
-            }
             handle_queued_event(&app, &shared, &job_registry, &diagnostics, event);
         }
         thread::sleep(EVENT_POLL_INTERVAL);
@@ -598,6 +601,78 @@ fn build_auto_extract_request(config: &ReceiveConfig, received_path: &Path) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cancellation_before_worker_start_does_not_poll_the_transport() {
+        let (cancel, cancelled) = watch::channel(false);
+        cancel.send_replace(true);
+
+        let result: Result<(), CommandErrorDto> = cancellable_send(cancelled, async { panic!("cancelled transport must never start") }).await;
+        assert_eq!(result.unwrap_err().code, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn cancelling_an_in_flight_send_drops_its_transport() {
+        let (cancel, cancelled) = watch::channel(false);
+        let (started, ready) = tokio::sync::oneshot::channel();
+        let transport = tokio::spawn(cancellable_send(cancelled, async {
+            started.send(()).unwrap();
+            std::future::pending::<Result<(), CommandErrorDto>>().await
+        }));
+        ready.await.unwrap();
+        cancel.send_replace(true);
+        assert_eq!(transport.await.unwrap().unwrap_err().code, "cancelled");
+    }
+
+    #[tokio::test]
+    async fn share_transport_sends_an_approved_file_over_pinned_tls() {
+        let root = std::env::temp_dir().join(format!("zmanager-lan-loopback-{}", std::process::id()));
+        let source = root.join("example.txt");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(&source, "LocalSend test payload").unwrap();
+        let receive_dir = root.join("received");
+        fs::create_dir_all(&receive_dir).unwrap();
+        let (mut receiver, mut events) =
+            localsend_rs::LocalSendServer::builder().port(0).protocol(Protocol::Https).save_dir(&receive_dir).build().await.unwrap();
+        let mut target = receiver.device().clone();
+        target.ip = Some("127.0.0.1".into());
+        let target = LocalSendDeviceInfoDto::from(zmanager_localsend::DeviceInfoDto::from(target));
+        let sender = LocalSendState::new(root.join("sender-identity"), &DiagnosticLog::new());
+        let (_cancel, cancelled) = watch::channel(false);
+        let payload_progress = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let progress = payload_progress.clone();
+
+        let result = tokio::time::timeout(Duration::from_secs(5), async {
+            let send = sender.send_file_for_share(
+                "Desktop QA",
+                target,
+                &source,
+                cancelled,
+                Box::new(move |bytes, _, _| {
+                    progress.store(bytes, Ordering::Relaxed);
+                }),
+            );
+            let approve = async {
+                while let Some(event) = events.recv().await {
+                    if let localsend_rs::server::ServerEvent::TransferRequest(request) = event {
+                        assert_eq!(request.sender().alias, "Desktop QA");
+                        request.accept();
+                        return;
+                    }
+                }
+            };
+            let (result, ()) = tokio::join!(send, approve);
+            result
+        })
+        .await;
+
+        receiver.stop().await;
+        let contents = fs::read(receive_dir.join("example.txt"));
+        let _ = fs::remove_dir_all(root);
+        result.expect("loopback transport should finish").expect("approved transfer should succeed");
+        assert_eq!(contents.unwrap(), b"LocalSend test payload");
+        assert_eq!(payload_progress.load(Ordering::Relaxed), 22);
+    }
 
     #[test]
     fn default_device_alias_identifies_platform_user_and_host_without_control_characters() {

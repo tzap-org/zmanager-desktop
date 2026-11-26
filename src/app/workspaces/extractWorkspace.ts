@@ -74,7 +74,7 @@ export type ExtractWorkspaceSnapshot = Readonly<{
 
 export type ExtractWorkspace = Readonly<{
   getSnapshot(): ExtractWorkspaceSnapshot;
-  applyDefaults(defaults: ExtractWorkspaceDefaults): ExtractWorkspaceSnapshot;
+  applyDefaults(defaults: ExtractWorkspaceDefaults, archivePath?: string): ExtractWorkspaceSnapshot;
   setOptions(patch: ExtractWorkspaceOptionPatch): ExtractWorkspaceSnapshot;
   resetToDefaults(): ExtractWorkspaceSnapshot;
   setTzapVerificationOptions(patch: Partial<Pick<TzapVerificationSnapshot, "validateTrust" | "trustedCaCertificatePaths" | "trustedSystemRoots" | "includeOfficialTzapRoot" | "checkCurrentStatus">>): ExtractWorkspaceSnapshot;
@@ -100,26 +100,33 @@ const FALLBACK_DEFAULTS: ExtractWorkspaceDefaults = Object.freeze({
 export function createExtractWorkspace(initialDefaults: ExtractWorkspaceDefaults = FALLBACK_DEFAULTS): ExtractWorkspace {
   let defaults = normalizeDefaults(initialDefaults);
   let state = snapshotFromDefaults(defaults);
+  let defaultArchivePath = "";
+  let destinationOverridden = false;
 
   return {
     getSnapshot() {
       return cloneSnapshot(state);
     },
 
-    applyDefaults(nextDefaults) {
+    applyDefaults(nextDefaults, archivePath = defaultArchivePath) {
+      if (archivePath !== defaultArchivePath) {
+        defaultArchivePath = archivePath;
+        destinationOverridden = false;
+      }
       defaults = normalizeDefaults(nextDefaults);
       if (state.usesGlobalDefaults) {
         state = snapshotFromDefaults(defaults);
       } else {
         state = {
           ...state,
-          destinationPath: defaults.destinationPath,
+          destinationPath: destinationOverridden ? state.destinationPath : defaults.destinationPath,
         };
       }
       return cloneSnapshot(state);
     },
 
     setOptions(patch) {
+      if (patch.destinationPath !== undefined) destinationOverridden = true;
       const changesDurableOption = Object.keys(patch).some((key) => key !== "passwordPromptOpen");
       state = {
         ...state,
@@ -130,6 +137,7 @@ export function createExtractWorkspace(initialDefaults: ExtractWorkspaceDefaults
     },
 
     resetToDefaults() {
+      destinationOverridden = false;
       state = snapshotFromDefaults(defaults);
       return cloneSnapshot(state);
     },
@@ -180,7 +188,7 @@ export function createExtractWorkspace(initialDefaults: ExtractWorkspaceDefaults
         tzapAllowAbsoluteSymlinks: state.tzapAllowAbsoluteSymlinks,
         ignoreSymlinks: state.ignoreSymlinks,
         ...(state.tzapRecipientKeyId.trim() ? { tzapRecipientKeyId: state.tzapRecipientKeyId.trim() } : {}),
-        ...(password.trim() ? { password: password.trim() } : {}),
+        ...(password ? { password } : {}),
       };
     },
   };
@@ -219,7 +227,7 @@ function snapshotFromDefaults(defaults: ExtractWorkspaceDefaults): ExtractWorksp
 
 function normalizeDefaults(defaults: ExtractWorkspaceDefaults): ExtractWorkspaceDefaults {
   return {
-    destinationPath: defaults.destinationPath.trim(),
+    destinationPath: defaults.destinationPath,
     pathMode: normalizePathMode(defaults.pathMode),
     overwrite: normalizeOverwrite(defaults.overwrite),
     stripComponents: normalizeStripComponents(defaults.stripComponents),
@@ -288,5 +296,5 @@ function freezeVerification(value: TzapVerificationSnapshot): TzapVerificationSn
 }
 
 function uniquePaths(paths: readonly string[]): string[] {
-  return [...new Set(paths.map((path) => path.trim()).filter(Boolean))];
+  return [...new Set(paths.filter(Boolean))];
 }

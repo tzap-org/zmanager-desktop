@@ -27,6 +27,7 @@ export function createJobHandoffController(
 ): JobHandoffController {
   const presentations = new Map<string, Promise<void>>();
   const deliveredJobs = new Set<string>();
+  const resetJobs = new Set<string>();
   const acknowledgedRevisions = new Set<string>();
 
   const acknowledge = async (acceptedEnvelope: AcceptedJobEnvelopeDto): Promise<void> => {
@@ -47,36 +48,35 @@ export function createJobHandoffController(
         ? accepted
         : { acceptanceRevision: "0", job: accepted, origin: "mainWindow" as const };
       const job = envelope.job;
-      if (deliveredJobs.has(job.jobId)) {
-        if (envelope.acceptanceRevision !== "0") {
-          await acknowledge(envelope);
-        }
-        return true;
+      function resetSubmission() {
+        if (!handoffOptions.resetSubmittedState || resetJobs.has(job.jobId)) return;
+        resetJobs.add(job.jobId);
+        handoffOptions.resetSubmittedState();
       }
-      const presentationKey = job.jobId;
-      let presentation = presentations.get(presentationKey);
-      if (!presentation) {
-        presentation = (async () => {
-          try {
-            options.recordAccepted(job);
-            handoffOptions.resetSubmittedState?.();
-            await options.presentTaskWindow(job);
-          } catch (error) {
-            options.reportPresentationFailure(job, error);
-            throw error;
-          }
-        })();
-        presentations.set(presentationKey, presentation);
-        void presentation.finally(() => {
-          if (presentations.get(presentationKey) === presentation) {
-            presentations.delete(presentationKey);
-          }
-        }).catch(() => {});
-      }
-
       try {
-        await presentation;
-        deliveredJobs.add(job.jobId);
+        if (!deliveredJobs.has(job.jobId)) {
+          let presentation = presentations.get(job.jobId);
+          if (!presentation) {
+            presentation = (async () => {
+              try {
+                options.recordAccepted(job);
+                resetSubmission();
+                await options.presentTaskWindow(job);
+                deliveredJobs.add(job.jobId);
+              } catch (error) {
+                options.reportPresentationFailure(job, error);
+                throw error;
+              }
+            })();
+            presentations.set(job.jobId, presentation);
+            void presentation.finally(() => presentations.delete(job.jobId)).catch(() => {});
+          } else {
+            resetSubmission();
+          }
+          await presentation;
+        } else {
+          resetSubmission();
+        }
         if (envelope.acceptanceRevision !== "0") {
           await acknowledge(envelope);
         }

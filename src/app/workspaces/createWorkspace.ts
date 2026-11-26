@@ -508,7 +508,7 @@ export function buildQuickCreateStartRequest(
     });
   }
 
-  const destinationPath = input.destinationPath.trim();
+  const destinationPath = input.destinationPath;
   if (!destinationPath) {
     return Object.freeze({
       ok: false,
@@ -529,7 +529,7 @@ export function buildQuickCreateStartRequest(
         destinationCollisionStrategy: input.destinationCollisionStrategy,
       }),
       preserveMetadata: input.preserveMetadata,
-      password: input.password?.trim() || undefined,
+      password: input.password || undefined,
       compressionLevel: input.compressionLevel ?? undefined,
       volumeSize: input.volumeSize ?? undefined,
       respectGitignore: input.respectGitignore,
@@ -812,7 +812,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
 
     applyFormatDefaults(format, defaults, suggestionOptions) {
       const nextOptions = applyDefaultsToOptions(state.options, format, defaults);
-      if (!nextOptions.destinationPath.trim() && state.sources.length > 0 && suggestionOptions) {
+      if (!nextOptions.destinationPath && state.sources.length > 0 && suggestionOptions) {
         nextOptions.destinationPath = suggestedDestinationPathFromOptions(
           state.sources,
           nextOptions.format,
@@ -831,7 +831,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
 
     changeFormat(format, defaults) {
       const nextOptions = applyDefaultsToOptions(state.options, format, defaults);
-      if (state.options.destinationPath.trim()) {
+      if (state.options.destinationPath) {
         nextOptions.destinationPath = withCreateArchiveExtension(
           state.options.destinationPath,
           format,
@@ -953,17 +953,16 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
     },
 
     setDestinationPathIfBlank(path) {
-      if (state.options.destinationPath.trim()) {
+      if (state.options.destinationPath) {
         return destinationMutationResult(currentSnapshot(), false);
       }
-      const nextPath = path.trim();
-      const changed = state.options.destinationPath !== nextPath;
+      const changed = state.options.destinationPath !== path;
       if (changed) {
         state = {
           ...state,
           options: {
             ...state.options,
-            destinationPath: nextPath,
+            destinationPath: path,
           },
         };
       }
@@ -971,7 +970,7 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
     },
 
     suggestDestinationPathIfBlank(options) {
-      if (state.options.destinationPath.trim()) {
+      if (state.options.destinationPath) {
         return destinationMutationResult(currentSnapshot(), false);
       }
       const nextPath = suggestedDestinationPathFromState(state, options);
@@ -1069,8 +1068,8 @@ export function createCreateWorkspace(initialColumnSettings?: CreateSourceColumn
       }
 
       const supportsPassword = createFormatSupportsPassword(state.options.format);
-      const password = supportsPassword ? input?.password?.trim() ?? "" : "";
-      const passwordConfirm = supportsPassword ? input?.passwordConfirm?.trim() ?? "" : "";
+      const password = supportsPassword ? input?.password ?? "" : "";
+      const passwordConfirm = supportsPassword ? input?.passwordConfirm ?? "" : "";
       if ((password || passwordConfirm) && password !== passwordConfirm) {
         state = setPlanErrorState(state, { messageKey: "create.error.passwordMismatch" });
         return startRequestUnavailableResult(currentSnapshot(), "passwordMismatch", state.planStatus);
@@ -1438,13 +1437,12 @@ function normalizeSourcePaths(paths: readonly unknown[]): string[] {
       continue;
     }
 
-    const source = value.trim();
-    if (!source || seen.has(source)) {
+    if (!value || seen.has(value)) {
       continue;
     }
 
-    seen.add(source);
-    sources.push(source);
+    seen.add(value);
+    sources.push(value);
   }
 
   return sources;
@@ -1573,10 +1571,10 @@ function tzapCertificateRequestFromState(
   const recipientCertificatePaths = splitCertificatePaths(options.tzapRecipientCertificatePaths);
   const recipientKeyIds = splitSelectionIds(options.tzapRecipientKeyIds);
   const contactRecipientIds = splitSelectionIds(options.tzapContactRecipientIds);
-  const signingP12Path = options.tzapSigningMode === "advanced" ? options.tzapSigningIdentityPath.trim() : "";
+  const signingP12Path = options.tzapSigningMode === "advanced" ? options.tzapSigningIdentityPath : "";
   const signingChainPaths = options.tzapSigningMode === "advanced" ? splitCertificatePaths(options.tzapSigningChainPaths) : [];
-  const signingCertificatePath = options.tzapSigningMode === "advanced" ? options.tzapSigningCertificatePath.trim() : "";
-  const signingPrivateKeyPath = options.tzapSigningMode === "advanced" ? options.tzapSigningPrivateKeyPath.trim() : "";
+  const signingCertificatePath = options.tzapSigningMode === "advanced" ? options.tzapSigningCertificatePath : "";
+  const signingPrivateKeyPath = options.tzapSigningMode === "advanced" ? options.tzapSigningPrivateKeyPath : "";
   const signingIdentityId = options.tzapSigningMode === "identity" ? options.tzapSigningIdentityId.trim() : "";
   const hasRecipientSelection = recipientCertificatePaths.length > 0 || recipientKeyIds.length > 0 || contactRecipientIds.length > 0;
   if (!hasRecipientSelection && !signingIdentityId && !signingP12Path && !signingCertificatePath && !signingPrivateKeyPath && !signingChainPaths.length) {
@@ -1613,7 +1611,7 @@ function tzapCertificateRequestFromState(
 }
 
 function splitCertificatePaths(value: string): string[] {
-  return value.split(/[;\r\n]+/).map((path) => path.trim()).filter(Boolean);
+  return value.split(/[;\r\n]+/).filter(Boolean);
 }
 
 function splitSelectionIds(value: string): string[] {
@@ -1634,7 +1632,7 @@ function archiveNameForOutputFolder(
   const archiveName = getArchiveName(
     withCreateArchiveExtension(destinationPath, state.options.format),
     "",
-  ).trim();
+  );
   return archiveName || suggestedCreateArchiveName(state.sources, state.options.format);
 }
 
@@ -1655,7 +1653,7 @@ function suggestedDestinationPathFromOptions(
 }
 
 function joinNativePath(parentPath: string, childName: string): string {
-  const trimmedParent = parentPath.trim().replace(/[\\/]+$/, "");
+  const trimmedParent = parentPath.replace(/[\\/]+$/, "");
   if (!trimmedParent) {
     return childName;
   }
@@ -1664,8 +1662,7 @@ function joinNativePath(parentPath: string, childName: string): string {
 }
 
 function normalizedOptionalPath(path: string | null | undefined): string | null {
-  const trimmed = path?.trim() ?? "";
-  return trimmed || null;
+  return path || null;
 }
 
 function normalizeOptionalNonNegativeInteger(value: number | string | null | undefined): number | null {
@@ -1811,17 +1808,17 @@ function buildPlanCreateRequest(
     respectGitignore: options.respectGitignore,
     ...(options.excludeNames?.length ? { excludeNames: normalizeOptionalStrings(options.excludeNames) } : {}),
     ...(options.excludeArchivePaths?.length
-      ? { excludeArchivePaths: normalizeOptionalStrings(options.excludeArchivePaths) }
+      ? { excludeArchivePaths: options.excludeArchivePaths.filter(Boolean) }
       : {}),
     ...(options.includeArchivePaths?.length
-      ? { includeArchivePaths: normalizeOptionalStrings(options.includeArchivePaths) }
+      ? { includeArchivePaths: options.includeArchivePaths.filter(Boolean) }
       : {}),
     followSymlinks: options.followSymlinks ?? false,
   };
 }
 
 function normalizeOptionalStrings(values: readonly string[]): string[] {
-  return values.map((value) => value.trim()).filter(Boolean);
+  return values.filter(Boolean);
 }
 
 function freezePlanStatus(
@@ -2150,7 +2147,7 @@ function pathInclusionState(
 }
 
 function normalizeCreateArchivePath(path?: string | null): string {
-  return normalizeArchivePath(path?.trim() ?? "");
+  return normalizeArchivePath(path);
 }
 
 function includeAllControlState(
