@@ -12,6 +12,9 @@ bootstrap; the FFI audit retrieves only the pinned core source checkout.
   development tools.
 - `cargo audit --deny yanked --file <lockfile>` blocks on vulnerabilities and
   yanked versions. Informational maintenance warnings remain visible.
+- The Cargo license gate mutes cargo-deny's generic `no-license-field` warning:
+  `zmanager-unrar` carries its custom UnRAR terms through its included
+  `license-file`, and the package-specific UnRAR exception remains enforced.
 - `npm run test:security` checks dependency patch ownership, immutable fork
   pins, the GLib backport and the CI gate integration. The daily workflow also
   runs GLib's public iterator tests in an optimized Linux build.
@@ -36,8 +39,9 @@ writes the upstream license and patched-source notice into the install tree.
 Until the forensic readers publish fixed codec constraints, desktop mirrors the
 reviewed forks used by the core workspace. The release lock is the authoritative
 source for their URLs and commit pins, alongside the other sibling checkouts.
-AFF4 and archive-core now use the same patched `zip-forensic-core`; the ZIP 0.1
-backport and checkout are no longer needed.
+AFF4 0.3.0 and archive-core use the published `zip-forensic-core` 0.2.3
+release. The desktop follows the ZManager 2.3.0 dependency layout and does not
+pin separate AFF4 or ZIP forensic source checkouts.
 
 The canonical guide describes sibling selection and checkout behavior. Cargo's
 `[patch.crates-io]` entries in `src-tauri/Cargo.toml`
@@ -48,8 +52,7 @@ sibling layout supports the core workspace used by the macOS FFI build.
 
 ZManager, AFF4, the ZIP oracle, and the desktop resolve the `zip` package at
 9.6.1. The standalone forensic-vfs-engine test lock retains `zip` 2.4.2 because
-its registry AFF4 dependency requires `zip` ^2; that dev-only graph is not part
-of the desktop runtime, where Cargo patches AFF4 to the local 9.6.1 fork.
+that dev-only graph is separate from the desktop runtime lock.
 
 The engine bootstrap pins compatibility commit
 `400c3d719c4afe354b3d21d67f71c39092059eee` to match core's upstream ISO 0.8 /

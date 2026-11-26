@@ -10,7 +10,7 @@ const entries = lock.split(/\r?\n/).filter((line) => line.trim() && !line.trimSt
   .map((line) => line.trim().split(/\s+/));
 
 test("release input lock has unique sibling URLs, integration branches, and full commit pins", () => {
-  assert.ok(entries.length >= 10);
+  assert.ok(entries.length >= 8);
   assert.equal(new Set(entries.map(([name]) => name)).size, entries.length);
   for (const [name, url, branch, sha, extra] of entries) {
     assert.match(name, /^[a-z0-9][a-z0-9.-]*$/);
@@ -24,7 +24,7 @@ test("release input lock has unique sibling URLs, integration branches, and full
 test("release lock covers every path-based sibling dependency", () => {
   const manifest = read("src-tauri/Cargo.toml");
   const lockNames = new Set(entries.map(([name]) => name));
-  for (const name of ["zmanager", "tzap", "localsend-rs", "forensic-vfs-engine", "aff4", "backhand", "btrfs-core", "dar-core", "zfs-forensic-core", "zip-forensic-core"]) {
+  for (const name of ["zmanager", "tzap", "localsend-rs", "forensic-vfs-engine", "backhand", "btrfs-core", "zfs-forensic-core"]) {
     assert.ok(lockNames.has(name), `${name} must be in the release lock`);
   }
   assert.match(manifest, /zmanager-core\s*=\s*\{\s*path\s*=\s*"\.\.\/\.\.\/zmanager\/crates\/zmanager-core"/);

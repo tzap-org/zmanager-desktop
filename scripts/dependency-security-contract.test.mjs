@@ -6,19 +6,14 @@ import test from "node:test";
 const root = resolve(import.meta.dirname, "..");
 const read = (path) => readFileSync(resolve(root, path), "utf8").replace(/\r\n/g, "\n");
 
-test("security workflow audits npm with one scoped advisory exception and every desktop Rust lockfile", () => {
+test("security workflow blocks all npm advisories and audits every desktop Rust lockfile", () => {
   const workflow = read(".github/workflows/security-audit.yml");
   for (const trigger of ["push:", "pull_request:", "schedule:", "workflow_dispatch:"]) {
     assert.ok(workflow.includes(trigger), `missing ${trigger}`);
   }
   assert.match(workflow, /contents: read/);
-  assert.match(workflow, /node scripts\/npm-audit-gate\.mjs/);
-  assert.match(workflow, /Every other npm advisory remains blocking/);
-  const npmAuditGate = read("scripts/npm-audit-gate.mjs");
-  assert.match(npmAuditGate, /GHSA-fc5q-39xc-vjpf/);
-  assert.match(npmAuditGate, /EXPECTED_PICOMATCH_VERSION = "4\.0\.7"/);
-  assert.match(npmAuditGate, /unrelated npm advisory found/);
-  assert.match(npmAuditGate, /independent or out-of-scope advisory found/);
+  assert.match(workflow, /npm audit --audit-level=low/);
+  assert.doesNotMatch(workflow, /picomatch|allowlist|exception/i);
   for (const lockfile of ["src-tauri/Cargo.lock", "native/windows-shell-extension/Cargo.lock", "crates/zmanager-shell-contract/Cargo.lock", "vendor/glib/Cargo.lock"]) {
     assert.ok(workflow.includes(lockfile), `missing ${lockfile}`);
   }
@@ -34,14 +29,14 @@ test("security workflow audits npm with one scoped advisory exception and every 
   assert.ok(workflow.includes("cargo update --package url"));
   assert.ok(workflow.includes("cargo audit --deny yanked --file Cargo.lock"));
   assert.doesNotMatch(workflow, /continue-on-error|--ignore|\|\| true/);
-  assert.doesNotMatch(npmAuditGate, /--ignore|audit-level=high/);
+  assert.doesNotMatch(workflow, /--ignore|audit-level=(?:moderate|high|critical)/);
   assert.doesNotMatch(workflow, /docs\/|ensure-sibling-repos|secrets\./);
 });
 
 test("forensic patches have immutable checkout pins and bootstrap on both platforms", () => {
   const manifest = read("src-tauri/Cargo.toml");
   const pins = read("release-build-inputs.lock").split("\n").filter((line) => line.trim() && !line.startsWith("#"));
-  assert.equal(pins.length, 11);
+  assert.equal(pins.length, 8);
   for (const line of pins) {
     const [name, repository, branch, revision, extra] = line.split(/\s+/);
     assert.equal(extra, undefined);
@@ -49,7 +44,7 @@ test("forensic patches have immutable checkout pins and bootstrap on both platfo
     assert.match(branch, /^[A-Za-z0-9._/-]+$/);
     assert.match(revision, /^[0-9a-f]{40}$/);
   }
-  for (const name of ["aff4", "backhand", "btrfs-core", "dar-core", "zfs-forensic-core", "zip-forensic-core"]) {
+  for (const name of ["backhand", "btrfs-core", "zfs-forensic-core"]) {
     const path = name === "backhand" ? "../../backhand/backhand" : `../../${name}/core`;
     assert.ok(manifest.includes(`path = "${path}"`), `${name} must be patched at the desktop workspace root`);
   }
@@ -59,16 +54,15 @@ test("forensic patches have immutable checkout pins and bootstrap on both platfo
   }
 });
 
-test("AFF4 and archive-core share ZIP forensic 0.2.2 without the retired checkout", () => {
+test("AFF4 and archive-core share the published ZIP forensic release", () => {
   const manifest = read("src-tauri/Cargo.toml");
-  const pins = read("release-build-inputs.lock");
-  assert.match(manifest, /^zip-forensic-core = \{ path = "\.\.\/\.\.\/zip-forensic-core\/core" \}$/m);
-  assert.doesNotMatch(manifest + pins, /zip-forensic-core-0[.12]/);
+  assert.doesNotMatch(manifest, /^zip-forensic-core = \{ path = /m);
   const packages = read("src-tauri/Cargo.lock").split("[[package]]");
   const zip = packages.filter((entry) => /^\s*name = "zip-forensic-core"$/m.test(entry));
   assert.equal(zip.length, 1);
-  assert.match(zip[0], /version = "0\.2\.2"/);
-  assert.doesNotMatch(zip[0], /source =|checksum =/);
+  assert.match(zip[0], /version = "0\.2\.3"/);
+  assert.match(zip[0], /source = "registry\+https:\/\/github\.com\/rust-lang\/crates\.io-index"/);
+  assert.match(zip[0], /checksum = /);
   for (const name of ["aff4", "archive-core"]) {
     const entry = packages.find((entry) => entry.includes(`name = "${name}"\n`));
     assert.ok(entry, `${name} must be resolved`);
@@ -129,9 +123,9 @@ test("the product lockfile uses the reviewed codec sources and excludes yanked c
   const versions = (name) => packageEntries(name).map((entry) => entry.match(/^version = "([^"]+)"/m)?.[1]);
 
   assert.deepEqual(versions("backhand"), ["0.25.5"]);
-  assert.deepEqual(versions("tzap-core"), ["0.2.9"]);
-  assert.deepEqual(versions("tzap-plugin-keywrap"), ["0.2.9"]);
-  assert.deepEqual(versions("tzap-plugin-signing"), ["0.2.9"]);
+  assert.deepEqual(versions("tzap-core"), ["0.3.0"]);
+  assert.deepEqual(versions("tzap-plugin-keywrap"), ["0.3.0"]);
+  assert.deepEqual(versions("tzap-plugin-signing"), ["0.3.0"]);
   assert.deepEqual(versions("openssl"), ["0.10.82"]);
   assert.deepEqual(versions("openssl-sys"), ["0.9.118"]);
   assert.doesNotMatch(packageEntries("tzap-core")[0], /source =|checksum =/,
@@ -157,8 +151,8 @@ test("release lock captures controlled sibling commits and gate verifies them", 
   assert.match(read("scripts/release-gate.sh"), /refs\/tags\/\$zmanager_tag\^\{commit\}/);
   assert.match(read("scripts/release-gate.sh"), /require_tagged_commit tzap/);
   assert.match(read("scripts/release-gate.sh"), /ZMANAGER_NOTARIZATION_TEST/);
-  assert.equal(reviewedCoreRevision, "d2f0302e6a127f0dae7e006e31dabcdfbeb6b9c0");
-  assert.equal(reviewedTzapRevision, "69f53d71ad13876cbf74fac38f5f3aa2cf412920");
+  assert.equal(reviewedCoreRevision, "b3e54e1be5fb537f6b05211d9397a2e91b28be08");
+  assert.equal(reviewedTzapRevision, "67bedbfc1f77190596ad9f0c2dc8b286e3d23d72");
   assert.match(read(".github/workflows/security-audit.yml"), /check-shared-dependency-locks\.mjs/);
   assert.match(read("scripts/ensure-sibling-repos.sh"), /check-shared-dependency-locks\.mjs/);
   const opensslSetup = read("scripts/pinned-openssl.sh");

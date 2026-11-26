@@ -104,5 +104,5 @@ test("license gate covers every shipped target and does not globally allow CDLA"
   }
   assert.match(deny, /unused-allowed-license\s*=\s*"deny"/);
   assert.doesNotMatch(deny, /^\s+"CDLA-Permissive-2\.0",\s*$/m);
-  assert.match(workflow, /cargo deny --all-features check licenses/);
+  assert.match(workflow, /cargo deny --all-features check licenses --allow no-license-field/);
 });

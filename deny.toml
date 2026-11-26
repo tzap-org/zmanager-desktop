@@ -1,6 +1,7 @@
 # License policy for the Rust dependency closure used by ZManager Desktop.
 #
-# Run locally with: (cd src-tauri && cargo deny --all-features check licenses)
+# Run locally with: (cd src-tauri && cargo deny --all-features check licenses --allow no-license-field)
+# zmanager-unrar declares its included custom terms via license-file, so mute cargo-deny's generic missing SPDX-field warning.
 # A newly introduced license must be reviewed and added here intentionally.
 
 [graph]

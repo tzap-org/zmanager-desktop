@@ -23,9 +23,8 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version-file: .node-version
-      # Allow only the documented, unpatched picomatch build-tool advisory.
-      # Every other npm advisory remains blocking.
-      - run: node scripts/npm-audit-gate.mjs
+      # Fail on every reported npm advisory, including low severity findings.
+      - run: npm audit --audit-level=low
       - run: npm run test:security
       - run: node --test scripts/sibling-repository-contract.test.mjs scripts/third-party-license-generator.test.mjs
 

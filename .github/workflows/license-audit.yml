@@ -49,7 +49,9 @@ jobs:
 
       - name: Check Rust dependency licenses
         working-directory: src-tauri
-        run: cargo deny --all-features check licenses
+        # zmanager-unrar carries its custom terms via license-file; suppress
+        # cargo-deny's generic missing SPDX-field warning for file-only licenses.
+        run: cargo deny --all-features check licenses --allow no-license-field
 
       - name: Generate and validate the release license bundle
         run: |
