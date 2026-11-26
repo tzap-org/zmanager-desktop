@@ -1301,7 +1301,6 @@ function LanSharingPage({
   const snapshot = useZManagerSnapshot();
   const actions = useZManagerActions();
   const i18n = translatorForSnapshot(snapshot);
-  const trustedDevices = snapshot.localSendTrustedDevices;
 
   return (
     <section
@@ -1401,62 +1400,6 @@ function LanSharingPage({
           <p className={SETTING_DESCRIPTION_CLASS}>
             {i18n.t("preferences.lanSharing.receiveFolderHelp")}
           </p>
-        </div>
-      </div>
-      <div className={SETTING_ROW_CLASS}>
-        <label>{i18n.t("preferences.lanSharing.trustedDevices")}</label>
-        <div className={SETTING_CONTROL_CLASS}>
-          <p className={SETTING_DESCRIPTION_CLASS}>
-            {i18n.t("preferences.lanSharing.trustedDevicesHelp")}
-          </p>
-          {trustedDevices.status === "error" ? (
-            <div className={SETTING_DESCRIPTION_CLASS}>
-              <p role="alert">
-                {trustedDevices.error ?? i18n.t("preferences.lanSharing.trustedDevicesLoadFailed")}
-              </p>
-              <Button
-                type="button"
-                variant="dialog"
-                size="unset"
-                onClick={() =>
-                  actions.handleDialogIntent({ type: "localSendTrustRefresh" })
-                }
-              >
-                {i18n.t("common.refresh")}
-              </Button>
-            </div>
-          ) : trustedDevices.status !== "loading" && trustedDevices.fingerprints.length === 0 ? (
-            <p className={SETTING_DESCRIPTION_CLASS}>
-              {i18n.t("preferences.lanSharing.trustedDevicesEmpty")}
-            </p>
-          ) : (
-            <ul className="space-y-1.5">
-              {trustedDevices.fingerprints.map((fingerprint) => (
-                <li
-                  key={fingerprint}
-                  className="flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs dark:border-slate-700 dark:bg-slate-900/70"
-                >
-                  <span className="min-w-0 truncate font-mono" title={fingerprint}>
-                    {fingerprint}
-                  </span>
-                  <Button
-                    type="button"
-                    variant="dialog"
-                    size="unset"
-                    disabled={trustedDevices.status === "loading"}
-                    onClick={() =>
-                      actions.handleDialogIntent({
-                        type: "localSendTrustForget",
-                        fingerprint,
-                      })
-                    }
-                  >
-                    {i18n.t("common.remove")}
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          )}
         </div>
       </div>
     </section>

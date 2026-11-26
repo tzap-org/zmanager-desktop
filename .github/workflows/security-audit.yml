@@ -9,6 +9,11 @@ on:
     - cron: "37 20 * * *"
   workflow_dispatch:
   workflow_call:
+    inputs:
+      checkout_ref:
+        description: Desktop commit to audit
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -20,6 +25,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref }}
       - uses: actions/setup-node@v6
         with:
           node-version-file: .node-version
@@ -42,6 +49,8 @@ jobs:
           - vendor/glib/Cargo.lock
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref }}
       - run: rustup toolchain install stable --profile minimal
       - run: cargo +stable install cargo-audit --locked --version 0.22.2
       # Audit every platform's committed resolution, without sibling checkouts.
@@ -53,6 +62,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref }}
       - run: sudo apt-get update && sudo apt-get install -y libglib2.0-dev
       # The upstream public iterator tests reproduce the UB under optimization.
       - run: cargo test --manifest-path vendor/glib/Cargo.toml --locked --release --lib variant_iter::tests
@@ -63,6 +74,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.checkout_ref }}
       - name: Read released sibling revisions
         id: core
         run: |

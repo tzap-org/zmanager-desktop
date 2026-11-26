@@ -4,10 +4,8 @@
 //! not a subscribable stream, so this module runs its own short-interval
 //! poll loop in a background thread and re-emits each event to the
 //! frontend as a push (`zmanager-localsend-event`) — the frontend never
-//! polls. The loop also owns two decisions that don't belong on the
-//! frontend: auto-accepting transfers from devices in the `TrustStore`, and
-//! auto-extracting received archives via the same internal entry point
-//! `start_extract` itself uses.
+//! polls. The loop auto-extracts received archives via the same internal
+//! entry point as `start_extract` when the user enables that option.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -25,82 +23,10 @@ use crate::error::CommandErrorDto;
 use crate::job_registry::JobRegistry;
 
 const LOCALSEND_EVENT_NAME: &str = "zmanager-localsend-event";
-const TRUST_STORE_FILE_NAME: &str = "localsend-trusted-fingerprints.json";
 const LEGACY_DEFAULT_ALIAS: &str = "ZManager Desktop";
 const EVENT_POLL_INTERVAL: Duration = Duration::from_millis(150);
 
 type LocalSendEventSink = Arc<dyn Fn(LocalSendEventDto) + Send + Sync>;
-
-// ---------------------------------------------------------------------
-// Trust store — a small, LocalSend-specific fingerprint allowlist. Mirrors
-// the design already proven in the sibling zmanager-mobile repo's
-// rust/zmanager-mobile-core/src/trust_store.rs; kept as an independent copy
-// here rather than a shared dependency (small enough that duplicating it is
-// simpler than coupling to a private crate in a different repo). This is
-// deliberately unrelated to the Identity & Contacts signing-certificate
-// system in account.rs, which is about encrypted-archive recipients, not
-// LAN peers.
-// ---------------------------------------------------------------------
-
-#[derive(Clone)]
-pub struct TrustStore {
-    path: PathBuf,
-    // Serializes remember/forget's read-modify-write cycle so two concurrent
-    // Tauri command invocations (trust-device and untrust-device can both
-    // run on the async runtime's blocking pool at once) can't race and lose
-    // an update.
-    write_lock: Arc<Mutex<()>>,
-}
-
-impl TrustStore {
-    pub fn new(app_data_dir: impl Into<PathBuf>) -> Self {
-        Self { path: app_data_dir.into().join(TRUST_STORE_FILE_NAME), write_lock: Arc::new(Mutex::new(())) }
-    }
-
-    pub fn is_trusted(&self, fingerprint: &str) -> bool {
-        self.fingerprints().iter().any(|existing| existing == fingerprint)
-    }
-
-    pub fn remember(&self, fingerprint: impl Into<String>) -> Result<(), CommandErrorDto> {
-        let _guard = self.write_lock.lock().unwrap_or_else(|error| error.into_inner());
-        let mut fingerprints = self.fingerprints();
-        let fingerprint = fingerprint.into();
-        if !fingerprints.contains(&fingerprint) {
-            fingerprints.push(fingerprint);
-        }
-        self.write(fingerprints)
-    }
-
-    pub fn forget(&self, fingerprint: &str) -> Result<(), CommandErrorDto> {
-        let _guard = self.write_lock.lock().unwrap_or_else(|error| error.into_inner());
-        let mut fingerprints = self.fingerprints();
-        fingerprints.retain(|existing| existing != fingerprint);
-        self.write(fingerprints)
-    }
-
-    pub fn fingerprints(&self) -> Vec<String> {
-        let Ok(text) = fs::read_to_string(&self.path) else {
-            return Vec::new();
-        };
-        let mut fingerprints = serde_json::from_str::<Vec<String>>(&text).unwrap_or_default();
-        fingerprints.sort();
-        fingerprints.dedup();
-        fingerprints
-    }
-
-    fn write(&self, mut fingerprints: Vec<String>) -> Result<(), CommandErrorDto> {
-        fingerprints.sort();
-        fingerprints.dedup();
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|error| crate::commands::map_io_error(parent.to_string_lossy().into_owned(), error))?;
-        }
-        let temporary_path = self.path.with_extension(format!("json.{}.tmp", std::process::id()));
-        let text = serde_json::to_string_pretty(&fingerprints).map_err(|error| CommandErrorDto::invalid_request(error.to_string()))?;
-        fs::write(&temporary_path, &text).map_err(|error| crate::commands::map_io_error(temporary_path.to_string_lossy().into_owned(), error))?;
-        fs::rename(&temporary_path, &self.path).map_err(|error| crate::commands::map_io_error(self.path.to_string_lossy().into_owned(), error))?;
-        Ok(())
-    }
-}
 
 // ---------------------------------------------------------------------
 // Managed state
@@ -116,7 +42,6 @@ struct ReceiveConfig {
 pub struct LocalSendState {
     registry: Arc<zmanager_localsend::LocalSendRegistry>,
     default_alias: String,
-    trust_store: TrustStore,
     receive_config: Arc<Mutex<Option<ReceiveConfig>>>,
     poll_stop: Arc<Mutex<Option<Arc<AtomicBool>>>>,
     poll_thread: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
@@ -129,10 +54,8 @@ impl LocalSendState {
         let default_alias = default_device_alias();
         // A LocalSend device is its certificate fingerprint, so this identity
         // has to outlive the process: without it we are a new device to every
-        // peer on every launch, and the trust store beside it — which is keyed
-        // by fingerprint — would never match after a restart. A failure here
-        // is not fatal; the registry falls back to a per-process identity and
-        // LocalSend still works, minus the stable identity.
+        // peer on every launch. A failure here falls back to a per-process
+        // identity.
         if let Err(error) = registry.set_identity_dir(&app_data_dir) {
             eprintln!("zmanager-localsend: LocalSend identity will not persist across restarts: {error}");
         }
@@ -140,7 +63,6 @@ impl LocalSendState {
         Self {
             registry,
             default_alias,
-            trust_store: TrustStore::new(app_data_dir),
             receive_config: Arc::new(Mutex::new(None)),
             poll_stop: Arc::new(Mutex::new(None)),
             poll_thread: Arc::new(Mutex::new(None)),
@@ -537,10 +459,8 @@ pub fn localsend_start_receiver(
             port: request.port,
             https: request.https,
             save_dir: receive_folder.clone(),
-            // Desktop never lets the underlying server auto-accept every
-            // transfer; per-fingerprint auto-accept is handled by the event
-            // pump below via `TrustStore`, so every other sender still gets
-            // the accept/decline prompt.
+            // The receiver cannot authenticate the identity in an incoming
+            // offer. Always ask for consent before accepting files.
             auto_accept: false,
             pin: request.pin,
         })
@@ -557,25 +477,9 @@ pub fn localsend_stop_receiver(state: State<'_, LocalSendState>) -> Result<(), C
     state.registry.stop_receiver().map_err(map_localsend_error)
 }
 
-#[tauri::command]
-pub fn localsend_list_trusted_devices(state: State<'_, LocalSendState>) -> Vec<String> {
-    state.trust_store.fingerprints()
-}
-
-#[tauri::command]
-pub fn localsend_trust_device(fingerprint: String, state: State<'_, LocalSendState>) -> Result<(), CommandErrorDto> {
-    state.trust_store.remember(fingerprint)
-}
-
-#[tauri::command]
-pub fn localsend_untrust_device(fingerprint: String, state: State<'_, LocalSendState>) -> Result<(), CommandErrorDto> {
-    state.trust_store.forget(&fingerprint)
-}
-
 // ---------------------------------------------------------------------
 // Event pump: bridges the registry's poll-a-queue API to a frontend push
-// event, and owns the two receive-side decisions that don't belong on the
-// frontend (trusted-fingerprint auto-accept, auto-extract).
+// event and starts auto-extraction after a file has been received.
 // ---------------------------------------------------------------------
 
 fn spawn_event_pump(app: AppHandle, shared: LocalSendState, job_registry: JobRegistry, diagnostics: DiagnosticLog, stop_flag: Arc<AtomicBool>) {
@@ -609,22 +513,6 @@ fn handle_queued_event(
     diagnostics: &DiagnosticLog,
     event: zmanager_localsend::QueuedEvent,
 ) {
-    if let zmanager_localsend::QueuedEvent::TransferRequest { request_id, sender, .. } = &event
-        && shared.trust_store.is_trusted(&sender.fingerprint)
-    {
-        let _ = shared.registry.respond_to_transfer(zmanager_localsend::RespondToTransferRequest {
-            request_id: request_id.clone(),
-            decision: zmanager_localsend::TransferDecisionKind::Accept,
-            file_ids: Vec::new(),
-            reason: None,
-        });
-        // Already resolved above — never forward this one to the frontend.
-        // The accept/decline prompt only makes sense for a request that's
-        // still pending, and responding again would fail with
-        // `UnknownRequestId` since the registry already consumed it.
-        return;
-    }
-
     if let zmanager_localsend::QueuedEvent::FileReceived { path, .. } = &event {
         maybe_auto_extract(shared, job_registry, diagnostics, path);
     }
@@ -717,37 +605,6 @@ mod tests {
         assert_eq!(default_device_alias_for("linux", Some("frank"), None), "ZManager Linux · frank");
         assert_eq!(default_device_alias_for("windows", None, Some("Office-PC")), "ZManager Windows · Office-PC");
         assert_eq!(clean_alias_component("  Frank\n\tDesktop  "), Some("Frank Desktop".to_owned()));
-    }
-
-    #[test]
-    fn trust_store_round_trip_is_sorted_and_deduplicated() {
-        let root = std::env::temp_dir().join(format!("zmanager-desktop-localsend-trust-{}-{}", std::process::id(), line!()));
-        let _ = std::fs::remove_dir_all(&root);
-        let store = TrustStore::new(&root);
-
-        store.remember("zzz").expect("remember zzz");
-        store.remember("aaa").expect("remember aaa");
-        store.remember("aaa").expect("remember aaa again");
-
-        assert_eq!(store.fingerprints(), ["aaa", "zzz"]);
-        assert!(store.is_trusted("aaa"));
-        assert!(!store.is_trusted("does-not-exist"));
-
-        store.forget("aaa").expect("forget aaa");
-        assert!(!store.is_trusted("aaa"));
-        assert_eq!(store.fingerprints(), ["zzz"]);
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn trust_store_missing_file_reads_as_empty() {
-        let root = std::env::temp_dir().join(format!("zmanager-desktop-localsend-trust-missing-{}-{}", std::process::id(), line!()));
-        let _ = std::fs::remove_dir_all(&root);
-        let store = TrustStore::new(&root);
-
-        assert!(store.fingerprints().is_empty());
-        assert!(!store.is_trusted("anything"));
     }
 
     #[test]

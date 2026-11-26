@@ -91,6 +91,7 @@ function createHarness(overrides: Partial<CreateStartControllerOptions> = {}) {
       return snapshot;
     },
     startCreate,
+    enqueueShare: vi.fn(async () => {}),
     onCreateStarted(response, request) {
       calls.started.push({ response, request });
     },
@@ -138,6 +139,55 @@ describe("create start controller", () => {
     });
     expect(harness.workspace.getSnapshot().options.submissionInFlight).toBe(false);
     expect(harness.calls.published).toBe(3);
+  });
+
+  it("queues the reviewed exclusions and recipient selection when sharing", async () => {
+    const enqueueShare = vi.fn(async () => {});
+    const harness = createHarness({ enqueueShare });
+    const { workspace } = harness;
+    workspace.changeFormat("tzap", formatDefaults());
+    workspace.setDestinationPath("C:/out/project.tzap");
+    workspace.setOptions({ tzapRecipientKeyIds: "recipient-1", compressionLevel: 7 });
+    const plan = workspace.beginPlan();
+    if (!plan.ready) throw new Error("Expected plan request to be ready");
+    workspace.acceptPlanResult(plan.revision, createPlan({
+      includedCount: 2,
+      entries: ["project/readme.md", "project/private.txt"],
+      planEntries: [
+        { path: "project/readme.md", kind: "file", size: 12, sourcePath: "C:/work/project/readme.md" },
+        { path: "project/private.txt", kind: "file", size: 8, sourcePath: "C:/work/project/private.txt" },
+      ],
+    }));
+    workspace.setPathIncluded("project/private.txt", false);
+
+    await harness.controller.runCreateAndShare({
+      passwordInput: { password: "", passwordConfirm: "" },
+    });
+
+    expect(enqueueShare).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      destinationPath: "C:/out/project.tzap",
+      excludeArchivePaths: ["project/private.txt"],
+      compressionLevel: 7,
+      tzapCertificates: expect.objectContaining({
+        recipientSelection: expect.objectContaining({ recipientKeyIds: ["recipient-1"] }),
+      }),
+    }));
+    expect(harness.startCreate).not.toHaveBeenCalled();
+    expect(workspace.getSnapshot().options.submissionInFlight).toBe(false);
+  });
+
+  it("validates the password confirmation before queuing a share", async () => {
+    const enqueueShare = vi.fn(async () => {});
+    const harness = createHarness({ enqueueShare });
+
+    await harness.controller.runCreateAndShare({
+      passwordInput: { password: "one", passwordConfirm: "two" },
+    });
+
+    expect(enqueueShare).not.toHaveBeenCalled();
+    expect(harness.workspace.getSnapshot().plan.status).toEqual({
+      messageKey: "create.error.passwordMismatch",
+    });
   });
 
   it("renders validation errors without starting create", async () => {

@@ -388,7 +388,10 @@ impl ShareRegistry {
             }
             EnqueueShareRequest::CompressAndShare { create_request, .. } => {
                 let create_request = *create_request;
-                if create_request.volume_size.is_some_and(|value| value > 0) {
+                if create_request.volume_size.is_some_and(|value| value > 0)
+                    || create_request.volume_count.is_some_and(|value| value > 1)
+                    || create_request.tzap_bootstrap_sidecar.unwrap_or(false)
+                {
                     return Err(error("multi_file_output_not_supported", "Compressed sharing requires one output file", false));
                 }
                 if create_request.sources.is_empty() {

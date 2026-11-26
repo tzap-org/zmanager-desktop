@@ -58,7 +58,6 @@ import {
   type AccountWorkspaceSnapshot,
 } from "../../app/workspaces/accountWorkspace";
 import type { DefaultHandlerSnapshot } from "../../app/controllers/defaultHandlerController";
-import type { LocalSendTrustSnapshot } from "../../app/controllers/localSendTrustController";
 import type { LocalSendIncomingTransferSnapshot } from "../../app/controllers/localSendIncomingTransfer";
 import type { LocalSendDeviceInfoDto, ShareRegistrySnapshot } from "../../app/controllers/shareQueueController";
 
@@ -108,7 +107,6 @@ export type ZManagerContextMenuActionPayload = ContextMenuActionPayload;
 export type ZManagerReactSnapshot = Readonly<{
   account: AccountWorkspaceSnapshot;
   defaultHandlers: DefaultHandlerSnapshot;
-  localSendTrustedDevices: LocalSendTrustSnapshot;
   localSendDiscovery: LocalSendDiscoverySnapshot;
   shareQueue: ShareRegistrySnapshot;
   localSendIncomingTransfers: readonly LocalSendIncomingTransferSnapshot[];
@@ -283,12 +281,11 @@ export type ZManagerCreateIntent =
       targetColumnId: CreateSourceColumnId;
     }>
   | Readonly<{
-      type: "runCreate";
+      type: "runCreate" | "compressAndShareOnLan";
       password: string;
       passwordConfirm: string;
       signingIdentityPassword: string;
     }>
-  | Readonly<{ type: "compressAndShareOnLan" }>
 ;
 
 export type ZManagerDialogIntent =
@@ -343,10 +340,8 @@ export type ZManagerDialogIntent =
   | Readonly<{ type: "preferencesChooseOutput" }>
   | Readonly<{ type: "preferencesChooseExtractOutput" }>
   | Readonly<{ type: "preferencesChooseLanShareReceiveFolder" }>
-  | Readonly<{ type: "localSendTrustRefresh" }>
   | Readonly<{ type: "shareQueueRefreshReceivers" }>
   | Readonly<{ type: "shareQueueOpenReceivers" }>
-  | Readonly<{ type: "localSendTrustForget"; fingerprint: string }>
   | Readonly<{ type: "shareQueueSetReceiver"; shareId: string; receiver: LocalSendDeviceInfoDto }>
   | Readonly<{ type: "shareQueueStart"; shareId: string; acknowledgeDeliveryUncertainty?: boolean }>
   | Readonly<{ type: "shareQueueSkip"; shareId: string }>
@@ -356,7 +351,6 @@ export type ZManagerDialogIntent =
       type: "localSendIncomingRespond";
       requestId: string;
       decision: "accept" | "decline";
-      alwaysAccept: boolean;
     }>
   | Readonly<{ type: "defaultHandlersRefresh" }>
   | Readonly<{ type: "defaultHandlersSet" }>
@@ -450,7 +444,6 @@ export type ZManagerReactRuntimeAdapter = Readonly<{
 export type CreateZManagerReactSnapshotInput = Readonly<{
   account?: AccountWorkspaceSnapshot;
   defaultHandlers?: DefaultHandlerSnapshot;
-  localSendTrustedDevices?: LocalSendTrustSnapshot;
   localSendDiscovery?: LocalSendDiscoverySnapshot;
   shareQueue?: ShareRegistrySnapshot;
   localSendIncomingTransfers?: readonly LocalSendIncomingTransferSnapshot[];
@@ -513,11 +506,6 @@ export function createZManagerReactSnapshot(
       status: "idle",
       entries: [],
       canRestore: false,
-      error: null,
-    },
-    localSendTrustedDevices: input.localSendTrustedDevices ?? {
-      status: "idle",
-      fingerprints: [],
       error: null,
     },
     localSendDiscovery: input.localSendDiscovery ?? {

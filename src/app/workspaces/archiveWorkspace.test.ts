@@ -844,7 +844,33 @@ describe("archive workspace load state", () => {
     }))).toBe("noArchive");
   });
 
-  it("builds extract selection requests with folder expansion and empty-folder fallback", () => {
+  it("keeps a folder selector when a flat view shows only some descendants", () => {
+    const workspace = createArchiveWorkspace();
+    workspace.setFlatView(true);
+    workspace.acceptPage({
+      archivePath: "C:/tmp/project.zip",
+      parentPath: "",
+      entries: [
+        { path: "docs", kind: "directory" },
+        { path: "docs/first.txt", kind: "file" },
+      ],
+      entryCount: 500,
+      childCount: 500,
+      hasNext: true,
+    });
+    selectPaths(workspace, ["docs"]);
+
+    const request = requestOf(workspace.buildExtractRequest({
+      mode: "selection",
+      destinationPath: "D:/out",
+      overwrite: "rename",
+      stripComponents: 0,
+    }));
+
+    expect(request.entryPaths).toEqual(["docs"]);
+  });
+
+  it("passes explicit, implied, and empty folder selectors to extraction", () => {
     const workspace = createArchiveWorkspace();
     const extractEntries: ArchiveEntryDto[] = [
       { path: "docs", kind: "directory" },
@@ -869,15 +895,15 @@ describe("archive workspace load state", () => {
       stripComponents: 1,
     }));
 
-    expect(request.entryPaths).toEqual([
+    expect(request.entryPaths).toEqual(["docs", "empty", "generated", "loose.txt"]);
+    expect(workspace.getSelectedExtractEntryPaths()).toEqual(request.entryPaths);
+    expect(workspace.getExtractReferencePaths("selection")).toEqual([
       "docs/readme.txt",
       "docs/guides/intro.txt",
       "empty",
       "generated/file.txt",
       "loose.txt",
     ]);
-    expect(workspace.getSelectedExtractEntryPaths()).toEqual(request.entryPaths);
-    expect(workspace.getExtractReferencePaths("selection")).toEqual(request.entryPaths);
 
     selectPaths(workspace, []);
     expect(reasonOf(workspace.buildExtractRequest({

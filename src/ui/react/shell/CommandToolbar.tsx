@@ -213,7 +213,7 @@ function CompressToolbarGroups() {
         <ToolbarButton commandId="add" />
         <CompressDestinationToolbarButton />
         <CreateArchiveToolbarButton />
-        <CompressAndShareOnLanToolbarButton />
+        <CreateArchiveToolbarButton shareOnLan />
       </div>
       <div
         className="h-full w-px bg-slate-200 dark:bg-slate-700"
@@ -254,7 +254,7 @@ function CompressDestinationToolbarButton() {
   );
 }
 
-function CreateArchiveToolbarButton() {
+function CreateArchiveToolbarButton({ shareOnLan = false }: { shareOnLan?: boolean }) {
   const snapshot = useZManagerSnapshot();
   const actions = useZManagerActions();
   const i18n = translatorForSnapshot(snapshot);
@@ -264,25 +264,26 @@ function CreateArchiveToolbarButton() {
     !snapshot.create.options.password.disabled;
   const canCreate = snapshot.create.options.readiness.canCreate;
 
-  if (snapshot.shell.activeMode !== "compress") {
+  if (snapshot.shell.activeMode !== "compress" || (shareOnLan && !snapshot.runtime.isLocalSendAvailable)) {
     return null;
   }
 
+  const label = i18n.t(shareOnLan ? "command.compressShareOnLan" : "compress.createArchive");
   return (
     <ToolbarActionButton
-      id="start-create"
-      label={i18n.t("compress.createArchive")}
+      id={shareOnLan ? "compress-share-on-lan" : "start-create"}
+      label={label}
       title={
         canCreate
-          ? i18n.t("compress.createArchive")
+          ? label
           : createToolbarUnavailableText(snapshot)
       }
-      Icon={FileArchive}
-      primary={canCreate}
+      Icon={shareOnLan ? Share2 : FileArchive}
+      primary={!shareOnLan && canCreate}
       disabled={!canCreate}
       onClick={() => {
         actions.handleCreateIntent({
-          type: "runCreate",
+          type: shareOnLan ? "compressAndShareOnLan" : "runCreate",
           password: canSubmitPassword ? createPassword.password : "",
           passwordConfirm: canSubmitPassword
             ? createPassword.passwordConfirm
@@ -291,32 +292,6 @@ function CreateArchiveToolbarButton() {
         });
         createPassword.reset();
       }}
-    />
-  );
-}
-
-function CompressAndShareOnLanToolbarButton() {
-  const snapshot = useZManagerSnapshot();
-  const actions = useZManagerActions();
-  const i18n = translatorForSnapshot(snapshot);
-  const canShare = !snapshot.create.isEmpty;
-
-  if (snapshot.shell.activeMode !== "compress" || !snapshot.runtime.isLocalSendAvailable) {
-    return null;
-  }
-
-  return (
-    <ToolbarActionButton
-      id="compress-share-on-lan"
-      label={i18n.t("command.compressShareOnLan")}
-      title={
-        canShare
-          ? i18n.t("command.compressShareOnLan")
-          : i18n.t("create.status.needsSources")
-      }
-      Icon={Share2}
-      disabled={!canShare}
-      onClick={() => actions.handleCreateIntent({ type: "compressAndShareOnLan" })}
     />
   );
 }

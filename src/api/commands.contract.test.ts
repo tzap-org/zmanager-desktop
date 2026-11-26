@@ -398,17 +398,6 @@ const COMMAND_WRAPPERS = [
     call: () => api.runLocalSendStartReceiver({ alias: "ZManager Desktop", receiveFolderPath: "C:/receive" }),
   },
   { command: "localsend_stop_receiver", call: () => api.runLocalSendStopReceiver() },
-  { command: "localsend_list_trusted_devices", call: () => api.runLocalSendListTrustedDevices() },
-  {
-    command: "localsend_trust_device",
-    args: { fingerprint: "fingerprint-1" },
-    call: () => api.runLocalSendTrustDevice("fingerprint-1"),
-  },
-  {
-    command: "localsend_untrust_device",
-    args: { fingerprint: "fingerprint-1" },
-    call: () => api.runLocalSendUntrustDevice("fingerprint-1"),
-  },
 ] as const;
 
 describe("Tauri command contracts", () => {

@@ -276,10 +276,7 @@ fn main() {
             share_queue::remove_share,
             localsend::localsend_respond_to_transfer,
             localsend::localsend_start_receiver,
-            localsend::localsend_stop_receiver,
-            localsend::localsend_list_trusted_devices,
-            localsend::localsend_trust_device,
-            localsend::localsend_untrust_device
+            localsend::localsend_stop_receiver
         ])
         .build(tauri::generate_context!())
         .expect("failed to build ZManager desktop");

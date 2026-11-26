@@ -457,18 +457,6 @@ export async function runLocalSendStopReceiver(): Promise<void> {
   return invoke<void>("localsend_stop_receiver");
 }
 
-export async function runLocalSendListTrustedDevices(): Promise<string[]> {
-  return invoke<string[]>("localsend_list_trusted_devices");
-}
-
-export async function runLocalSendTrustDevice(fingerprint: string): Promise<void> {
-  return invoke<void>("localsend_trust_device", { fingerprint });
-}
-
-export async function runLocalSendUntrustDevice(fingerprint: string): Promise<void> {
-  return invoke<void>("localsend_untrust_device", { fingerprint });
-}
-
 export function asCommandError(value: unknown): CommandErrorDto | null {
   if (typeof value !== "object" || value === null) {
     return null;

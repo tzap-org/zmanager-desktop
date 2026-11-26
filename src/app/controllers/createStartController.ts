@@ -24,6 +24,7 @@ export type CreateStartControllerOptions = Readonly<{
   submissionGuard: MainWindowSubmissionGuard;
   publishSnapshot(snapshot: CreateWorkspaceSnapshot): CreateWorkspaceSnapshot;
   startCreate(request: StartCreateRequest): Promise<StartJobResponseDto>;
+  enqueueShare(request: StartCreateRequest): Promise<void>;
   onCreateStarted(
     response: StartJobResponseDto,
     request: StartCreateRequest,
@@ -33,12 +34,17 @@ export type CreateStartControllerOptions = Readonly<{
 
 export type CreateStartController = Readonly<{
   runCreate(options: CreateStartOptions): Promise<void>;
+  runCreateAndShare(options: CreateStartOptions): Promise<void>;
 }>;
 
 export function createCreateStartController(
   options: CreateStartControllerOptions,
 ): CreateStartController {
-  async function runCreate(createOptions: CreateStartOptions): Promise<void> {
+  async function submit<T>(
+    createOptions: CreateStartOptions,
+    start: (request: StartCreateRequest) => Promise<T>,
+    onStarted?: (response: T, request: StartCreateRequest) => void | Promise<void>,
+  ): Promise<void> {
     if (options.submissionGuard.isInFlight()) {
       return;
     }
@@ -65,9 +71,9 @@ export function createCreateStartController(
     }
     options.publishSnapshot(options.workspace.setSubmissionInFlight(true).snapshot);
 
-    let response: StartJobResponseDto;
+    let response: T;
     try {
-      response = await options.startCreate(request);
+      response = await start(request);
     } catch (error) {
       const commandError = options.toCommandError(error);
       options.publishSnapshot(options.workspace.setPlanError(
@@ -81,10 +87,11 @@ export function createCreateStartController(
       options.publishSnapshot(options.workspace.setSubmissionInFlight(false).snapshot);
     }
 
-    await options.onCreateStarted(response, request);
+    await onStarted?.(response, request);
   }
 
   return {
-    runCreate,
+    runCreate: (input) => submit(input, options.startCreate, options.onCreateStarted),
+    runCreateAndShare: (input) => submit(input, options.enqueueShare),
   };
 }

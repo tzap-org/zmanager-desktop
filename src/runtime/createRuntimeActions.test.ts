@@ -56,9 +56,9 @@ describe("create runtime actions", () => {
     const effects = createEffects();
     const actions = createCreateRuntimeActions(effects);
 
-    actions.handleIntent({ type: "compressAndShareOnLan" });
+    actions.handleIntent({ type: "compressAndShareOnLan", password: "archive", passwordConfirm: "archive", signingIdentityPassword: "identity" });
 
-    expect(effects.compressAndShareOnLan).toHaveBeenCalledOnce();
+    expect(effects.compressAndShareOnLan).toHaveBeenCalledExactlyOnceWith("archive", "archive", "identity");
   });
 
   it("routes column context menu, width, and reorder intents to their effects", () => {

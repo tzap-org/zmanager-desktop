@@ -69,7 +69,6 @@ import { createAccountController } from "../app/controllers/accountController";
 import { HOSTED_CAPABILITIES_ENABLED } from "../app/hostedCapabilities";
 import { initializeDeepLinkAdapter } from "../desktop/deepLinkAdapter";
 import { createDefaultHandlerController } from "../app/controllers/defaultHandlerController";
-import { createLocalSendTrustController } from "../app/controllers/localSendTrustController";
 import { createLocalSendDiscoveryController } from "../app/controllers/localSendDiscoveryController";
 import { createShareQueueController } from "../app/controllers/shareQueueController";
 import { localSendDiscoveryDesktopAdapter } from "../desktop/localSendDiscovery";
@@ -310,7 +309,6 @@ import {
   runLocalSendRespondToTransfer,
   runLocalSendStartReceiver,
   runLocalSendStopReceiver,
-  runLocalSendTrustDevice,
   runPlanCreate,
   runPreviewEntry,
   runMaterializeNestedArchiveEntry,
@@ -376,7 +374,6 @@ import {
 import { listenNativeInboundEvents } from "../desktop/nativeInboundEvents";
 import { listenNativeMenuCommands } from "../desktop/nativeMenu";
 import { defaultHandlerDesktopAdapter } from "../desktop/defaultHandlers";
-import { localSendTrustDesktopAdapter } from "../desktop/localSendTrust";
 import { listenLocalSendEvents } from "../desktop/localSendEvents";
 import { listenShareQueueChanged } from "../desktop/shareQueueEvents";
 import {
@@ -820,7 +817,10 @@ const createRuntimeActions = createCreateRuntimeActions({
       signingIdentityPassword,
     },
   }),
-  compressAndShareOnLan: startCompressAndShareOnLan,
+  compressAndShareOnLan: (password, passwordConfirm, signingIdentityPassword) =>
+    createStartController.runCreateAndShare({
+      passwordInput: { password, passwordConfirm, signingIdentityPassword },
+    }),
 });
 
 function archiveSnapshot(): ArchiveWorkspaceSnapshot {
@@ -902,6 +902,15 @@ const createStartController = createCreateStartController({
       });
       throw error;
     }
+  },
+  enqueueShare: async (createRequest) => {
+    await shareQueueController.enqueue({
+      mode: "compressAndShare",
+      clientRequestId: crypto.randomUUID(),
+      senderAlias: localSendAliasOrDefault(),
+      createRequest,
+      receiver: null,
+    });
   },
   onCreateStarted: async (response, request) => {
     await jobHandoff.handoffAcceptedJob(response, {
@@ -1379,12 +1388,6 @@ const defaultHandlerController = createDefaultHandlerController({
   errorMessage: (error) => unknownErrorMessage(error, "Unable to update macOS default handlers."),
 });
 
-const localSendTrustController = createLocalSendTrustController({
-  ...localSendTrustDesktopAdapter,
-  publish: publishReactSnapshot,
-  errorMessage: (error) => unknownErrorMessage(error, "Unable to update trusted LAN devices."),
-});
-
 const localSendDiscoveryController = createLocalSendDiscoveryController({
   ...localSendDiscoveryDesktopAdapter,
   publish: publishReactSnapshot,
@@ -1458,69 +1461,10 @@ function syncLocalSendReceiverWithPreferences() {
     });
 }
 
-/**
- * Set right before triggering a compress run that should open the Share on
- * LAN dialog once the job succeeds, and always cleared once that run either
- * starts a job (consumed inside `onCreateStarted`) or fails to (consumed by
- * the `finally` in `startCompressAndShareOnLan`). A plain module flag is
- * safe here because `createStartController`'s own submission guard already
- * prevents a second compress run from overlapping this one.
- */
-function startCompressAndShareOnLan() {
-  const format = createWorkspace.getSnapshot().options.format;
-  const defaults = createDefaultsForFormat(appPreferences, format);
-
-  let password: string | undefined;
-  if (defaults.promptForPassword && createFormatSupportsPassword(format)) {
-    const promptedPassword = jobPasswordPrompts.promptForNewArchivePassword();
-    if (!promptedPassword) {
-      setOperationalMessage("shareOnLan.compressCancelled");
-      return;
-    }
-    password = promptedPassword;
-  }
-
-  const workspace = createWorkspace.getSnapshot();
-  const requestResult = buildQuickCreateStartRequest({
-    sources: [...workspace.sources],
-    destinationPath: workspace.options.destinationPath,
-    format,
-    cleanSource: workspace.options.cleanSource,
-    replaceExisting: defaults.replaceExisting,
-    preserveMetadata: defaults.preserveMetadata,
-    password,
-    compressionLevel: defaults.compressionLevel ?? undefined,
-    volumeSize: defaults.volumeSize ?? undefined,
-    respectGitignore: defaults.respectGitignore,
-    followSymlinks: defaults.followSymlinks,
-    tzapRecoveryPercentage: defaults.tzapRecoveryPercentage ?? undefined,
-    tzapVolumeLossTolerance: defaults.tzapVolumeLossTolerance,
-    zipCompression: defaults.zipCompression,
-    sevenZSolid: defaults.sevenZSolid,
-    sevenZThreads: defaults.sevenZThreads ?? undefined,
-    sevenZChunkSize: defaults.sevenZChunkSize ?? undefined,
-    sevenZEncryptFileNames: defaults.sevenZEncryptFileNames,
-  });
-  if (!requestResult.ok) {
-    setOperationalMessage(requestResult.reason === "needsSources" ? "quickCreate.needsSource" : "quickCreate.needsDestination");
-    return;
-  }
-  void shareQueueController.enqueue({
-    mode: "compressAndShare",
-    clientRequestId: crypto.randomUUID(),
-    senderAlias: localSendAliasOrDefault(),
-    createRequest: requestResult.request,
-    receiver: null,
-  }).catch((error) => setOperationalStatus(unknownErrorMessage(error, "Unable to queue Share on LAN.")));
-}
-
 let localSendIncomingTransfers: LocalSendIncomingTransferSnapshot[] = [];
 
 function handleLocalSendEvent(event: LocalSendEventDto) {
   if (event.type === "transferRequest") {
-    // Reaching the frontend at all means the sender's fingerprint was not
-    // in the trust store — see handle_queued_event in src-tauri/src/localsend.rs,
-    // which auto-accepts trusted senders before this event is ever emitted.
     localSendIncomingTransfers = [
       ...localSendIncomingTransfers,
       { requestId: event.requestId, sender: event.sender, files: event.files },
@@ -1532,16 +1476,11 @@ function handleLocalSendEvent(event: LocalSendEventDto) {
 async function respondToLocalSendIncomingTransfer(
   requestId: string,
   decision: "accept" | "decline",
-  alwaysAccept: boolean,
 ) {
-  const transfer = localSendIncomingTransfers.find((candidate) => candidate.requestId === requestId);
   localSendIncomingTransfers = localSendIncomingTransfers.filter((candidate) => candidate.requestId !== requestId);
   publishReactSnapshot();
   try {
     await runLocalSendRespondToTransfer({ requestId, decision });
-    if (decision === "accept" && alwaysAccept && transfer) {
-      await runLocalSendTrustDevice(transfer.sender.fingerprint);
-    }
   } catch (error) {
     setOperationalStatus(unknownErrorMessage(error, "Unable to respond to the LAN transfer request."));
   }
@@ -2250,7 +2189,6 @@ function createCurrentReactSnapshot(): ZManagerReactSnapshot {
   return createZManagerReactSnapshot({
     account: accountWorkspace.getSnapshot(),
     defaultHandlers: defaultHandlerController.getSnapshot(),
-    localSendTrustedDevices: localSendTrustController.getSnapshot(),
     localSendDiscovery: localSendDiscoveryController.getSnapshot(),
     shareQueue: shareQueueController.getSnapshot(),
     localSendIncomingTransfers,
@@ -2409,17 +2347,11 @@ function handleReactDialogIntent(intent: ZManagerDialogIntent) {
     case "preferencesChooseLanShareReceiveFolder":
       void onSelectReactPreferenceLanShareReceiveFolder();
       break;
-    case "localSendTrustRefresh":
-      void localSendTrustController.refresh();
-      break;
     case "shareQueueOpenReceivers":
       void localSendDiscoveryController.openPicker(localSendAliasOrDefault());
       break;
     case "shareQueueRefreshReceivers":
       void localSendDiscoveryController.refresh(localSendAliasOrDefault());
-      break;
-    case "localSendTrustForget":
-      void localSendTrustController.forget(intent.fingerprint);
       break;
     case "shareQueueSetReceiver":
       void shareQueueController.setReceiver(intent.shareId, intent.receiver).catch((error) => setOperationalStatus(unknownErrorMessage(error, "Unable to select the LAN receiver.")));
@@ -2437,7 +2369,7 @@ function handleReactDialogIntent(intent: ZManagerDialogIntent) {
       void shareQueueController.remove(intent.shareId).catch((error) => setOperationalStatus(unknownErrorMessage(error, "Unable to remove the LAN share.")));
       break;
     case "localSendIncomingRespond":
-      void respondToLocalSendIncomingTransfer(intent.requestId, intent.decision, intent.alwaysAccept);
+      void respondToLocalSendIncomingTransfer(intent.requestId, intent.decision);
       break;
     case "defaultHandlersRefresh":
       void defaultHandlerController.refresh();
@@ -4002,9 +3934,6 @@ function openPreferencesDialog() {
     )
   ) {
     void defaultHandlerController.refresh();
-  }
-  if (latestContract?.localSendAvailable) {
-    void localSendTrustController.refresh();
   }
 }
 

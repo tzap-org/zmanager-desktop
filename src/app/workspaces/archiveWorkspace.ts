@@ -699,7 +699,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
       return mode === "selection"
         ? state.view.selection.allSelected
           ? state.entries.map((entry) => entry.path)
-          : selectedExtractEntryPaths(state)
+          : selectedListingReferences(state)
         : state.entries.map((entry) => entry.path);
     },
 
@@ -817,7 +817,7 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
         return { ok: false, reason: "noArchive" };
       }
 
-      const entryPaths = selectedExtractEntryPaths(state);
+      const entryPaths = selectedListingReferences(state);
       return {
         ok: true,
         request: {
@@ -1495,6 +1495,17 @@ function fileDescendantEntryPaths(
 }
 
 function selectedExtractEntryPaths(state: MutableArchiveWorkspaceState): string[] {
+  if (state.view.selection.allSelected) {
+    return [];
+  }
+  // Rust resolves folder selectors against the complete listing. Replacing a
+  // folder with visible descendants would drop entries on other pages.
+  return state.view.selection.selectedPaths.map((path) =>
+    (entryByPath(state.entries, path) ?? entryByPath(state.treeEntries, path))?.path ?? path,
+  );
+}
+
+function selectedListingReferences(state: MutableArchiveWorkspaceState): string[] {
   if (state.view.selection.allSelected) {
     return [];
   }

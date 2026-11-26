@@ -166,3 +166,31 @@ test("release lock captures controlled sibling commits and gate verifies them", 
   assert.match(read("scripts/test-windows-standalone-staging.ps1"), /-Run "tauri build"/);
   assert.match(read("scripts/generate-third-party-notices.py"), /collect_pinned_openssl_notice/);
 });
+
+test("release packaging and security audit check out the same resolved commit", () => {
+  const release = read(".github/workflows/release.yml");
+  const audit = read(".github/workflows/security-audit.yml");
+  const job = (workflow, name) => workflow
+    .split(/^  (?=\w[\w-]*:\n)/m)
+    .find((section) => section.startsWith(name + ":\n")) ?? "";
+
+  const resolve = job(release, "resolve-revision");
+  assert.ok(resolve.includes("format('refs/tags/{0}', inputs.tag)"), "resolve a manual publishing tag as a tag ref");
+  assert.ok(resolve.includes("github.sha"), "retain the event commit for notarization tests and tag pushes");
+  assert.match(resolve, /git rev-parse HEAD/);
+  assert.match(job(release, "security"), /checkout_ref: \$\{\{ needs\.resolve-revision\.outputs\.sha \}\}/);
+  for (const name of ["package-macos", "package-windows", "package-deb", "package-rpm", "notarization-test-inputs", "publish"]) {
+    assert.match(job(release, name), /ref: \$\{\{ needs\.resolve-revision\.outputs\.sha \}\}/, name);
+  }
+  for (const name of ["npm", "rust", "glib", "core"]) {
+    assert.match(job(audit, name), /ref: \$\{\{ inputs\.checkout_ref \}\}/, name);
+  }
+});
+
+test("desktop LAN receiving requires explicit consent for file requests", () => {
+  const receiver = read("src-tauri/src/localsend.rs");
+  assert.match(receiver, /\.start_receiver\([\s\S]*?auto_accept: false/);
+  assert.equal((receiver.match(/\.respond_to_transfer\(/g) ?? []).length, 1,
+    "only the explicit response command may accept a transfer");
+  assert.doesNotMatch(read("src/ui/react/dialogs/LocalSendIncomingTransferBanner.tsx"), /alwaysAccept/);
+});

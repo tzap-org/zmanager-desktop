@@ -28,13 +28,30 @@ env:
   ZMANAGER_NOTARIZATION_TEST: ${{ inputs.notarization_test }}
 
 jobs:
+  resolve-revision:
+    name: Resolve desktop release revision
+    runs-on: ubuntu-24.04
+    outputs:
+      sha: ${{ steps.commit.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && !inputs.notarization_test && format('refs/tags/{0}', inputs.tag) || github.sha }}
+          persist-credentials: false
+      - name: Record the checked-out commit
+        id: commit
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
   security:
+    needs: resolve-revision
     permissions:
       contents: read
     uses: ./.github/workflows/security-audit.yml
+    with:
+      checkout_ref: ${{ needs.resolve-revision.outputs.sha }}
 
   package-macos:
-    needs: security
+    needs: [resolve-revision, security]
     name: macOS ${{ matrix.arch }} ${{ matrix.profile }} package
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -51,7 +68,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.notarization_test && github.ref || github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.resolve-revision.outputs.sha }}
+          fetch-depth: 0
 
       - name: Install Node.js
         uses: actions/setup-node@v6
@@ -190,7 +208,7 @@ jobs:
           find "$RUNNER_TEMP" -maxdepth 1 -type f \( -name '*.p12' -o -name 'AuthKey_*.p8' -o -name '*.provisionprofile' \) -delete
 
   package-windows:
-    needs: security
+    needs: [resolve-revision, security]
     if: github.event_name != 'workflow_dispatch' || !inputs.notarization_test
     name: Windows ${{ matrix.arch }} ${{ matrix.profile }} package
     runs-on: ${{ matrix.runner }}
@@ -209,7 +227,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.resolve-revision.outputs.sha }}
+          fetch-depth: 0
 
       - name: Install Node.js
         uses: actions/setup-node@v6
@@ -345,7 +364,7 @@ jobs:
           if-no-files-found: warn
 
   package-deb:
-    needs: security
+    needs: [resolve-revision, security]
     if: github.event_name != 'workflow_dispatch' || !inputs.notarization_test
     name: Linux DEB ${{ matrix.arch }} ${{ matrix.profile }} package
     runs-on: ${{ matrix.runner }}
@@ -364,7 +383,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.resolve-revision.outputs.sha }}
+          fetch-depth: 0
 
       - name: Install Node.js
         uses: actions/setup-node@v6
@@ -405,7 +425,7 @@ jobs:
           if-no-files-found: warn
 
   package-rpm:
-    needs: security
+    needs: [resolve-revision, security]
     if: github.event_name != 'workflow_dispatch' || !inputs.notarization_test
     name: Linux RPM ${{ matrix.arch }} ${{ matrix.profile }} package
     runs-on: ${{ matrix.runner }}
@@ -426,7 +446,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.resolve-revision.outputs.sha }}
+          fetch-depth: 0
 
       - name: Install Node.js
         uses: actions/setup-node@v6
@@ -469,11 +490,13 @@ jobs:
 
   notarization-test-inputs:
     name: Record notarization test inputs
-    needs: package-macos
+    needs: [resolve-revision, package-macos]
     if: inputs.notarization_test
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve-revision.outputs.sha }}
       - uses: actions/download-artifact@v6
         with:
           pattern: zmanager-notary-record-*
@@ -497,6 +520,7 @@ jobs:
     permissions:
       contents: write
     needs:
+      - resolve-revision
       - package-macos
       - package-windows
       - package-deb
@@ -506,7 +530,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ needs.resolve-revision.outputs.sha }}
       - name: Download notarization records
         uses: actions/download-artifact@v6
         with:

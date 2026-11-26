@@ -83,9 +83,6 @@ fn main() {
         "localsend_respond_to_transfer",
         "localsend_start_receiver",
         "localsend_stop_receiver",
-        "localsend_list_trusted_devices",
-        "localsend_trust_device",
-        "localsend_untrust_device",
     ])))
     .expect("failed to run Tauri build script");
 }

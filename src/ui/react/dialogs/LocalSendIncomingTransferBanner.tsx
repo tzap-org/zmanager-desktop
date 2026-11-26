@@ -1,8 +1,5 @@
-import { useState } from "react";
-
 import { formatVolumeSize } from "../../../app/volumeSizePresets";
 import { Button } from "../../components/ui/button";
-import { Checkbox } from "../../components/ui/checkbox";
 import { useZManagerActions, useZManagerSnapshot } from "../AppProviders";
 import { translatorForSnapshot } from "../shell/shellHelpers";
 
@@ -10,7 +7,6 @@ export function LocalSendIncomingTransferBanner() {
   const snapshot = useZManagerSnapshot();
   const actions = useZManagerActions();
   const i18n = translatorForSnapshot(snapshot);
-  const [alwaysAccept, setAlwaysAccept] = useState(false);
   const transfer = snapshot.localSendIncomingTransfers[0];
 
   if (!transfer) {
@@ -24,9 +20,7 @@ export function LocalSendIncomingTransferBanner() {
       type: "localSendIncomingRespond",
       requestId: transfer.requestId,
       decision,
-      alwaysAccept: decision === "accept" && alwaysAccept,
     });
-    setAlwaysAccept(false);
   }
 
   return (
@@ -51,10 +45,6 @@ export function LocalSendIncomingTransferBanner() {
           </li>
         ))}
       </ul>
-      <label className="mt-3 flex items-center gap-2 text-xs">
-        <Checkbox checked={alwaysAccept} onCheckedChange={(checked) => setAlwaysAccept(checked === true)} />
-        {i18n.t("localSendIncoming.alwaysAccept", { device: transfer.sender.alias })}
-      </label>
       <div className="mt-3 flex justify-end gap-2">
         <Button type="button" variant="dialog" size="unset" onClick={() => respond("decline")}>
           {i18n.t("localSendIncoming.decline")}
