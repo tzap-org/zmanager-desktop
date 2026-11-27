@@ -101,8 +101,11 @@ keyring = { version = "4.1.6", default-features = false, features = ["v1"] }
 backhand = { path = "../../backhand/backhand" }
 btrfs-core = { path = "../../btrfs-core/core" }
 zfs-forensic-core = { path = "../../zfs-forensic-core/core" }
-# Match the reviewed core workspace's fixed TZAP codec dependency.
+# Follow the adjacent TZAP development checkout together with sibling ZManager.
+# Release builds use stable crates from Cargo.lock after release promotion.
 tzap-core = { path = "../../tzap/crates/tzap-core" }
+tzap-plugin-keywrap = { path = "../../tzap/crates/tzap-plugin-keywrap" }
+tzap-plugin-signing = { path = "../../tzap/crates/tzap-plugin-signing" }
 # Backport the upstream VariantStrIter fix while Tauri requires GLib 0.18.
 glib = { path = "../vendor/glib" }
 

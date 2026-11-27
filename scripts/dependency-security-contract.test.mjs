@@ -19,11 +19,11 @@ test("security workflow blocks all npm advisories and audits every desktop Rust 
   }
   assert.match(workflow, /cargo audit --deny yanked --file/);
   assert.match(workflow, /repository: tzap-org\/zmanager/);
-  assert.match(workflow, /ref: \$\{\{ steps\.core\.outputs\.core_revision \}\}/);
-  assert.match(workflow, /repository: tzap-org\/tzap/);
-  assert.match(workflow, /tzap_revision/);
-  assert.ok(workflow.includes(".audit/core/release-build-inputs.lock"));
-  assert.ok(workflow.includes("checkout-release-inputs.mjs .audit"));
+  assert.match(workflow, /ref: main[\s\S]*?path: \.audit\/core/);
+  assert.match(workflow, /--resolve-ci \.\.\/ci-sibling-inputs\.lock/);
+  assert.match(workflow, /--mode snapshot[\s\S]*?--lockfile \.\.\/ci-sibling-inputs\.lock/);
+  assert.ok(workflow.includes("--lockfile release-build-inputs.lock"));
+  assert.ok(workflow.includes("prepare-sibling-inputs.sh"));
   assert.ok(workflow.includes("cargo update --package tzap-core"));
   assert.ok(workflow.includes("cargo update --package crypto-bigint"));
   assert.ok(workflow.includes("cargo update --package url"));
@@ -123,9 +123,9 @@ test("the product lockfile uses the reviewed codec sources and excludes yanked c
   const versions = (name) => packageEntries(name).map((entry) => entry.match(/^version = "([^"]+)"/m)?.[1]);
 
   assert.deepEqual(versions("backhand"), ["0.25.5"]);
-  assert.deepEqual(versions("tzap-core"), ["0.3.0"]);
-  assert.deepEqual(versions("tzap-plugin-keywrap"), ["0.3.0"]);
-  assert.deepEqual(versions("tzap-plugin-signing"), ["0.3.0"]);
+  assert.deepEqual(versions("tzap-core"), ["0.3.1-dev"]);
+  assert.deepEqual(versions("tzap-plugin-keywrap"), ["0.3.1-dev"]);
+  assert.deepEqual(versions("tzap-plugin-signing"), ["0.3.1-dev"]);
   assert.deepEqual(versions("openssl"), ["0.10.82"]);
   assert.deepEqual(versions("openssl-sys"), ["0.9.118"]);
   assert.doesNotMatch(packageEntries("tzap-core")[0], /source =|checksum =/,

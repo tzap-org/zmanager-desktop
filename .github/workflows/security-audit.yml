@@ -76,44 +76,22 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.checkout_ref }}
-      - name: Read released sibling revisions
-        id: core
-        run: |
-          node <<'NODE'
-          const fs = require('node:fs');
-          const entries = fs.readFileSync('release-build-inputs.lock', 'utf8')
-            .split(/\r?\n/).filter(line => line.trim() && !line.trimStart().startsWith('#'))
-            .map(line => line.trim().split(/\s+/));
-          const coreRevision = entries.find(([name]) => name === 'zmanager')?.[3];
-          const tzapRevision = entries.find(([name]) => name === 'tzap')?.[3];
-          if (!/^[0-9a-f]{40}$/.test(coreRevision ?? '') || !/^[0-9a-f]{40}$/.test(tzapRevision ?? '')) {
-            throw new Error('Release lock must pin full ZManager and TZAP commits');
-          }
-          fs.appendFileSync(process.env.GITHUB_OUTPUT, `core_revision=${coreRevision}\ntzap_revision=${tzapRevision}\n`);
-          NODE
       - uses: actions/checkout@v6
         with:
           repository: tzap-org/zmanager
-          ref: ${{ steps.core.outputs.core_revision }}
+          ref: main
           path: .audit/core
-      - uses: actions/checkout@v6
-        with:
-          repository: tzap-org/tzap
-          ref: ${{ steps.core.outputs.tzap_revision }}
-          path: .audit/tzap
-      - name: Prepare the pinned core's sibling inputs
+      - name: Resolve and prepare the development sibling snapshot
         shell: bash
         run: |
-          if [[ -f .audit/core/release-build-inputs.lock ]]; then
-            ZMANAGER_SIBLING_PARENT_DIR="$GITHUB_WORKSPACE/.audit" \
-              bash scripts/prepare-sibling-inputs.sh --mode snapshot \
-                --lockfile .audit/core/release-build-inputs.lock
-          else
-            # The currently reviewed core commit predates its consolidated
-            # lock; use the desktop lock, whose shared sibling SHAs match its
-            # historical revision files. Newer core pins use their own lock.
-            node scripts/checkout-release-inputs.mjs .audit
-          fi
+          cd .audit/core
+          ZMANAGER_SIBLING_PARENT_DIR="$GITHUB_WORKSPACE/.audit" \
+            bash scripts/prepare-sibling-inputs.sh \
+              --lockfile release-build-inputs.lock \
+              --resolve-ci ../ci-sibling-inputs.lock
+          ZMANAGER_SIBLING_PARENT_DIR="$GITHUB_WORKSPACE/.audit" \
+            bash scripts/prepare-sibling-inputs.sh --mode snapshot \
+              --lockfile ../ci-sibling-inputs.lock
       - name: Verify shared package versions
         run: node scripts/check-shared-dependency-locks.mjs .audit/core/Cargo.lock src-tauri/Cargo.lock
       - run: rustup toolchain install stable --profile minimal

@@ -33,6 +33,9 @@ pub(crate) fn map_archive_browser_error(error: ArchiveBrowserError) -> CommandEr
         ArchiveBrowserError::UnsupportedEntry { path, .. } => {
             CommandErrorDto::unsupported_format(format!("entry cannot be extracted or previewed here: {path}"))
         }
+        ArchiveBrowserError::EntrySkipped { path } => {
+            CommandErrorDto::invalid_request(format!("archive entry was skipped because strip-components leaves no output path: {path}"))
+        }
         ArchiveBrowserError::UnsupportedOperation(msg) => CommandErrorDto::operation_failed(format!("Unsupported operation: {msg}")),
     }
 }
