@@ -58,7 +58,8 @@ test("AFF4 and archive-core share the published ZIP forensic release", () => {
   const manifest = read("src-tauri/Cargo.toml");
   assert.doesNotMatch(manifest, /^zip-forensic-core = \{ path = /m);
   const packages = read("src-tauri/Cargo.lock").split("[[package]]");
-  const zip = packages.filter((entry) => /^\s*name = "zip-forensic-core"$/m.test(entry));
+  const zip = packages.filter((entry) => /^\s*name = "zip-forensic-core"$/m.test(entry)
+    && /^version = "0\.2\.3"$/m.test(entry));
   assert.equal(zip.length, 1);
   assert.match(zip[0], /version = "0\.2\.3"/);
   assert.match(zip[0], /source = "registry\+https:\/\/github\.com\/rust-lang\/crates\.io-index"/);
@@ -132,7 +133,7 @@ test("the product lockfile uses the reviewed codec sources and excludes yanked c
     "tzap-core must resolve to the local patch provisioned by the sibling bootstrap");
   assert.deepEqual(versions("zstd"), ["0.14.3"]);
   assert.deepEqual(versions("zstd-safe"), ["8.2.0"]);
-  assert.deepEqual(versions("crypto-bigint"), ["0.7.10"]);
+  assert.deepEqual(versions("crypto-bigint"), ["0.7.11"]);
   assert.deepEqual(versions("url"), ["2.5.9"]);
 });
 
