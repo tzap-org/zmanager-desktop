@@ -55,8 +55,9 @@ ffi_manifest_args=(--manifest-path "$uniffi_manifest")
 if [[ "${ZMANAGER_BUILD_MODE:-local}" == release ]]; then
   ffi_manifest_args+=(--locked)
 fi
-CARGO_TARGET_DIR="$uniffi_target" cargo build --release --features tzap-online --target "$rust_triple" \
-  "${ffi_manifest_args[@]}"
+(cd "$sibling_zmanager" && \
+  CARGO_TARGET_DIR="$uniffi_target" cargo build --release --features tzap-online --target "$rust_triple" \
+    "${ffi_manifest_args[@]}")
 bin_dir=$(swift build --package-path "$package" -c release --triple "$swift_package_triple" --show-bin-path)
 version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist")
 build=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$app/Contents/Info.plist")

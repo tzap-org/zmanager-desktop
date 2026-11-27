@@ -67,7 +67,7 @@ test("macOS native FFI targets include hosted TZAP metadata support", () => {
   const nativeBuild = readFileSync(resolve(root, "scripts/build-macos-native-targets.sh"), "utf8");
   assert.match(nativeBuild, /cargo build --release --features tzap-online --target/);
   assert.match(nativeBuild, /if \[\[ "\$\{ZMANAGER_BUILD_MODE:-local\}" == release \]\]; then\s+ffi_manifest_args\+=\(--locked\)/);
-  assert.match(nativeBuild, /cargo build[^\n]+\\\s+"\$\{ffi_manifest_args\[@\]\}"/);
+  assert.match(nativeBuild, /\(cd "\$sibling_zmanager" && \\\s+CARGO_TARGET_DIR="\$uniffi_target" cargo build[^\n]+\\\s+"\$\{ffi_manifest_args\[@\]\}"\)/);
 });
 
 test("macOS artifact packaging reports and validates every post-build boundary", () => {
