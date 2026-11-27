@@ -10,7 +10,7 @@ use openssl::asn1::Asn1Time;
 use openssl::hash::MessageDigest;
 use openssl::pkcs12::Pkcs12;
 use openssl::x509::X509;
-use tauri::{AppHandle, State, WebviewWindow, ipc::Channel};
+use tauri::{AppHandle, Manager, State, WebviewWindow, ipc::Channel};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind, MessageDialogResult};
 use tauri_plugin_opener::OpenerExt;
 
@@ -1042,6 +1042,8 @@ fn start_extract_internal_with_origin_and_spawner(
     let registry_for_thread = registry.clone();
     let job_id = response.job_id.clone();
     let app_for_thread = app;
+    let diagnostics = app_for_thread.as_ref().and_then(|app| app.try_state::<crate::diagnostics::DiagnosticLog>()).map(|state| state.inner().clone());
+    let overwrite = request.overwrite;
     let request_locale = request.locale.clone();
     let policy = extraction_policy(request.overwrite, request.strip_components, request.ignore_symlinks, &excluded_entry_paths);
     let tzap_restore_options = TzapRestoreOptions {
@@ -1074,6 +1076,17 @@ fn start_extract_internal_with_origin_and_spawner(
                 complete_job_if_needed(&registry_for_thread, &job_id, kind, summary);
             }
             Err(error) => {
+                if let Some(diagnostics) = &diagnostics {
+                    let _ = diagnostics.record(
+                        "extract",
+                        "jobFailed",
+                        crate::diagnostics::fields([
+                            ("jobKind", serde_json::json!(kind)),
+                            ("overwrite", serde_json::json!(overwrite)),
+                            ("code", serde_json::json!(error.code)),
+                        ]),
+                    );
+                }
                 registry_for_thread.emit_direct_event(&job_id, JobEventDto::failed_from_command_error(kind, error));
             }
         }
@@ -6578,6 +6591,67 @@ mod tests {
         assert!(!workspace.join("Downloads 2").exists(), "Downloads 2 must not be created");
         // Output must be directly inside Downloads
         assert!(extract_destination.join("sources").join("README.md").is_file(), "contents must extract directly into destination folder");
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn extract_all_tzap_renames_entry_collisions() {
+        let workspace = create_temp_workspace("extract-tzap-rename-entries");
+        let sources = workspace.join("sources");
+        let archive = workspace.join("archive.tzap");
+        fs::create_dir(&sources).unwrap();
+        fs::write(sources.join("README.md"), b"archived file").unwrap();
+        let registry = JobRegistry::new();
+        let create_request = serde_json::from_value(serde_json::json!({
+            "sources": [sources],
+            "destinationPath": archive,
+            "format": "tzap",
+            "replaceExisting": false,
+        }))
+        .unwrap();
+        let create_job = start_create_internal(create_request, &registry).unwrap();
+        let (poll, events) = wait_for_job_terminal(&registry, &create_job.job_id);
+        assert_eq!(poll.status, JobStatusDto::Completed, "{events:?}");
+
+        let extract_with_rename = |destination: &Path, renamed: &str| {
+            let request = serde_json::from_value(serde_json::json!({
+                "archivePath": archive,
+                "destinationPath": destination,
+                "overwrite": "rename",
+                "tzapAllowDegraded": true,
+            }))
+            .unwrap();
+            let job = start_extract_internal(request, &registry).unwrap();
+            let (poll, events) = wait_for_job_terminal(&registry, &job.job_id);
+            assert_eq!(poll.status, JobStatusDto::Completed, "{}: {events:?}", destination.display());
+            assert_eq!(fs::read(destination.join(renamed)).unwrap(), b"archived file");
+        };
+
+        for (name, conflict, renamed) in
+            [("file-collision", "sources/README.md", "sources/README 2.md"), ("folder-collision", "sources", "sources 2/README.md")]
+        {
+            let destination = workspace.join(name);
+            let existing = destination.join(conflict);
+            fs::create_dir_all(existing.parent().unwrap()).unwrap();
+            fs::write(&existing, b"existing file").unwrap();
+            extract_with_rename(&destination, renamed);
+            assert_eq!(fs::read(existing).unwrap(), b"existing file");
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let destination = workspace.join("dangling-links");
+            fs::create_dir_all(destination.join("sources")).unwrap();
+            let original = destination.join("sources/README.md");
+            let first_candidate = destination.join("sources/README 2.md");
+            symlink("missing", &original).unwrap();
+            symlink("also-missing", &first_candidate).unwrap();
+            extract_with_rename(&destination, "sources/README 3.md");
+            assert_eq!(fs::read_link(original).unwrap(), PathBuf::from("missing"));
+            assert_eq!(fs::read_link(first_candidate).unwrap(), PathBuf::from("also-missing"));
+        }
         let _ = fs::remove_dir_all(&workspace);
     }
 }
