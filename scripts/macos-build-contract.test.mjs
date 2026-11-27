@@ -17,6 +17,14 @@ test("macOS build bootstraps generated UniFFI Swift sources before Cargo", () =>
   assert.ok(sync < tauriBuild, "sync must precede the Tauri macOS build");
 });
 
+test("macOS build falls back to ad-hoc signing when the runner has no identities", () => {
+  const build = readFileSync(resolve(root, "scripts/build-macos.sh"), "utf8");
+
+  assert.match(build, /grep -F 'Apple Development:'[^\n]+\|\| true/);
+  assert.match(build, /grep -F 'Apple Distribution:'[^\n]+\|\| true/);
+  assert.match(build, /codesign_identity="\$\{codesign_identity:--\}"/);
+});
+
 test("macOS package CI syncs UniFFI Swift sources before Cargo validation", () => {
   const workflow = readFileSync(resolve(root, ".github/workflows/package.yml"), "utf8");
   const sync = workflow.indexOf("scripts/sync-uniffi-swift-bindings.sh");

@@ -149,10 +149,10 @@ official_team_id=$(/usr/bin/python3 -c 'import json,sys; print(json.load(open(sy
 if [[ -z "$codesign_identity" ]]; then
   git_identity_email=$(git config user.email 2>/dev/null || true)
   if [[ -n "$git_identity_email" ]]; then
-    team_identity_record=$(grep -F "Apple Development: $git_identity_email" <<<"$codesign_identities" | sed -n '1p')
+    team_identity_record=$(grep -F "Apple Development: $git_identity_email" <<<"$codesign_identities" | sed -n '1p' || true)
   fi
-  [[ -n ${team_identity_record:-} ]] || team_identity_record=$(grep -F 'Apple Development:' <<<"$codesign_identities" | sed -n '1p')
-  [[ -n "$team_identity_record" ]] || team_identity_record=$(grep -F 'Apple Distribution:' <<<"$codesign_identities" | sed -n '1p')
+  [[ -n ${team_identity_record:-} ]] || team_identity_record=$(grep -F 'Apple Development:' <<<"$codesign_identities" | sed -n '1p' || true)
+  [[ -n "$team_identity_record" ]] || team_identity_record=$(grep -F 'Apple Distribution:' <<<"$codesign_identities" | sed -n '1p' || true)
   codesign_identity=$(awk '{print $2}' <<<"$team_identity_record")
   codesign_identity="${codesign_identity:--}"
 fi
