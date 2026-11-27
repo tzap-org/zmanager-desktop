@@ -113,7 +113,7 @@ pub fn system_file_icons(request: SystemFileIconRequest) -> SystemFileIconRespon
 // Runs off the main thread: filesystem metadata and read_dir.
 #[tauri::command(async)]
 pub fn validate_directory(request: ValidateDirectoryRequest) -> ValidateDirectoryResponse {
-    let path = &request.path;
+    let path = request.path.trim();
     if path.is_empty() {
         return ValidateDirectoryResponse { exists: false, is_directory: false, accessible: false };
     }
