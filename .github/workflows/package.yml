@@ -390,7 +390,9 @@ jobs:
           ZMANAGER_BUILD_NUMBER: ${{ github.run_number }}
           ZMANAGER_MACOS_STAGE_DIR: /tmp/zmanager-macos-ci
         run: |
-          scripts/build-macos.sh --skip-tests --no-install --arch "${{ matrix.arch }}" --bundle all
+          mkdir -p /tmp/zmanager-macos-ci
+          bash -x scripts/build-macos.sh --skip-tests --no-install --arch "${{ matrix.arch }}" --bundle all \
+            2>&1 | tee "/tmp/zmanager-macos-ci/build-${{ matrix.arch }}.log"
           app="/tmp/zmanager-macos-ci/ZManager-$(node -p 'require("./package.json").version')-macos-${{ matrix.arch }}.app"
           scripts/release-gate-macos.sh "$app" --expected-arch "${{ matrix.arch }}" \
             --report "/tmp/zmanager-macos-ci/inspection-${{ matrix.arch }}.json"
@@ -404,6 +406,7 @@ jobs:
           name: ${{ matrix.artifact-name }}
           if-no-files-found: error
           path: |
+            /tmp/zmanager-macos-ci/build-*.log
             /tmp/zmanager-macos-ci/*.app
             /tmp/zmanager-macos-ci/*.zip
             /tmp/zmanager-macos-ci/*.dmg
@@ -416,6 +419,7 @@ jobs:
           name: zmanager-macos-packaging-diagnostics-${{ matrix.arch }}
           if-no-files-found: ignore
           path: |
+            /tmp/zmanager-macos-ci/build-*.log
             /tmp/zmanager-macos-ci/*.app
             /tmp/zmanager-macos-ci/*.zip
             /tmp/zmanager-macos-ci/*.dmg
