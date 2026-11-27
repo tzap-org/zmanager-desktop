@@ -72,7 +72,6 @@ describe("DialogRoot", () => {
       deduplicateRoot: false,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: false,
-      tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
       passwordPromptOpen: false,
     });
@@ -104,7 +103,6 @@ describe("DialogRoot", () => {
       deduplicateRoot: false,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: false,
-      tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
       passwordPromptOpen: false,
     };
@@ -162,7 +160,6 @@ describe("DialogRoot", () => {
         deduplicateRoot: false,
         tzapRestorePolicy: "system",
         tzapAllowDegraded: true,
-        tzapAllowAbsoluteSymlinks: false,
         ignoreSymlinks: false,
         passwordPromptOpen: false,
       },

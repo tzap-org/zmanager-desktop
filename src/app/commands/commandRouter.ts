@@ -16,6 +16,7 @@ export type RoutedMenuAnchor = Readonly<{ x: number; y: number }>;
 export type CommandRouterPayload = {
   readonly extractMode?: RoutedExtractMode;
   readonly extractDestination?: RoutedExtractDestination;
+  readonly extractPassword?: string;
   readonly sortKey?: RoutedSortKey;
   readonly infoTarget?: RoutedInfoTarget;
   readonly archivePath?: string;
@@ -63,7 +64,7 @@ export type CommandRouterEffects = {
   upOneLevel: () => void | Promise<void>;
   openInside: () => void | Promise<void>;
   openOutside: () => void | Promise<void>;
-  extract: (mode: RoutedExtractMode, destination: RoutedExtractDestination) => void | Promise<void>;
+  extract: (mode: RoutedExtractMode, destination: RoutedExtractDestination, password?: string) => void | Promise<void>;
   test: () => void | Promise<void>;
   view: () => void | Promise<void>;
   copySelectedPaths: () => void | Promise<void>;
@@ -269,7 +270,7 @@ export function createCommandRouter(options: CommandRouterOptions): CommandRoute
           void effects.openOutside();
           return executed(commandId);
         case "extract":
-          void effects.extract(payload.extractMode ?? "archive", payload.extractDestination ?? "dialog");
+          void effects.extract(payload.extractMode ?? "archive", payload.extractDestination ?? "dialog", payload.extractPassword);
           return executed(commandId);
         case "test":
           void effects.test();

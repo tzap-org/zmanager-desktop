@@ -64,7 +64,6 @@ export type AppPreferences = {
   defaultExtractDeduplicateRoot: boolean;
   defaultTzapRestorePolicy: TzapRestorePolicy;
   defaultTzapAllowDegraded: boolean;
-  defaultTzapAllowAbsoluteSymlinks: boolean;
   defaultExtractIgnoreSymlinks: boolean;
   previewCleanupPolicy: PreviewCleanupPolicy;
   showParentFolderItem: boolean;
@@ -178,7 +177,6 @@ export const DEFAULT_APP_PREFERENCES: AppPreferences = {
   defaultExtractDeduplicateRoot: false,
   defaultTzapRestorePolicy: "portable",
   defaultTzapAllowDegraded: false,
-  defaultTzapAllowAbsoluteSymlinks: false,
   defaultExtractIgnoreSymlinks: false,
   previewCleanupPolicy: "beforeNextPreview",
   showParentFolderItem: true,
@@ -444,10 +442,6 @@ export function loadAppPreferences(storage = resolvePreferenceStorage()): AppPre
       storage.getItem(PREFERENCE_KEYS.defaultTzapAllowDegraded),
       DEFAULT_APP_PREFERENCES.defaultTzapAllowDegraded,
     ),
-    defaultTzapAllowAbsoluteSymlinks: storedBool(
-      storage.getItem(PREFERENCE_KEYS.defaultTzapAllowAbsoluteSymlinks),
-      DEFAULT_APP_PREFERENCES.defaultTzapAllowAbsoluteSymlinks,
-    ),
     defaultExtractIgnoreSymlinks: storedBool(
       storage.getItem(PREFERENCE_KEYS.defaultExtractIgnoreSymlinks),
       DEFAULT_APP_PREFERENCES.defaultExtractIgnoreSymlinks,
@@ -527,7 +521,6 @@ export function saveAppPreferences(preferences: AppPreferences, storage = resolv
   storage.setItem(PREFERENCE_KEYS.defaultExtractDeduplicateRoot, String(preferences.defaultExtractDeduplicateRoot));
   storage.setItem(PREFERENCE_KEYS.defaultTzapRestorePolicy, preferences.defaultTzapRestorePolicy);
   storage.setItem(PREFERENCE_KEYS.defaultTzapAllowDegraded, String(preferences.defaultTzapAllowDegraded));
-  storage.setItem(PREFERENCE_KEYS.defaultTzapAllowAbsoluteSymlinks, String(preferences.defaultTzapAllowAbsoluteSymlinks));
   storage.setItem(PREFERENCE_KEYS.defaultExtractIgnoreSymlinks, String(preferences.defaultExtractIgnoreSymlinks));
   storage.setItem(PREFERENCE_KEYS.previewCleanupPolicy, preferences.previewCleanupPolicy);
   storage.setItem(PREFERENCE_KEYS.showParentFolderItem, String(preferences.showParentFolderItem));
@@ -600,9 +593,6 @@ export function preferencesWithPatch(
       : DEFAULT_APP_PREFERENCES.defaultTzapRestorePolicy,
     defaultTzapAllowDegraded: Boolean(
       patch.defaultTzapAllowDegraded ?? preferences.defaultTzapAllowDegraded,
-    ),
-    defaultTzapAllowAbsoluteSymlinks: Boolean(
-      patch.defaultTzapAllowAbsoluteSymlinks ?? preferences.defaultTzapAllowAbsoluteSymlinks,
     ),
     defaultExtractIgnoreSymlinks: Boolean(
       patch.defaultExtractIgnoreSymlinks ?? preferences.defaultExtractIgnoreSymlinks,

@@ -64,7 +64,6 @@ describe("extract workspace", () => {
       deduplicateRoot: false,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: false,
-      tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
       password: " secret ",
     });

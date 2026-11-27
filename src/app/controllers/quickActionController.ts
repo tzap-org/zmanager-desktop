@@ -11,7 +11,9 @@ import { isSupportedArchivePath } from "../archiveFileTypes";
 import { resolveDestinationCollisionStrategy } from "../collisionPolicy";
 import { NOOP_DIAGNOSTIC_RECORDER, type DiagnosticRecorder } from "../diagnostics";
 import { createFormatSupportsPassword, type CreateArchiveFormat } from "../createFlow";
-import { buildStartExtractRequest, type ExtractOverwritePolicy } from "../extractFlow";
+import { buildStartExtractRequest, resolveExtractStartInput } from "../extractFlow";
+import { extractDefaultsForArchive } from "../extractionPolicy";
+import { extractStartInputFromOptions } from "../workspaces/extractWorkspace";
 import type { MessageKey, MessageParams } from "../i18n/translator";
 import {
   createDefaultsForFormat,
@@ -19,12 +21,10 @@ import {
 } from "../preferences";
 import {
   quickCreateDestination,
-  quickExtractDestinationPlan,
   runQuickActionRequest,
   uniqueQuickActionPaths,
   type QuickActionExtractMode,
   type QuickActionPathHelpers,
-  type QuickExtractEntry,
 } from "../quickActions";
 import {
   buildQuickCreateStartRequest,
@@ -60,7 +60,6 @@ export type QuickActionControllerOptions = Readonly<{
   setCurrentArchivePath(archivePath: string): void;
   loadArchive(request: ListArchiveRequest): Promise<void>;
   readBrowseState(): BrowseState;
-  readArchiveEntries(): readonly QuickExtractEntry[];
   setBrowseError(message: string): void;
   openExtractDialog(mode: "archive"): void;
   diagnostics?: DiagnosticRecorder;
@@ -249,56 +248,23 @@ export function createQuickActionController(
         continue;
       }
 
-      let entries: readonly QuickExtractEntry[] | undefined;
-      if (action === "extractHere") {
-        try {
-          await options.loadArchive({ archivePath });
-          const browseState = options.readBrowseState();
-          if (browseState === "loaded" || browseState === "empty") {
-            entries = options.readArchiveEntries();
-          }
-        } catch (error) {
-          const commandError = options.toCommandError(error);
-          diagnostics.record({
-            scope: "quickAction",
-            name: "extractPlanningFailed",
-            fields: { action, errorCode: commandError?.code ?? "unknown" },
-          });
-        }
-      }
-
+      const defaults = extractDefaultsForArchive(archivePath, options.preferences(), options.pathHelpers, action);
       let password: string | undefined;
       while (true) {
         try {
-          const destinationPlan = quickExtractDestinationPlan(
-            archivePath,
-            action,
-            options.pathHelpers,
-            entries,
-          );
-          if (!destinationPlan.destinationPath) {
+          const resolved = resolveExtractStartInput(extractStartInputFromOptions(defaults, password), {
+            currentFolder: "",
+            entryReferences: [],
+            joinNativePath: options.pathHelpers.joinNativePath,
+          });
+          if (!resolved.destination) {
             options.setOperationalMessage("quickExtract.chooseDestination", { archivePath });
             break;
           }
-
-          const preferences = options.preferences();
-          const overwrite = quickExtractOverwrite(preferences.defaultExtractOverwrite);
-          // Only "rename" sidesteps an existing destination folder; "replace"
-          // and "ask" extract into it and resolve each conflicting file.
-          const destinationCollisionStrategy = overwrite === "rename"
-            ? destinationPlan.destinationCollisionStrategy
-            : undefined;
           const request = buildStartExtractRequest({
+            ...resolved,
             archivePath,
-            destinationPath: destinationPlan.destinationPath,
-            overwrite,
-            destinationCollisionStrategy,
-            stripComponents: destinationPlan.stripComponents,
-            tzapRestorePolicy: preferences.defaultTzapRestorePolicy,
-            tzapAllowDegraded: preferences.defaultTzapAllowDegraded,
-            tzapAllowAbsoluteSymlinks: preferences.defaultTzapAllowAbsoluteSymlinks,
-            ignoreSymlinks: preferences.defaultExtractIgnoreSymlinks,
-            ...(password ? { password } : {}),
+            destinationPath: resolved.destination,
           });
           const response = await options.runStartExtract(request);
           diagnostics.record({
@@ -306,7 +272,7 @@ export function createQuickActionController(
             name: "extractJobStarted",
             fields: { action, jobKind: response.kind },
           });
-          options.recordExtractDestination(destinationPlan.destinationPath);
+          options.recordExtractDestination(request.destinationPath);
           await options.handoffAcceptedJob(response);
           break;
         } catch (error) {
@@ -365,14 +331,4 @@ export function createQuickActionController(
     openQuickExtractReview,
     startQuickExtract,
   };
-}
-
-/**
- * Quick actions honor the default overwrite policy, except "refuse": a
- * one-click extraction that fails on the first existing file is never what the
- * user wanted, so it falls back to renaming. "ask" shows the same conflict
- * prompt as an in-app extraction.
- */
-function quickExtractOverwrite(policy: ExtractOverwritePolicy): ExtractOverwritePolicy {
-  return policy === "replace" || policy === "ask" ? policy : "rename";
 }

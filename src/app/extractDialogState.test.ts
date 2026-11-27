@@ -46,7 +46,6 @@ describe("extract dialog state", () => {
       deduplicateRoot: false,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: false,
-      tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
       password: " secret ",
     });

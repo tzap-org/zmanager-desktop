@@ -242,7 +242,6 @@ const COMMAND_WRAPPERS = [
       stripComponents: 0,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: false,
-      tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
     },
     call: () => api.runStartExtract({
@@ -252,7 +251,6 @@ const COMMAND_WRAPPERS = [
       stripComponents: 0,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: false,
-      tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
     }),
   },

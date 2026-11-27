@@ -83,10 +83,11 @@ export function createDisposableTaskRecoveryController(
                 ? { entryPaths: [...descriptor.entryPaths] }
                 : {}),
               stripComponents: descriptor.stripComponents,
+              ...(descriptor.flattenPaths ? { flattenPaths: true } : {}),
+              ...(descriptor.deduplicateRoot ? { deduplicateRoot: true } : {}),
+              ...(descriptor.selectAll ? { selectAll: true, excludedEntryPaths: [...(descriptor.excludedEntryPaths ?? [])] } : {}),
               tzapRestorePolicy: descriptor.tzapRestorePolicy ?? "portable",
-              // Always allow degraded restore on retry too; see extractFlow.buildStartExtractRequest.
-              tzapAllowDegraded: true,
-              tzapAllowAbsoluteSymlinks: descriptor.tzapAllowAbsoluteSymlinks ?? false,
+              tzapAllowDegraded: descriptor.tzapAllowDegraded ?? true,
               ignoreSymlinks: descriptor.ignoreSymlinks ?? false,
               ...(descriptor.locale ? { locale: descriptor.locale } : {}),
               password,

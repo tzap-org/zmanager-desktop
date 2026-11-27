@@ -191,9 +191,10 @@ export type BuildArchiveWorkspaceExtractRequestInput = {
   overwrite: StartExtractRequest["overwrite"];
   destinationCollisionStrategy?: StartExtractRequest["destinationCollisionStrategy"];
   stripComponents: number;
+  flattenPaths?: boolean;
+  deduplicateRoot?: boolean;
   tzapRestorePolicy?: StartExtractRequest["tzapRestorePolicy"];
   tzapAllowDegraded?: boolean;
-  tzapAllowAbsoluteSymlinks?: boolean;
   ignoreSymlinks?: boolean;
   recipientKeyId?: string;
   password?: string;
@@ -811,10 +812,10 @@ export function createArchiveWorkspace(options: CreateArchiveWorkspaceOptions = 
               : {}),
           } : {}),
           stripComponents: input.stripComponents,
+          flattenPaths: input.flattenPaths,
+          deduplicateRoot: input.deduplicateRoot,
           tzapRestorePolicy: input.tzapRestorePolicy ?? "portable",
-          // Always allow degraded restore; see extractFlow.buildStartExtractRequest.
-          tzapAllowDegraded: true,
-          tzapAllowAbsoluteSymlinks: input.tzapAllowAbsoluteSymlinks ?? false,
+          tzapAllowDegraded: input.tzapAllowDegraded,
           ignoreSymlinks: input.ignoreSymlinks ?? false,
           ...(input.recipientKeyId?.trim() ? { recipientKeyId: input.recipientKeyId.trim() } : {}),
           ...(input.password ? { password: input.password } : {}),

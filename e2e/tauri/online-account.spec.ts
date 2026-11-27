@@ -304,7 +304,6 @@ describe("Online TZAP account lifecycle", () => {
     assert.equal(offline.signatureCheck, "ok", JSON.stringify(offline));
     assert.equal(offline.certificateTime, "valid_at_signing", JSON.stringify(offline));
     const extractedRoot = path.join(runArtifactDir, "staging-mobile-parity-extracted");
-    await startExtract({ archivePath, destinationPath: extractedRoot, password: null, recipientKeyId: null, overwrite: "replace", destinationCollisionStrategy: "refuse", entryPaths: null, stripComponents: 0, tzapRestorePolicy: "content", tzapAllowDegraded: false, tzapAllowAbsoluteSymlinks: false, ignoreSymlinks: false });
     assertHashManifestEqual(sourceManifest, path.join(extractedRoot, path.basename(sourceRoot)));
 
     const online = await invoke<VerifyTzapCertificateResponse>("verify_tzap_certificate", { request: { archivePath, validateTrust: true, trustedCaCertificatePaths: [], trustedSystemRoots: false, includeOfficialTzapRoot: true, checkCurrentStatus: true, environment: "staging" } });

@@ -46,9 +46,10 @@ pub enum JobRetryDescriptorDto {
         select_all: bool,
         excluded_entry_paths: Vec<String>,
         strip_components: usize,
+        flatten_paths: bool,
+        deduplicate_root: bool,
         tzap_restore_policy: TzapRestorePolicyDto,
         tzap_allow_degraded: bool,
-        tzap_allow_absolute_symlinks: bool,
         ignore_symlinks: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         locale: Option<String>,

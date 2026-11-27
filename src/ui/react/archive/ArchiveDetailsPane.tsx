@@ -602,22 +602,6 @@ function ExtractOptions() {
                   <InfoTip content={i18n.t("extract.tzapAllowDegraded.tooltip")} />
                 </span>
               </label>
-              <label className="flex items-start gap-2 text-[11px] font-medium">
-                <Checkbox
-                  id="extract-tzap-allow-absolute-symlinks"
-                  checked={options.tzapAllowAbsoluteSymlinks}
-                  onCheckedChange={(checked) =>
-                    actions.handleArchiveIntent({
-                      type: "setExtractOptions",
-                      patch: { tzapAllowAbsoluteSymlinks: checked === true },
-                    })
-                  }
-                />
-                <span className="inline-flex items-center gap-1">
-                  <span>{i18n.t("extract.tzapAllowAbsoluteSymlinks")}</span>
-                  <InfoTip content={i18n.t("extract.tzapAllowAbsoluteSymlinks.tooltip")} />
-                </span>
-              </label>
             </div>
           ) : null}
           <label className="grid grid-cols-[auto_1fr] items-center gap-2">

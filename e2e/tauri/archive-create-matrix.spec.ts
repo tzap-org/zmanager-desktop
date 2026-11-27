@@ -259,7 +259,6 @@ if (!hasFixtureCorpus()) {
               stripComponents: 0,
               tzapRestorePolicy: "portable",
               tzapAllowDegraded: false,
-              tzapAllowAbsoluteSymlinks: false,
               ignoreSymlinks: false,
             });
             assert.ok(existsSync(path.join(extracted, "payload", "payload.bin")), "recovered extraction must write the payload");

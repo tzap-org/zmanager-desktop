@@ -11,10 +11,12 @@ import type {
   ZManagerContextMenuItem,
 } from "../appRuntime";
 import { useZManagerActions, useZManagerSnapshot } from "../AppProviders";
+import { useExtractPasswordState } from "../archive/ExtractPasswordContext";
 
 export function ContextMenuRoot() {
   const snapshot = useZManagerSnapshot();
   const actions = useZManagerActions();
+  const passwordState = useExtractPasswordState();
   const menu = snapshot.contextMenu;
   const menuRef = useRef<HTMLDivElement | null>(null);
   const returnFocusRef = useRef<HTMLElement | null>(null);
@@ -72,7 +74,14 @@ export function ContextMenuRoot() {
       >
         <ContextMenuItemList
           items={menuItems}
-          onIntent={actions.handleContextMenuIntent}
+          onIntent={(intent) => {
+            if (intent.type === "action" && intent.payload.action === "extract-here") {
+              actions.handleContextMenuIntent({ ...intent, extractPassword: passwordState.password });
+              passwordState.reset();
+              return;
+            }
+            actions.handleContextMenuIntent(intent);
+          }}
         />
       </PopoverContent>
     </Popover>

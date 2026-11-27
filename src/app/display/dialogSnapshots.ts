@@ -69,7 +69,6 @@ export type ZManagerDialogSnapshot =
       deduplicateRoot: boolean;
       tzapRestorePolicy: TzapRestorePolicy;
       tzapAllowDegraded: boolean;
-      tzapAllowAbsoluteSymlinks: boolean;
       ignoreSymlinks: boolean;
       passwordPromptOpen: boolean;
     }>

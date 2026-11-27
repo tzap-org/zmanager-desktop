@@ -22,6 +22,7 @@ import { Button } from "../../components/ui/button";
 import { cn } from "../../../lib/utils";
 import { useZManagerActions, useZManagerSnapshot } from "../AppProviders";
 import type { ZManagerReactSnapshot } from "../appRuntime";
+import { useExtractPasswordState } from "../archive/ExtractPasswordContext";
 import { useCreatePasswordState } from "../create/CreatePasswordContext";
 import {
   commandButtonId,
@@ -73,6 +74,7 @@ function ExtractToolbarGroups({
 }: Readonly<{ groups: readonly CommandBarGroup[] }>) {
   const snapshot = useZManagerSnapshot();
   const actions = useZManagerActions();
+  const passwordState = useExtractPasswordState();
   const i18n = translatorForSnapshot(snapshot);
   const canExtract =
     snapshot.archive.command.canUseArchive;
@@ -99,7 +101,8 @@ function ExtractToolbarGroups({
           primary={canExtract}
           disabled={!canExtract}
           onClick={() => {
-            actions.handleArchiveIntent({ type: "runExtract", mode: "archive", password: "" });
+            actions.handleArchiveIntent({ type: "runExtract", mode: "archive", password: passwordState.password });
+            passwordState.reset();
           }}
         />
         <ToolbarActionButton

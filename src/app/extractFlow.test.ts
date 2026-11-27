@@ -4,35 +4,8 @@ import {
   buildStartExtractRequest,
   resolveExtractStartInput,
 } from "./extractFlow";
-import { extractHerePathOptions } from "./extractionPolicy";
 
 describe("extract flow helpers", () => {
-  it("prepares Extract Here to preserve the archive root in the current folder", () => {
-    const input = {
-      destinationBasePath: "C:/tmp",
-      useSubfolder: false,
-      subfolder: "",
-      pathMode: "none" as const,
-      overwrite: "rename" as const,
-      stripComponents: "0",
-      deduplicateRoot: false,
-    };
-
-    expect(extractHerePathOptions(input, { mode: "archive" })).toMatchObject({
-      pathMode: "full",
-      stripComponents: 0,
-      deduplicateRoot: false,
-    });
-    expect(extractHerePathOptions(input, {
-      mode: "selection",
-      selectedFilePath: "docs/releases/readme.txt",
-    })).toMatchObject({
-      pathMode: "full",
-      stripComponents: 2,
-      deduplicateRoot: false,
-    });
-  });
-
   it("builds full archive extract requests without selected entry paths", () => {
     expect(
       buildStartExtractRequest({
@@ -49,7 +22,6 @@ describe("extract flow helpers", () => {
       stripComponents: 0,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: true,
-      tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
     });
   });
@@ -64,7 +36,6 @@ describe("extract flow helpers", () => {
       stripComponents: 1,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: false,
-      tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
       password: "secret",
     });
@@ -79,7 +50,6 @@ describe("extract flow helpers", () => {
       stripComponents: 1,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: true,
-      tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
       password: "secret",
     });
@@ -120,13 +90,11 @@ describe("extract flow helpers", () => {
       deduplicateRoot: false,
       tzapRestorePolicy: "system",
       tzapAllowDegraded: true,
-      tzapAllowAbsoluteSymlinks: true,
       ignoreSymlinks: true,
       password: " secret ",
       tzapRecipientKeyId: " recipient_local ",
     }, {
       currentFolder: "docs/releases",
-      allEntryPaths: ["root/docs/releases/readme.txt"],
       entryReferences: ["root/docs/releases/readme.txt"],
       joinNativePath: (parent, child) => `${parent}/${child}`,
     });
@@ -136,10 +104,11 @@ describe("extract flow helpers", () => {
       destinationValid: true,
       overwrite: "ask",
       stripComponents: 2,
+      flattenPaths: false,
+      deduplicateRoot: false,
       entryReferences: ["root/docs/releases/readme.txt"],
       tzapRestorePolicy: "system",
       tzapAllowDegraded: true,
-      tzapAllowAbsoluteSymlinks: true,
       ignoreSymlinks: true,
       tzapRecipientKeyId: "recipient_local",
     });
@@ -156,7 +125,6 @@ describe("extract flow helpers", () => {
       deduplicateRoot: false,
     }, {
       currentFolder: "",
-      allEntryPaths: ["root/readme.txt"],
       entryReferences: ["root/readme.txt"],
       joinNativePath: (parent, child) => `${parent}/${child}`,
     });
@@ -165,7 +133,7 @@ describe("extract flow helpers", () => {
     expect(resolved.destinationValid).toBe(false);
   });
 
-  it("resolves no-paths and duplicated-root stripping from archive references", () => {
+  it("sends No paths as a flattening request instead of globally stripping components", () => {
     const resolved = resolveExtractStartInput({
       destinationBasePath: "C:/tmp/out",
       useSubfolder: false,
@@ -176,14 +144,10 @@ describe("extract flow helpers", () => {
       deduplicateRoot: true,
     }, {
       currentFolder: "",
-      allEntryPaths: [
-        "bundle/docs/readme.txt",
-        "bundle/src/main.rs",
-      ],
       entryReferences: [],
       joinNativePath: (parent, child) => `${parent}/${child}`,
     });
 
-    expect(resolved.stripComponents).toBe(4);
+    expect(resolved).toMatchObject({ stripComponents: 0, flattenPaths: true, deduplicateRoot: false });
   });
 });

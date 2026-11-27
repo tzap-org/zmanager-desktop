@@ -830,7 +830,6 @@ describe("archive workspace load state", () => {
       stripComponents: 2,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: false,
-      tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
       password: "secret",
     }));
@@ -842,7 +841,6 @@ describe("archive workspace load state", () => {
       stripComponents: 2,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: true,
-      tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
       password: "secret",
     });

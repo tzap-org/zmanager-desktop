@@ -84,7 +84,6 @@ function createHarness(overrides: Partial<ExtractStartControllerOptions> = {}) {
     deduplicateRoot: false,
     tzapRestorePolicy: "portable",
     tzapAllowDegraded: false,
-    tzapAllowAbsoluteSymlinks: false,
     ignoreSymlinks: false,
     password: undefined as string | undefined,
   };
@@ -163,7 +162,6 @@ describe("extract start controller", () => {
       stripComponents: 1,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: true,
-      tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
     });
     expect(harness.calls.recordDestination).toEqual(["C:/out/demo"]);
@@ -187,7 +185,6 @@ describe("extract start controller", () => {
       entryPaths: ["docs/readme.txt"],
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: true,
-      tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
     });
     expect(harness.calls.jobs[0]).toEqual(startJobResponse());

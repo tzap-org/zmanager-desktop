@@ -1029,9 +1029,10 @@ fn start_extract_internal_with_origin_and_spawner(
                 select_all: request.select_all,
                 excluded_entry_paths: excluded_entry_paths.clone(),
                 strip_components: request.strip_components,
+                flatten_paths: request.flatten_paths,
+                deduplicate_root: request.deduplicate_root,
                 tzap_restore_policy: request.tzap_restore_policy,
                 tzap_allow_degraded: request.tzap_allow_degraded,
-                tzap_allow_absolute_symlinks: request.tzap_allow_absolute_symlinks,
                 ignore_symlinks: request.ignore_symlinks,
                 locale: request.locale.clone(),
             }),
@@ -1045,11 +1046,12 @@ fn start_extract_internal_with_origin_and_spawner(
     let diagnostics = app_for_thread.as_ref().and_then(|app| app.try_state::<crate::diagnostics::DiagnosticLog>()).map(|state| state.inner().clone());
     let overwrite = request.overwrite;
     let request_locale = request.locale.clone();
-    let policy = extraction_policy(request.overwrite, request.strip_components, request.ignore_symlinks, &excluded_entry_paths);
+    let mut policy = extraction_policy(request.overwrite, request.strip_components, request.ignore_symlinks, &excluded_entry_paths);
+    policy.flatten_paths = request.flatten_paths;
     let tzap_restore_options = TzapRestoreOptions {
         policy: map_tzap_restore_policy(request.tzap_restore_policy),
         allow_degraded: request.tzap_allow_degraded,
-        allow_absolute_symlinks: request.tzap_allow_absolute_symlinks,
+        allow_absolute_symlinks: false,
     };
     let recipient_private_key = recipient_private_key;
 
@@ -1063,6 +1065,7 @@ fn start_extract_internal_with_origin_and_spawner(
             password,
             recipient_private_key,
             policy,
+            request.deduplicate_root,
             tzap_restore_options,
             &token,
             &mut sink,
@@ -1564,7 +1567,8 @@ fn run_extract_job(
     excluded_entry_paths: &[String],
     password: Option<String>,
     recipient_private_key: Option<zmanager_core::secrets::SecretBytes>,
-    policy: ExtractionPolicy,
+    mut policy: ExtractionPolicy,
+    deduplicate_root: bool,
     tzap_restore_options: TzapRestoreOptions,
     token: &CancellationToken,
     sink: &mut JobEventCollector,
@@ -1587,7 +1591,11 @@ fn run_extract_job(
         Ok(engine) => {
             let open_res = engine.open(
                 zmanager_core::engine::ArchiveSource::from_path_autodetect(archive_path),
-                zmanager_core::engine::OpenOptions { password: password.clone(), recipient_key: None, ..Default::default() },
+                zmanager_core::engine::OpenOptions {
+                    password: password.clone(),
+                    recipient_key_bytes: recipient_private_key.as_ref().map(|key| vec![key.expose_secret().to_vec()]),
+                    ..Default::default()
+                },
             );
             match open_res {
                 Ok(mut handle) => {
@@ -1600,6 +1608,18 @@ fn run_extract_job(
                     // instead of an indeterminate bar that only ever jumps
                     // to 100% at completion.
                     let listing = handle.list().ok().map(Arc::new);
+                    if deduplicate_root
+                        && !policy.flatten_paths
+                        && let Some(listing) = &listing
+                    {
+                        let included = ArchivePathSet::new(entry_paths);
+                        let excluded = ArchivePathSet::new(excluded_entry_paths);
+                        let entries =
+                            listing.entries.iter().filter(|entry| (entry_paths.is_empty() || included.covers(&entry.path)) && !excluded.covers(&entry.path));
+                        if has_single_extraction_root(entries) {
+                            policy.strip_components = policy.strip_components.saturating_add(1);
+                        }
+                    }
                     if let Some(resolver) = overwrite_resolver.as_mut() {
                         resolver.archive_listing = listing.clone();
                     }
@@ -1746,6 +1766,25 @@ fn run_extract_job(
             Err(crate::platform::archive_error::map_engine_error(err))
         }
     }
+}
+
+fn has_single_extraction_root<'a>(entries: impl IntoIterator<Item = &'a zmanager_core::engine::EngineEntry>) -> bool {
+    let mut root = None;
+    for entry in entries {
+        let Ok(path) = zmanager_core::safety::normalize_archive_path(&entry.path) else {
+            return false;
+        };
+        let (component, is_nested) = path.split_once('/').map_or((path.as_str(), false), |(component, _)| (component, true));
+        if !is_nested && entry.kind != archive_browser::BrowserEntryKind::Directory {
+            return false;
+        }
+        match &root {
+            None => root = Some(component.to_owned()),
+            Some(root) if root != component => return false,
+            Some(_) => {}
+        }
+    }
+    root.is_some()
 }
 
 fn complete_job_if_needed(registry: &JobRegistry, job_id: &str, kind: JobKindDto, summary: JobTerminalSummaryDto) {
@@ -3004,6 +3043,7 @@ fn extraction_policy(
         strip_components,
         limits: Default::default(),
         ignore_symlinks,
+        flatten_paths: false,
     }
 }
 
@@ -3919,9 +3959,10 @@ mod tests {
                 select_all: false,
                 excluded_entry_paths: Vec::new(),
                 strip_components: 0,
+                flatten_paths: false,
+                deduplicate_root: false,
                 tzap_restore_policy: TzapRestorePolicyDto::Portable,
                 tzap_allow_degraded: false,
-                tzap_allow_absolute_symlinks: false,
                 ignore_symlinks: false,
                 locale: None,
             },
@@ -3994,9 +4035,10 @@ mod tests {
                 select_all: false,
                 excluded_entry_paths: Vec::new(),
                 strip_components: 0,
+                flatten_paths: false,
+                deduplicate_root: false,
                 tzap_restore_policy: TzapRestorePolicyDto::Portable,
                 tzap_allow_degraded: false,
-                tzap_allow_absolute_symlinks: false,
                 ignore_symlinks: false,
                 locale: None,
             },
@@ -4076,9 +4118,10 @@ mod tests {
                 select_all: false,
                 excluded_entry_paths: Vec::new(),
                 strip_components: 0,
+                flatten_paths: false,
+                deduplicate_root: false,
                 tzap_restore_policy: TzapRestorePolicyDto::Portable,
                 tzap_allow_degraded: false,
-                tzap_allow_absolute_symlinks: false,
                 ignore_symlinks: false,
                 locale: None,
             },
@@ -4104,9 +4147,10 @@ mod tests {
                 select_all: false,
                 excluded_entry_paths: Vec::new(),
                 strip_components: 0,
+                flatten_paths: false,
+                deduplicate_root: false,
                 tzap_restore_policy: TzapRestorePolicyDto::Portable,
                 tzap_allow_degraded: false,
-                tzap_allow_absolute_symlinks: false,
                 ignore_symlinks: false,
                 locale: None,
             },
@@ -4138,9 +4182,10 @@ mod tests {
                 select_all: false,
                 excluded_entry_paths: Vec::new(),
                 strip_components: 0,
+                flatten_paths: false,
+                deduplicate_root: false,
                 tzap_restore_policy: TzapRestorePolicyDto::Portable,
                 tzap_allow_degraded: false,
-                tzap_allow_absolute_symlinks: false,
                 ignore_symlinks: false,
                 locale: None,
             },
@@ -4862,9 +4907,10 @@ mod tests {
             select_all: false,
             excluded_entry_paths: Vec::new(),
             strip_components: 0,
+            flatten_paths: false,
+            deduplicate_root: false,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
-            tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
             locale: None,
         };
@@ -4938,9 +4984,10 @@ mod tests {
             select_all: false,
             excluded_entry_paths: Vec::new(),
             strip_components: 0,
+            flatten_paths: false,
+            deduplicate_root: false,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
-            tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
             locale: None,
         };
@@ -5042,9 +5089,10 @@ mod tests {
             select_all: false,
             excluded_entry_paths: Vec::new(),
             strip_components: 0,
+            flatten_paths: false,
+            deduplicate_root: false,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
-            tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
             locale: None,
         };
@@ -5149,9 +5197,10 @@ mod tests {
             select_all: false,
             excluded_entry_paths: Vec::new(),
             strip_components: 0,
+            flatten_paths: false,
+            deduplicate_root: false,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
-            tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
             locale: None,
         };
@@ -5235,9 +5284,10 @@ mod tests {
             select_all: false,
             excluded_entry_paths: Vec::new(),
             strip_components: 0,
+            flatten_paths: false,
+            deduplicate_root: false,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
-            tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
             locale: None,
         };
@@ -5318,9 +5368,10 @@ mod tests {
             select_all: false,
             excluded_entry_paths: Vec::new(),
             strip_components: 0,
+            flatten_paths: false,
+            deduplicate_root: false,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
-            tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
             locale: None,
         };
@@ -5411,9 +5462,10 @@ mod tests {
             select_all: false,
             excluded_entry_paths: Vec::new(),
             strip_components: 0,
+            flatten_paths: false,
+            deduplicate_root: false,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
-            tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
             locale: None,
         };
@@ -5541,9 +5593,10 @@ mod tests {
             select_all: false,
             excluded_entry_paths: Vec::new(),
             strip_components: 0,
+            flatten_paths: false,
+            deduplicate_root: false,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
-            tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
             locale: None,
         };
@@ -5925,9 +5978,10 @@ mod tests {
             select_all: false,
             excluded_entry_paths: Vec::new(),
             strip_components: 0,
+            flatten_paths: false,
+            deduplicate_root: false,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
-            tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
             locale: None,
         };
@@ -5994,9 +6048,10 @@ mod tests {
             select_all: false,
             excluded_entry_paths: Vec::new(),
             strip_components: 0,
+            flatten_paths: false,
+            deduplicate_root: false,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
-            tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
             locale: None,
         };
@@ -6069,9 +6124,10 @@ mod tests {
             select_all: false,
             excluded_entry_paths: Vec::new(),
             strip_components: 0,
+            flatten_paths: false,
+            deduplicate_root: false,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
-            tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
             locale: None,
         };
@@ -6212,6 +6268,7 @@ mod tests {
             None,
             None,
             extraction_policy(OverwritePolicyDto::Replace, 0, false, &[]),
+            false,
             TzapRestoreOptions::default(),
             &token,
             &mut sink,
@@ -6577,9 +6634,10 @@ mod tests {
             select_all: false,
             excluded_entry_paths: Vec::new(),
             strip_components: 0,
+            flatten_paths: false,
+            deduplicate_root: false,
             tzap_restore_policy: TzapRestorePolicyDto::Portable,
             tzap_allow_degraded: false,
-            tzap_allow_absolute_symlinks: false,
             ignore_symlinks: false,
             locale: None,
         };
@@ -6591,6 +6649,65 @@ mod tests {
         assert!(!workspace.join("Downloads 2").exists(), "Downloads 2 must not be created");
         // Output must be directly inside Downloads
         assert!(extract_destination.join("sources").join("README.md").is_file(), "contents must extract directly into destination folder");
+        let deduplicated = workspace.join("deduplicated");
+        let request = serde_json::from_value(serde_json::json!({
+            "archivePath": destination_archive,
+            "destinationPath": deduplicated,
+            "overwrite": "replace",
+            "deduplicateRoot": true,
+        }))
+        .unwrap();
+        let job = start_extract_internal(request, &registry).unwrap();
+        let (poll, events) = wait_for_job_terminal(&registry, &job.job_id);
+        assert_eq!(poll.status, JobStatusDto::Completed, "{events:?}");
+        assert_eq!(fs::read(deduplicated.join("README.md")).unwrap(), b"hello");
+        assert!(!deduplicated.join("sources").exists());
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn extract_all_flattens_mixed_depths_and_renames_duplicate_names() {
+        let workspace = create_temp_workspace("extract-flat");
+        let sources = workspace.join("sources");
+        fs::create_dir_all(sources.join("nested/deep")).unwrap();
+        fs::create_dir_all(sources.join("other")).unwrap();
+        fs::write(sources.join("README.md"), b"root").unwrap();
+        fs::write(sources.join("nested/deep/same.txt"), b"nested").unwrap();
+        fs::write(sources.join("other/same.txt"), b"other").unwrap();
+        let registry = JobRegistry::new();
+
+        for format in ["tzap", "zip", "sevenZ"] {
+            let archive = workspace.join(format!("archive.{}", if format == "sevenZ" { "7z" } else { format }));
+            let destination = workspace.join(format);
+            let create = serde_json::from_value(serde_json::json!({
+                "sources": [sources.join("README.md"), sources.join("nested"), sources.join("other")],
+                "destinationPath": archive,
+                "format": format,
+                "replaceExisting": false,
+            }))
+            .unwrap();
+            let job = start_create_internal(create, &registry).unwrap();
+            let (poll, events) = wait_for_job_terminal(&registry, &job.job_id);
+            assert_eq!(poll.status, JobStatusDto::Completed, "{format}: {events:?}");
+            fs::create_dir(&destination).unwrap();
+            fs::write(destination.join("same.txt"), b"existing").unwrap();
+            let extract = serde_json::from_value(serde_json::json!({
+                "archivePath": archive,
+                "destinationPath": destination,
+                "overwrite": "rename",
+                "flattenPaths": true,
+            }))
+            .unwrap();
+            let job = start_extract_internal(extract, &registry).unwrap();
+            let (poll, events) = wait_for_job_terminal(&registry, &job.job_id);
+            assert_eq!(poll.status, JobStatusDto::Completed, "{format}: {events:?}");
+            assert_eq!(fs::read(destination.join("README.md")).unwrap(), b"root");
+            assert_eq!(fs::read(destination.join("same.txt")).unwrap(), b"existing");
+            let mut renamed = ["same 2.txt", "same 3.txt"].map(|path| fs::read(destination.join(path)).unwrap());
+            renamed.sort();
+            assert_eq!(renamed, [b"nested".to_vec(), b"other".to_vec()]);
+            assert_eq!(fs::read_dir(destination).unwrap().count(), 4);
+        }
         let _ = fs::remove_dir_all(&workspace);
     }
 

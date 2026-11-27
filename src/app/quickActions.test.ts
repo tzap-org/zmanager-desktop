@@ -2,10 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 import { DEFAULT_APP_PREFERENCES } from "./preferences";
 import {
   quickCreateDestination,
-  quickExtractDestination,
-  quickExtractDestinationCollisionStrategy,
-  quickExtractDestinationPlan,
-  quickExtractSingleRootFolder,
   runQuickActionRequest,
   quickActionWindowDisposition,
   uniqueQuickActionPaths,
@@ -72,67 +68,6 @@ describe("quick action helpers", () => {
         pathHelpers,
       ),
     ).toBe("/tmp/photos/image.jpg.zip");
-  });
-
-  it("builds quick extract destinations from the extraction mode", () => {
-    expect(quickExtractDestination("/tmp/archive.tar.zst", "extractHere", pathHelpers)).toBe(
-      "/tmp",
-    );
-    expect(quickExtractDestination("/tmp/archive.tar.zst", "extractToFolder", pathHelpers)).toBe(
-      "/tmp/archive",
-    );
-  });
-
-  it("only renames the destination folder for extract-to-folder quick actions", () => {
-    expect(quickExtractDestinationCollisionStrategy("extractHere")).toBeUndefined();
-    expect(quickExtractDestinationCollisionStrategy("extractToFolder")).toBe("rename");
-  });
-
-  it("detects a single archive root without changing its extraction layout", () => {
-    expect(quickExtractSingleRootFolder([
-      { path: "photos/", kind: "directory" },
-      { path: "photos/raw/image.jpg" },
-      { path: "photos/edited/image.jpg" },
-    ])).toBe("photos");
-
-    expect(quickExtractSingleRootFolder([{ path: "empty", kind: "directory" }])).toBe("empty");
-    expect(quickExtractSingleRootFolder([{ path: "README.md" }])).toBeNull();
-    expect(quickExtractSingleRootFolder([
-      { path: "photos/image.jpg" },
-      { path: "docs/readme.txt" },
-    ])).toBeNull();
-    expect(quickExtractSingleRootFolder([{ path: "../escape.txt" }])).toBeNull();
-  });
-
-  it("plans extract-here folder-wrapped archives directly in the current directory", () => {
-    expect(
-      quickExtractDestinationPlan("/tmp/photos.zip", "extractHere", pathHelpers, [
-        { path: "photos/", kind: "directory" },
-        { path: "photos/raw/image.jpg" },
-    ]),
-    ).toEqual({
-      destinationPath: "/tmp",
-      stripComponents: 0,
-    });
-
-    expect(
-      quickExtractDestinationPlan("/tmp/photos.zip", "extractHere", pathHelpers, [
-        { path: "README.md" },
-      ]),
-    ).toEqual({
-      destinationPath: "/tmp",
-      stripComponents: 0,
-    });
-  });
-
-  it("plans extract-to-folder quick actions with destination root renaming", () => {
-    expect(
-      quickExtractDestinationPlan("/tmp/photos.zip", "extractToFolder", pathHelpers),
-    ).toEqual({
-      destinationPath: "/tmp/photos",
-      stripComponents: 0,
-      destinationCollisionStrategy: "rename",
-    });
   });
 
   it("finds unsupported archive paths", () => {

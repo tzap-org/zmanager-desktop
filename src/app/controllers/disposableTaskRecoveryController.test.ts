@@ -42,6 +42,9 @@ function failedSnapshot(): DesktopJobSnapshotDto {
       destinationCollisionStrategy: "rename",
       entryPaths: ["docs/readme.txt"],
       stripComponents: 1,
+      flattenPaths: true,
+      tzapRestorePolicy: "sameOs",
+      tzapAllowDegraded: false,
     },
   };
 }
@@ -73,9 +76,9 @@ describe("disposable task recovery controller", () => {
       destinationCollisionStrategy: "rename",
       entryPaths: ["docs/readme.txt"],
       stripComponents: 1,
-      tzapRestorePolicy: "portable",
-      tzapAllowDegraded: true,
-      tzapAllowAbsoluteSymlinks: false,
+      flattenPaths: true,
+      tzapRestorePolicy: "sameOs",
+      tzapAllowDegraded: false,
       ignoreSymlinks: false,
       password: "secret",
     }, "passwordRetry");

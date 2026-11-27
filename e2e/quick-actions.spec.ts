@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { ShellIntegrationSetup, ShareRecordSnapshot, LocalSendDeviceInfoDto } from "../src/api/types";
+import { PREFERENCE_KEYS } from "../src/app/preferenceStorage";
 import { shareFixture } from "../src/app/shareQueueTestFixtures";
 
 type IpcCall = {
@@ -161,9 +162,153 @@ test("cold extract-here requests start without listing or revealing Main", async
   const calls = await ipcCalls(page);
   expect(calls.filter((call) => call.cmd === "start_extract")).toHaveLength(1);
   expect(calls.some((call) => call.cmd === "list_archive")).toBe(false);
+  expect(calls.some((call) => call.cmd === "start_archive_index")).toBe(false);
   expect(calls.some((call) => call.cmd === "subscribe_job")).toBe(false);
   expect(calls.some((call) => call.cmd === "plugin:window|show")).toBe(false);
 });
+
+test("cold right-click Extract to Folder uses the saved extraction options", async ({ page }) => {
+  await installQuickActionTauriStub(page, [
+    { launchedForQuickAction: true, windowDisposition: "disposableTask", error: null },
+    notRequestedState,
+  ], {
+    nativeInboundEvents: [shellActionEvent("extract-options-event", "extractToFolder", ["/tmp/archive.tzap"])],
+  });
+  await page.addInitScript((preferences) => {
+    for (const [key, value] of Object.entries(preferences)) {
+      localStorage.setItem(key, value);
+    }
+  }, {
+    [PREFERENCE_KEYS.customExtractFolderPath]: "/tmp/output",
+    [PREFERENCE_KEYS.defaultExtractPathMode]: "none",
+    [PREFERENCE_KEYS.defaultExtractOverwrite]: "refuse",
+    [PREFERENCE_KEYS.defaultExtractStripComponents]: "3",
+    [PREFERENCE_KEYS.defaultExtractIgnoreSymlinks]: "true",
+    [PREFERENCE_KEYS.defaultTzapRestorePolicy]: "sameOs",
+    "zmanager.defaultTzapAllowAbsoluteSymlinks": "true",
+  });
+  await page.goto("/");
+  await expect.poll(() => extractRequest(page)).toMatchObject({
+    destinationPath: "/tmp/output/archive",
+    overwrite: "refuse",
+    flattenPaths: true,
+    stripComponents: 0,
+    ignoreSymlinks: true,
+    tzapRestorePolicy: "sameOs",
+    tzapAllowDegraded: false,
+  });
+  expect(await extractRequest(page)).not.toHaveProperty("destinationCollisionStrategy");
+  expect(await extractRequest(page)).not.toHaveProperty("tzapAllowAbsoluteSymlinks");
+});
+
+test.describe("main-window Extract All options", () => {
+  test.beforeEach(async ({ page }) => {
+    await installQuickActionTauriStub(page, [notRequestedState]);
+    await page.addInitScript((preferences) => {
+      for (const [key, value] of Object.entries(preferences)) {
+        localStorage.setItem(key, value);
+      }
+    }, {
+      [PREFERENCE_KEYS.defaultExtractOverwrite]: "rename",
+      [PREFERENCE_KEYS.defaultExtractStripComponents]: "1",
+      [PREFERENCE_KEYS.defaultExtractDeduplicateRoot]: "true",
+      [PREFERENCE_KEYS.defaultExtractIgnoreSymlinks]: "true",
+      [PREFERENCE_KEYS.defaultTzapRestorePolicy]: "sameOs",
+      [PREFERENCE_KEYS.defaultTzapAllowDegraded]: "false",
+      "zmanager.defaultTzapAllowAbsoluteSymlinks": "true",
+    });
+    await page.goto("/");
+    await expect.poll(() => page.evaluate(() => Boolean(window.__zmanagerDev))).toBe(true);
+    await page.evaluate(() => window.__zmanagerDev?.loadArchiveFixture({
+      archivePath: "/tmp/extract-options.tzap",
+      entryCount: 1,
+      totalSize: 8,
+      entries: [{ path: "root/sub/readme.txt", kind: "file", size: 8 }],
+    }));
+  });
+
+  test("submits the global defaults", async ({ page }) => {
+    await page.locator("#extract-all").click();
+    await expect.poll(() => extractRequest(page)).toMatchObject({
+      destinationPath: "/tmp/extract-options",
+      overwrite: "rename",
+      stripComponents: 1,
+      deduplicateRoot: true,
+      ignoreSymlinks: true,
+      tzapRestorePolicy: "sameOs",
+      tzapAllowDegraded: false,
+      hasPassword: false,
+    });
+  });
+
+  test("submits inline overrides and the entered password", async ({ page }) => {
+    await page.locator("#extract-overwrite").click();
+    await page.getByRole("option", { name: "Replace", exact: true }).click();
+    await page.locator("#extract-deduplicate-root").click();
+    await page.locator("#extract-ignore-symlinks").click();
+    await page.getByText("Advanced options", { exact: true }).click();
+    await expect(page.getByText("Allow absolute symlinks", { exact: true })).toHaveCount(0);
+    await page.locator("#extract-strip-components").fill("0");
+    await page.locator("#extract-tzap-allow-degraded").click();
+    await page.locator("#extract-password").fill("fixture-password");
+    await page.locator("#extract-all").click();
+    await expect.poll(() => extractRequest(page)).toMatchObject({
+      overwrite: "replace",
+      stripComponents: 0,
+      ignoreSymlinks: false,
+      tzapRestorePolicy: "sameOs",
+      tzapAllowDegraded: true,
+      hasPassword: true,
+    });
+  });
+
+  test("archive right-click Extract Here uses the pane's No paths override", async ({ page }) => {
+    await page.locator("#extract-path-mode").click();
+    await page.getByRole("option", { name: "No paths", exact: true }).click();
+    await page.getByText("Advanced options", { exact: true }).click();
+    await page.locator("#extract-password").fill("fixture-password");
+    await page.locator('tr[data-entry-path="root"]').click({ button: "right" });
+    await page.locator('#context-menu [data-context-action="extract-here"]').click();
+    await expect.poll(() => extractRequest(page)).toMatchObject({
+      destinationPath: "/tmp",
+      entryPaths: ["root"],
+      overwrite: "rename",
+      flattenPaths: true,
+      stripComponents: 0,
+      hasPassword: true,
+    });
+  });
+
+  test("opens the extraction dialog with the current options and submits its override", async ({ page }) => {
+    await page.locator("#extract-overwrite").click();
+    await page.getByRole("option", { name: "Replace", exact: true }).click();
+    await page.locator('tr[data-entry-path="root"] [data-row-primary]').click();
+    await page.locator("#extract-selected").click();
+    await expect(page.locator("#browse-overwrite")).toHaveText("Replace");
+    await page.getByRole("dialog").getByText("Advanced options", { exact: true }).click();
+    await expect(page.getByRole("dialog").getByText("Allow absolute symlinks", { exact: true })).toHaveCount(0);
+    await page.locator("#browse-overwrite").click();
+    await page.getByRole("option", { name: "Refuse", exact: true }).click();
+    await page.locator("#extract-start").click();
+    await expect.poll(() => extractRequest(page)).toMatchObject({
+      overwrite: "refuse",
+      stripComponents: 1,
+      deduplicateRoot: true,
+      ignoreSymlinks: true,
+      tzapRestorePolicy: "sameOs",
+      tzapAllowDegraded: false,
+    });
+  });
+});
+
+function extractRequest(page: Page) {
+  return page.evaluate(() => {
+    const request = window.__zmanagerE2E?.ipcCalls.find((call) => call.cmd === "start_extract")?.args.request;
+    if (!request || typeof request !== "object") return null;
+    const { password, ...options } = request as Record<string, unknown>;
+    return { ...options, hasPassword: password === "fixture-password" };
+  });
+}
 
 test("two fixed requests receive two independent task windows", async ({ page }) => {
   await installQuickActionTauriStub(page, [

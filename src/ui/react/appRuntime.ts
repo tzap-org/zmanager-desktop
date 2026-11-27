@@ -303,7 +303,6 @@ export type ZManagerDialogIntent =
       deduplicateRoot: boolean;
       tzapRestorePolicy: TzapRestorePolicy;
       tzapAllowDegraded: boolean;
-      tzapAllowAbsoluteSymlinks: boolean;
       ignoreSymlinks: boolean;
       password: string;
     }>
@@ -318,7 +317,6 @@ export type ZManagerDialogIntent =
       deduplicateRoot: boolean;
       tzapRestorePolicy: TzapRestorePolicy;
       tzapAllowDegraded: boolean;
-      tzapAllowAbsoluteSymlinks: boolean;
       ignoreSymlinks: boolean;
     }>
   | Readonly<{ type: "preferences" }>
@@ -413,7 +411,7 @@ export type ZManagerAccountIntent =
   | Readonly<{ type: "syncContacts" }>;
 
 export type ZManagerContextMenuIntent =
-  | Readonly<{ type: "action"; payload: ZManagerContextMenuActionPayload }>
+  | Readonly<{ type: "action"; payload: ZManagerContextMenuActionPayload; extractPassword?: string }>
   | Readonly<{ type: "hide" }>;
 
 export type ZManagerKeyboardIntent =

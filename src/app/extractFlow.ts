@@ -1,6 +1,5 @@
 import type { StartExtractRequest } from "../api/types";
 import { normalizeArchivePath } from "./archiveTree";
-import { hasSingleArchiveRootFolder } from "./extractionPolicy";
 
 export type ExtractMode = "archive" | "selection";
 export type ExtractPathMode = "full" | "current" | "none";
@@ -17,7 +16,6 @@ export type ExtractStartInput = Readonly<{
   deduplicateRoot: boolean;
   tzapRestorePolicy?: TzapRestorePolicy;
   tzapAllowDegraded?: boolean;
-  tzapAllowAbsoluteSymlinks?: boolean;
   ignoreSymlinks?: boolean;
   tzapRecipientKeyId?: string;
   password?: string;
@@ -28,18 +26,18 @@ export type ResolvedExtractStartInput = Readonly<{
   destinationValid: boolean;
   overwrite: ExtractOverwritePolicy;
   stripComponents: number;
+  flattenPaths: boolean;
+  deduplicateRoot: boolean;
   password?: string;
   entryReferences: readonly string[];
   tzapRestorePolicy: TzapRestorePolicy;
   tzapAllowDegraded: boolean;
-  tzapAllowAbsoluteSymlinks: boolean;
   ignoreSymlinks: boolean;
   tzapRecipientKeyId?: string;
 }>;
 
 export type ResolveExtractStartInputContext = Readonly<{
   currentFolder: string;
-  allEntryPaths: readonly string[];
   entryReferences: readonly string[];
   joinNativePath(parentPath: string, childName: string): string;
 }>;
@@ -50,18 +48,20 @@ export type BuildStartExtractRequestInput = {
   overwrite: ExtractOverwritePolicy;
   destinationCollisionStrategy?: StartExtractRequest["destinationCollisionStrategy"];
   stripComponents: number;
+  flattenPaths?: boolean;
+  deduplicateRoot?: boolean;
   password?: string;
   entryPaths?: string[];
   selectAll?: boolean;
   excludedEntryPaths?: string[];
   tzapRestorePolicy?: TzapRestorePolicy;
   tzapAllowDegraded?: boolean;
-  tzapAllowAbsoluteSymlinks?: boolean;
   ignoreSymlinks?: boolean;
   recipientKeyId?: string;
 };
 
 export function buildStartExtractRequest(input: BuildStartExtractRequestInput): StartExtractRequest {
+  const tzapRestorePolicy = input.tzapRestorePolicy ?? "portable";
   return {
     archivePath: input.archivePath,
     destinationPath: input.destinationPath,
@@ -75,13 +75,13 @@ export function buildStartExtractRequest(input: BuildStartExtractRequestInput): 
       ? { excludedEntryPaths: [...input.excludedEntryPaths] }
       : {}),
     stripComponents: input.stripComponents,
-    tzapRestorePolicy: input.tzapRestorePolicy ?? "portable",
-    // Always request degraded restore: a strict reader refusal (e.g. an
-    // archive entry whose attributes can't be projected onto this OS) is
-    // never a useful hard failure for a utility extraction tool. Skipping
-    // what can't be restored and finishing the extraction beats aborting it.
-    tzapAllowDegraded: true,
-    tzapAllowAbsoluteSymlinks: input.tzapAllowAbsoluteSymlinks ?? false,
+    ...(input.flattenPaths ? { flattenPaths: true } : {}),
+    ...(input.deduplicateRoot ? { deduplicateRoot: true } : {}),
+    tzapRestorePolicy,
+    // Only native and system metadata restoration expose the strict mode.
+    tzapAllowDegraded: tzapRestorePolicy === "sameOs" || tzapRestorePolicy === "system"
+      ? input.tzapAllowDegraded ?? true
+      : true,
     ignoreSymlinks: input.ignoreSymlinks ?? false,
     ...(input.recipientKeyId?.trim() ? { recipientKeyId: input.recipientKeyId.trim() } : {}),
     ...(input.password ? { password: input.password } : {}),
@@ -98,22 +98,19 @@ export function resolveExtractStartInput(
     destination,
     destinationValid: destination !== null,
     overwrite: input.overwrite,
-    stripComponents: resolveExtractStripComponents({
-      stripComponents: input.stripComponents,
-      pathMode: input.pathMode,
-      currentFolder: context.currentFolder,
-      allEntryPaths: context.allEntryPaths,
-      entryReferences,
-      deduplicateRoot: input.deduplicateRoot,
-    }),
+    stripComponents: input.pathMode === "none" ? 0 : Math.max(
+      0,
+      numberOrZero(input.stripComponents),
+      input.pathMode === "current" ? archivePathDepth(context.currentFolder) : 0,
+    ),
+    flattenPaths: input.pathMode === "none",
+    deduplicateRoot: input.pathMode !== "none" && input.deduplicateRoot,
     ...(input.password && !input.tzapRecipientKeyId?.trim()
       ? { password: input.password }
       : {}),
     entryReferences,
     tzapRestorePolicy: input.tzapRestorePolicy ?? "portable",
-    // See buildStartExtractRequest: degraded restore is always allowed.
-    tzapAllowDegraded: true,
-    tzapAllowAbsoluteSymlinks: input.tzapAllowAbsoluteSymlinks ?? false,
+    tzapAllowDegraded: input.tzapAllowDegraded ?? true,
     ignoreSymlinks: input.ignoreSymlinks ?? false,
     ...(input.tzapRecipientKeyId?.trim() ? { tzapRecipientKeyId: input.tzapRecipientKeyId.trim() } : {}),
   };
@@ -134,37 +131,6 @@ export function resolveExtractDestination(
 
   const subfolder = input.subfolder;
   return subfolder ? joinNativePath(baseDestination, subfolder) : baseDestination;
-}
-
-export function resolveExtractStripComponents(input: Readonly<{
-  stripComponents: string | number;
-  pathMode: ExtractPathMode;
-  currentFolder: string;
-  allEntryPaths: readonly string[];
-  entryReferences: readonly string[];
-  deduplicateRoot: boolean;
-}>): number {
-  const references = input.entryReferences.length > 0
-    ? [...input.entryReferences]
-    : [...input.allEntryPaths];
-  let stripComponents = Math.max(0, numberOrZero(input.stripComponents));
-
-  if (input.pathMode === "current") {
-    stripComponents = Math.max(stripComponents, archivePathDepth(input.currentFolder));
-  }
-  if (input.pathMode === "none") {
-    let maxDepth = 0;
-    for (const path of references) {
-      maxDepth = Math.max(maxDepth, archivePathDepth(path));
-    }
-    stripComponents = Math.max(stripComponents, maxDepth);
-  }
-
-  if (input.deduplicateRoot && hasSingleArchiveRootFolder(references)) {
-    stripComponents += 1;
-  }
-
-  return stripComponents;
 }
 
 function numberOrZero(value: string | number): number {

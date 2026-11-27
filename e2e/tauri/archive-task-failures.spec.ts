@@ -31,7 +31,6 @@ const EXTRACT_DEFAULTS = {
   stripComponents: 0,
   tzapRestorePolicy: "content",
   tzapAllowDegraded: false,
-  tzapAllowAbsoluteSymlinks: false,
   ignoreSymlinks: false,
 } as const;
 

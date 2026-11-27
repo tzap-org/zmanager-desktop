@@ -343,9 +343,6 @@ function ExtractDialog({
   const [tzapAllowDegraded, setTzapAllowDegraded] = useState(
     dialog.tzapAllowDegraded,
   );
-  const [tzapAllowAbsoluteSymlinks, setTzapAllowAbsoluteSymlinks] = useState(
-    dialog.tzapAllowAbsoluteSymlinks,
-  );
   const [ignoreSymlinks, setIgnoreSymlinks] = useState(
     dialog.ignoreSymlinks,
   );
@@ -366,7 +363,6 @@ function ExtractDialog({
     setDeduplicateRoot(dialog.deduplicateRoot);
     setTzapRestorePolicy(dialog.tzapRestorePolicy);
     setTzapAllowDegraded(dialog.tzapAllowDegraded);
-    setTzapAllowAbsoluteSymlinks(dialog.tzapAllowAbsoluteSymlinks);
     setIgnoreSymlinks(dialog.ignoreSymlinks);
   }, [
     dialog.destination,
@@ -378,7 +374,6 @@ function ExtractDialog({
     dialog.deduplicateRoot,
     dialog.tzapRestorePolicy,
     dialog.tzapAllowDegraded,
-    dialog.tzapAllowAbsoluteSymlinks,
     dialog.ignoreSymlinks,
   ]);
 
@@ -401,7 +396,6 @@ function ExtractDialog({
     deduplicateRoot,
     tzapRestorePolicy,
     tzapAllowDegraded,
-    tzapAllowAbsoluteSymlinks,
     ignoreSymlinks,
   };
 
@@ -689,19 +683,6 @@ function ExtractDialog({
                       <span className="inline-flex items-center gap-1">
                         <span>{i18n.t("extract.tzapAllowDegraded")}</span>
                         <InfoTip content={i18n.t("extract.tzapAllowDegraded.tooltip")} />
-                      </span>
-                    </label>
-                    <label className="flex items-start gap-2 text-xs font-medium">
-                      <Checkbox
-                        id="extract-tzap-allow-absolute-symlinks"
-                        checked={tzapAllowAbsoluteSymlinks}
-                        onCheckedChange={(checked) =>
-                          setTzapAllowAbsoluteSymlinks(checked === true)
-                        }
-                      />
-                      <span className="inline-flex items-center gap-1">
-                        <span>{i18n.t("extract.tzapAllowAbsoluteSymlinks")}</span>
-                        <InfoTip content={i18n.t("extract.tzapAllowAbsoluteSymlinks.tooltip")} />
                       </span>
                     </label>
                   </div>

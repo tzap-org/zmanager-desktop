@@ -15,7 +15,6 @@ import {
   DEFAULT_APP_PREFERENCES,
   type AppPreferences,
 } from "../preferences";
-import type { QuickExtractEntry } from "../quickActions";
 import { createCreateWorkspace, type CreateWorkspace } from "../workspaces/createWorkspace";
 import { createQuickActionController, type QuickActionControllerOptions } from "./quickActionController";
 
@@ -76,7 +75,6 @@ function createHarness(overrides: Partial<QuickActionControllerOptions> = {}) {
     currentArchives: [] as string[],
     loadedArchives: [] as string[],
     browseErrors: [] as string[],
-    archiveEntries: [] as QuickExtractEntry[],
     extractDialogs: [] as string[],
     promptedNewPasswords: 0,
     promptedRetryCodes: [] as string[],
@@ -179,9 +177,6 @@ function createHarness(overrides: Partial<QuickActionControllerOptions> = {}) {
     readBrowseState() {
       return browseState;
     },
-    readArchiveEntries() {
-      return calls.archiveEntries;
-    },
     setBrowseError(message) {
       calls.browseErrors.push(message);
     },
@@ -201,9 +196,6 @@ function createHarness(overrides: Partial<QuickActionControllerOptions> = {}) {
     },
     setPreferences(next: AppPreferences) {
       preferences = next;
-    },
-    setArchiveEntries(next: QuickExtractEntry[]) {
-      calls.archiveEntries = next;
     },
     workspace,
   };
@@ -405,7 +397,6 @@ describe("quick action controller", () => {
       stripComponents: 0,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: true,
-      tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
     } satisfies StartExtractRequest);
     expect(harness.runStartExtract).toHaveBeenNthCalledWith(2, {
@@ -415,7 +406,6 @@ describe("quick action controller", () => {
       stripComponents: 0,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: true,
-      tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
       password: "retry-secret",
     } satisfies StartExtractRequest);
@@ -437,31 +427,36 @@ describe("quick action controller", () => {
       stripComponents: 0,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: true,
-      tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
     } satisfies StartExtractRequest);
     expect(harness.calls.extractDestinations).toEqual(["C:/archives"]);
   });
 
-  it("preserves the archive wrapper for direct quick extract here", async () => {
+  it("uses saved path and restore options without opening the archive window", async () => {
     const harness = createHarness();
-    harness.setArchiveEntries([
-      { path: "demo", kind: "directory" },
-      { path: "demo/readme.txt", kind: "file" },
-    ]);
+    harness.setPreferences({
+      ...DEFAULT_APP_PREFERENCES,
+      defaultExtractOverwrite: "rename",
+      defaultExtractPathMode: "full",
+      defaultExtractStripComponents: 2,
+      defaultExtractDeduplicateRoot: true,
+      defaultExtractIgnoreSymlinks: true,
+      defaultTzapRestorePolicy: "sameOs",
+      defaultTzapAllowDegraded: false,
+    });
 
-    await harness.controller.startQuickExtract(["C:/archives/demo.zip"], "extractHere");
+    await harness.controller.startQuickExtract(["C:/archives/demo.tzap"], "extractHere");
 
-    expect(harness.calls.loadedArchives).toEqual(["C:/archives/demo.zip"]);
+    expect(harness.calls.loadedArchives).toEqual([]);
     expect(harness.runStartExtract).toHaveBeenCalledWith({
-      archivePath: "C:/archives/demo.zip",
+      archivePath: "C:/archives/demo.tzap",
       destinationPath: "C:/archives",
-      overwrite: "ask",
-      stripComponents: 0,
-      tzapRestorePolicy: "portable",
-      tzapAllowDegraded: true,
-      tzapAllowAbsoluteSymlinks: false,
-      ignoreSymlinks: false,
+      overwrite: "rename",
+      stripComponents: 2,
+      deduplicateRoot: true,
+      tzapRestorePolicy: "sameOs",
+      tzapAllowDegraded: false,
+      ignoreSymlinks: true,
     } satisfies StartExtractRequest);
   });
 
@@ -482,7 +477,6 @@ describe("quick action controller", () => {
       stripComponents: 0,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: true,
-      tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
     } satisfies StartExtractRequest);
   });
@@ -504,16 +498,17 @@ describe("quick action controller", () => {
       stripComponents: 0,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: true,
-      tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
     } satisfies StartExtractRequest);
   });
 
-  it("falls back to rename for quick extract when defaultExtractOverwrite is refuse", async () => {
+  it("honors Refuse and No paths for Extract to Folder", async () => {
     const harness = createHarness();
     harness.setPreferences({
       ...DEFAULT_APP_PREFERENCES,
       defaultExtractOverwrite: "refuse",
+      defaultExtractPathMode: "none",
+      customExtractFolderPath: "C:/output",
     });
     harness.runStartExtract.mockResolvedValueOnce(startJobResponse({ kind: "zipExtract" }));
 
@@ -521,13 +516,12 @@ describe("quick action controller", () => {
 
     expect(harness.runStartExtract).toHaveBeenCalledWith({
       archivePath: "C:/archives/demo.zip",
-      destinationPath: "C:/archives/demo",
-      overwrite: "rename",
-      destinationCollisionStrategy: "rename",
+      destinationPath: "C:/output/demo",
+      overwrite: "refuse",
+      flattenPaths: true,
       stripComponents: 0,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: true,
-      tzapAllowAbsoluteSymlinks: false,
       ignoreSymlinks: false,
     } satisfies StartExtractRequest);
   });

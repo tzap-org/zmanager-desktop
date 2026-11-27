@@ -172,15 +172,11 @@ import {
   type NativeDialogOpenOptions,
 } from "../app/dialogs";
 import {
-  buildStartExtractRequest,
   type ExtractMode,
   type ExtractOverwritePolicy,
   type ExtractStartInput,
 } from "../app/extractFlow";
-import {
-  archiveExtractionPolicy,
-  extractHerePathOptions,
-} from "../app/extractionPolicy";
+import { extractDefaultsForArchive } from "../app/extractionPolicy";
 import {
   createExtractDialogFormSnapshot,
   extractStartInputFromDialogForm,
@@ -190,7 +186,6 @@ import {
 } from "../app/extractDialogState";
 import {
   ARCHIVE_OPEN_FILTER,
-  baseNameWithoutKnownArchiveExtension,
   getKnownArchiveSuffix,
   isSupportedArchivePath,
 } from "../app/archiveFileTypes";
@@ -839,10 +834,6 @@ function archiveBrowseState(): BrowseState {
   return archiveSnapshot().browseState;
 }
 
-function archiveEntries(): readonly ArchiveEntryDto[] {
-  return archiveSnapshot().entries;
-}
-
 function archiveSelectedPathSet(): Set<string> {
   const selection = archiveSnapshot().view.selection;
   return new Set(selection.allSelected
@@ -1235,9 +1226,11 @@ const quickActionController = createQuickActionController({
   setCurrentArchivePath: () => {},
   loadArchive: (request) => loadArchive(request),
   readBrowseState: archiveBrowseState,
-  readArchiveEntries: archiveEntries,
   setBrowseError: (text) => setBrowseState("error", text),
-  openExtractDialog,
+  openExtractDialog: (mode) => openExtractDialog(
+    mode,
+    extractDefaultsForArchive(archiveCurrentPath(), appPreferences, { nativeParentPath, joinNativePath }),
+  ),
   diagnostics,
 });
 
@@ -1799,32 +1792,8 @@ function createOutputFolderDefaultPath(destinationPath: string): string {
   return nativeParentPath(destinationPath || suggestedCreateArchiveDefaultPath());
 }
 
-function extractionDefaultsForArchive(archivePath: string): ExtractWorkspaceDefaults {
-  const parent = nativeParentPath(archivePath);
-  const configuredBase = appPreferences.customExtractFolderPath || defaultCreateDirectory(appPreferences) || parent;
-  const folderName = baseNameWithoutKnownArchiveExtension(archivePath);
-  const extractionAction = appPreferences.defaultExtractionBehavior === "extractHere"
-    ? "extractHere"
-    : "extractToFolder";
-  const destinationPath = archiveExtractionPolicy(extractionAction).destination === "archiveParent"
-    ? parent
-    : joinNativePath(configuredBase, folderName || APP_TITLE);
-
-  return {
-    destinationPath,
-    pathMode: appPreferences.defaultExtractPathMode,
-    overwrite: appPreferences.defaultExtractOverwrite,
-    stripComponents: appPreferences.defaultExtractStripComponents,
-    deduplicateRoot: appPreferences.defaultExtractDeduplicateRoot,
-    tzapRestorePolicy: appPreferences.defaultTzapRestorePolicy,
-    tzapAllowDegraded: appPreferences.defaultTzapAllowDegraded,
-    tzapAllowAbsoluteSymlinks: appPreferences.defaultTzapAllowAbsoluteSymlinks,
-    ignoreSymlinks: appPreferences.defaultExtractIgnoreSymlinks,
-  };
-}
-
 function applyExtractPreferenceDefaults(archivePath = topLevelArchivePath || archiveCurrentPath()) {
-  extractWorkspace.applyDefaults(extractionDefaultsForArchive(archivePath), archivePath);
+  extractWorkspace.applyDefaults(extractDefaultsForArchive(archivePath, appPreferences, { nativeParentPath, joinNativePath }), archivePath);
 }
 
 function nativeParentPath(path: string): string {
@@ -2090,20 +2059,11 @@ const commandRouter = createCommandRouter({
       }
     },
     openOutside: () => void onOpenOutsideSelectedEntry(),
-    extract: (mode, destination) => {
+    extract: (mode, destination, password) => {
       if (destination === "here") {
         const parent = nativeParentPath(topLevelArchivePath || archiveCurrentPath());
-        const selectedEntries = mode === "selection" ? getSelectedEntryDtos() : [];
-        const selectedFilePath = selectedEntries.length === 1 && selectedEntries[0]?.kind !== "directory"
-          ? selectedEntries[0].path
-          : undefined;
-        const herePathOptions = extractHerePathOptions(extractWorkspace.buildStartInput(), {
-          mode,
-          selectedFilePath,
-        });
         void startExtract(mode, {
-          ...extractWorkspace.buildStartInput(),
-          ...herePathOptions,
+          ...extractWorkspace.buildStartInput(password),
           destinationBasePath: parent,
         });
         return;
@@ -2440,7 +2400,10 @@ function handleReactDesktopIntent(intent: ZManagerDesktopIntent) {
 }
 
 function handleReactContextMenuIntent(intent: ZManagerContextMenuIntent) {
-  contextMenuRuntime.handleIntent(intent, handleContextMenuAction);
+  contextMenuRuntime.handleIntent(intent, (payload) => handleContextMenuAction(
+    payload,
+    intent.type === "action" ? intent.extractPassword : undefined,
+  ));
 }
 
 function handleArchiveDetailsAction(action: string) {
@@ -2790,7 +2753,6 @@ function buildReactExtractDialogSnapshot(
     deduplicateRoot: form.deduplicateRoot,
     tzapRestorePolicy: form.tzapRestorePolicy,
     tzapAllowDegraded: form.tzapAllowDegraded,
-    tzapAllowAbsoluteSymlinks: form.tzapAllowAbsoluteSymlinks,
     ignoreSymlinks: form.ignoreSymlinks,
     passwordPromptOpen: form.passwordPromptOpen,
   };
@@ -2842,7 +2804,6 @@ function extractDialogFormFromIntent(
     deduplicateRoot: input.deduplicateRoot,
     tzapRestorePolicy: input.tzapRestorePolicy,
     tzapAllowDegraded: input.tzapAllowDegraded,
-    tzapAllowAbsoluteSymlinks: input.tzapAllowAbsoluteSymlinks,
     ignoreSymlinks: input.ignoreSymlinks,
     passwordPromptOpen: activeExtractDialogForm.passwordPromptOpen,
   });
@@ -3425,7 +3386,7 @@ function showAddSourcesMenuAt(x: number, y: number) {
   contextMenuRuntime.show(x, y, buildAddSourcesContextMenuItems(displayContext.translator));
 }
 
-function handleContextMenuAction(payload: ContextMenuActionPayload) {
+function handleContextMenuAction(payload: ContextMenuActionPayload, extractPassword?: string) {
   const action = payload.action;
   const folderPath = payload.folderPath;
   const columnId = payload.columnId;
@@ -3438,7 +3399,10 @@ function handleContextMenuAction(payload: ContextMenuActionPayload) {
     extractMode: archiveSelectedCount() ? "selection" : "archive",
   });
   if (routedContextCommand) {
-    runRoutedCommand(routedContextCommand.commandId, routedContextCommand.payload);
+    runRoutedCommand(routedContextCommand.commandId, {
+      ...routedContextCommand.payload,
+      ...(action === "extract-here" && extractPassword ? { extractPassword } : {}),
+    });
     return;
   }
   if (action === "add-source-files") {
@@ -3983,7 +3947,7 @@ function cancelReactPreferencesDialog() {
   publishReactSnapshot();
 }
 
-function openExtractDialog(mode: ExtractMode) {
+function openExtractDialog(mode: ExtractMode, options: ExtractWorkspaceDefaults = extractWorkspace.getSnapshot()) {
   if (!archiveCurrentPath()) {
     return;
   }
@@ -3992,13 +3956,14 @@ function openExtractDialog(mode: ExtractMode) {
   openReactExtractDialogSnapshot(
     mode,
     createExtractDialogFormSnapshot({
-      destination: extractWorkspace.getSnapshot().destinationPath || "",
-      overwrite: activeExtractDialogForm.overwrite,
-      stripComponents: activeExtractDialogForm.stripComponents,
-      tzapRestorePolicy: extractWorkspace.getSnapshot().tzapRestorePolicy,
-      tzapAllowDegraded: extractWorkspace.getSnapshot().tzapAllowDegraded,
-      tzapAllowAbsoluteSymlinks: extractWorkspace.getSnapshot().tzapAllowAbsoluteSymlinks,
-      ignoreSymlinks: extractWorkspace.getSnapshot().ignoreSymlinks,
+      destination: options.destinationPath,
+      pathMode: options.pathMode,
+      overwrite: options.overwrite,
+      stripComponents: String(options.stripComponents),
+      deduplicateRoot: options.deduplicateRoot,
+      tzapRestorePolicy: options.tzapRestorePolicy,
+      tzapAllowDegraded: options.tzapAllowDegraded,
+      ignoreSymlinks: options.ignoreSymlinks,
     }),
     extractDialogMessageForMode(mode),
   );
@@ -4468,7 +4433,7 @@ function closeCurrentArchive(): void {
   contextMenuRuntime.hide();
   archiveWorkspace.reset();
   extractWorkspace.applyDefaults({
-    ...extractionDefaultsForArchive(""),
+    ...extractDefaultsForArchive("", appPreferences, { nativeParentPath, joinNativePath }),
     destinationPath: "",
   }, "");
   publishArchiveSnapshot();

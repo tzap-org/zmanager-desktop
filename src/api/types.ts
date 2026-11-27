@@ -568,9 +568,10 @@ export type StartExtractRequest = {
   selectAll?: boolean;
   excludedEntryPaths?: string[];
   stripComponents: number;
+  flattenPaths?: boolean;
+  deduplicateRoot?: boolean;
   tzapRestorePolicy: "content" | "portable" | "sameOs" | "system";
   tzapAllowDegraded: boolean;
-  tzapAllowAbsoluteSymlinks: boolean;
   ignoreSymlinks: boolean;
   locale?: "en" | "zh-CN";
 };
@@ -796,9 +797,10 @@ export type JobRetryDescriptorDto =
       selectAll?: boolean;
       excludedEntryPaths?: string[];
       stripComponents: number;
+      flattenPaths?: boolean;
+      deduplicateRoot?: boolean;
       tzapRestorePolicy?: StartExtractRequest["tzapRestorePolicy"];
       tzapAllowDegraded?: boolean;
-      tzapAllowAbsoluteSymlinks?: boolean;
       ignoreSymlinks?: boolean;
       locale?: StartExtractRequest["locale"];
     }

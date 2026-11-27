@@ -62,7 +62,6 @@ export function createExtractStartController(
     const snapshot = options.workspace.getSnapshot();
     const resolvedInput = resolveExtractStartInput(input, {
       currentFolder: snapshot.view.currentFolder,
-      allEntryPaths: snapshot.entries.map((entry) => entry.path),
       entryReferences: options.workspace.getExtractReferencePaths(mode),
       joinNativePath: options.joinNativePath,
     });
@@ -86,9 +85,10 @@ export function createExtractStartController(
         destinationPath: resolvedInput.destination,
         overwrite: resolvedInput.overwrite,
         stripComponents: resolvedInput.stripComponents,
+        flattenPaths: resolvedInput.flattenPaths,
+        deduplicateRoot: resolvedInput.deduplicateRoot,
         tzapRestorePolicy: resolvedInput.tzapRestorePolicy,
         tzapAllowDegraded: resolvedInput.tzapAllowDegraded,
-        tzapAllowAbsoluteSymlinks: resolvedInput.tzapAllowAbsoluteSymlinks,
         ignoreSymlinks: resolvedInput.ignoreSymlinks,
         ...(resolvedInput.tzapRecipientKeyId ? { recipientKeyId: resolvedInput.tzapRecipientKeyId } : {}),
         password: resolvedInput.password,
