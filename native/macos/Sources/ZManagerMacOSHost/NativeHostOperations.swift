@@ -1,6 +1,7 @@
 import ZManagerGenerated
 import AppKit
 import CoreServices
+import FinderSync
 import Foundation
 import OSLog
 import UniformTypeIdentifiers
@@ -10,6 +11,24 @@ private let shellActionLogger = Logger(
     subsystem: "org.tzap-org.zmanager",
     category: "shellActionIngress"
 )
+
+@_cdecl("zmanager_macos_finder_sync_status")
+public func zmanagerMacOSFinderSyncStatus() -> Int32 {
+    guard zmanagerMacOSHostIsRunning() else { return MacOSFFIErrorMapping.notAvailable }
+    // The host API returns the current setting. PlugInKit registration is
+    // checked separately by the caller.
+    let isEnabled = { FIFinderSyncController.isExtensionEnabled }
+    let enabled = Thread.isMainThread ? isEnabled() : DispatchQueue.main.sync(execute: isEnabled)
+    return enabled ? 1 : 0
+}
+
+@_cdecl("zmanager_macos_open_finder_sync_settings")
+public func zmanagerMacOSOpenFinderSyncSettings() -> Int32 {
+    guard zmanagerMacOSHostIsRunning() else { return MacOSFFIErrorMapping.notAvailable }
+    let showSettings = { FIFinderSyncController.showExtensionManagementInterface() }
+    if Thread.isMainThread { showSettings() } else { DispatchQueue.main.sync(execute: showSettings) }
+    return 0
+}
 
 private struct IconRequest: Decodable {
     let key: String

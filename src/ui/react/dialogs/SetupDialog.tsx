@@ -7,16 +7,6 @@ import type { ZManagerSetupStepRow } from "../../../app/display/dialogSnapshots"
 import { translatorForSnapshot } from "../shell/shellHelpers";
 import { DesktopDialog } from "./DesktopDialog";
 
-/**
- * First-run checklist for the macOS shell integrations.
- *
- * macOS installs ZManager's extensions but leaves them switched off, and it
- * offers no notification when that happens — the Finder submenu simply is not
- * there. Someone who does not already know that macOS files the Finder
- * extension under "File Provider" has no way to find the switch. This dialog
- * exists to close that gap: it names the outstanding item, says which switch to
- * turn on, and opens the pane holding it.
- */
 export function SetupDialog({
   dialog,
 }: Readonly<{ dialog: Extract<ZManagerDialogSnapshot, { kind: "setup" }> }>) {
@@ -80,6 +70,7 @@ function SetupStep({ step }: Readonly<{ step: ZManagerSetupStepRow }>) {
   const actions = useZManagerActions();
   const i18n = translatorForSnapshot(snapshot);
   const satisfied = step.state === "satisfied";
+  const settingsTarget = step.settingsTarget;
 
   return (
     <li
@@ -102,14 +93,14 @@ function SetupStep({ step }: Readonly<{ step: ZManagerSetupStepRow }>) {
             : null}
         </div>
       </div>
-      {!satisfied && step.settingsUrl
+      {!satisfied && settingsTarget
         ? (
           <div className="flex justify-end">
             <Button
               variant="dialog"
               size="unset"
               type="button"
-              onClick={() => actions.handleDialogIntent({ type: "setupOpenSettings" })}
+              onClick={() => actions.handleDialogIntent({ type: "setupOpenSettings", target: settingsTarget })}
             >
               <ExternalLink aria-hidden className="size-3.5" />
               {i18n.t("setup.openSettings")}

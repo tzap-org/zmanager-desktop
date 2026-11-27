@@ -382,6 +382,7 @@ import {
 } from "../desktop/nativeDrag";
 import {
   createWindowController,
+  listenCurrentWindowFocus,
   type AppWindowResizeDirection,
 } from "../desktop/windowController";
 import { createDisposableTaskWindowManager } from "../desktop/disposableTaskWindowManager";
@@ -595,6 +596,7 @@ let latestHealthcheck: HealthcheckResponse | null = null;
 let latestContract: ProjectContract | null = null;
 let latestDiagnosticLogInfo: DiagnosticLogInfoDto | null = null;
 let reactDialogSnapshot: ZManagerDialogSnapshot = { kind: "none" };
+let setupProbeRevision = 0;
 const reactRuntimeStore = createReactRuntimeStore({
   createSnapshot: createCurrentReactSnapshot,
 });
@@ -1325,12 +1327,8 @@ const startupController = createStartupController({
       browserDocument.setCustomWindowChrome(false);
     }
 
-    // Surface the shell-integration checklist once the app is up, but only when
-    // something is actually outstanding. macOS leaves the extension switches off
-    // and says nothing about it, so without this the Finder menu is simply
-    // absent with no indication of why or where to fix it.
-    if (isDesktopRuntime()) {
-      void openSetupDialog(true);
+    if (isDesktopRuntime() && state.contract?.platformIntegration.platform === "macos") {
+      initializeMacOsSetup();
     }
   },
   onBootstrapStateChanged: publishBootstrapStateSnapshot,
@@ -2384,12 +2382,15 @@ function handleReactDialogIntent(intent: ZManagerDialogIntent) {
       cancelReactPreferencesDialog();
       break;
     case "setupRecheck":
-      refreshSetupDialogSnapshot();
+      void refreshSetupDialogSnapshot("recheck");
       break;
     case "setupOpenSettings":
-      void openShellIntegrationSettings().catch(() => {
-        // The pane refusing to open is not actionable from here; the dialog
-        // still shows the written steps for reaching it by hand.
+      void openShellIntegrationSettings(intent.target).catch((error) => {
+        diagnostics.record({
+          scope: "setup",
+          name: "openSettingsFailed",
+          fields: { target: intent.target, error: String(error) },
+        });
       });
       break;
     case "closeCurrent": {
@@ -3629,25 +3630,33 @@ function refreshAboutDialogSnapshot() {
   }
 }
 
-/**
- * Read the shell-integration checklist and show it.
- *
- * `announceOnlyWhenIncomplete` is what the startup path passes: nobody wants a
- * dialog telling them everything is already fine, so a complete checklist opens
- * nothing at all.
- */
-async function openSetupDialog(announceOnlyWhenIncomplete = false) {
+function initializeMacOsSetup(): void {
+  void listenCurrentWindowFocus(() => {
+    void refreshSetupDialogSnapshot("recheck");
+  }).catch((error) => {
+    diagnostics.record({
+      scope: "setup",
+      name: "focusListenerFailed",
+      fields: { error: String(error) },
+    });
+  });
+  void refreshSetupDialogSnapshot("startup");
+}
+
+async function refreshSetupDialogSnapshot(reason: "startup" | "recheck") {
+  const previous = reactDialogSnapshot;
+  if (previous.kind !== (reason === "startup" ? "none" : "setup") || preferencesDialogDraft !== null) {
+    return;
+  }
+  const revision = ++setupProbeRevision;
   let setup;
   try {
     setup = await fetchShellIntegrationSetup();
   } catch (error) {
-    // A failed probe is not worth interrupting startup for, but it must not
-    // vanish either: a checklist that silently never appears is the same
-    // failure this dialog exists to prevent.
     diagnostics.record({
       scope: "setup",
       name: "probeFailed",
-      fields: { error: error instanceof Error ? error.message : String(error) },
+      fields: { error: String(error) },
     });
     return;
   }
@@ -3657,25 +3666,20 @@ async function openSetupDialog(announceOnlyWhenIncomplete = false) {
     fields: {
       complete: setup.complete,
       outstanding: setup.steps.filter((step) => step.state !== "satisfied").length,
+      finderState: setup.steps.find((step) => step.id === "finderContextMenu")?.state ?? null,
     },
   });
-  // Bootstrap probes resolve asynchronously. If the user has already opened a
-  // dialog, do not queue a modal behind it and resurrect it when that dialog
-  // closes. The user can reopen the checklist from its normal entry point.
-  if (announceOnlyWhenIncomplete && (preferencesDialogDraft !== null || reactDialogSnapshot.kind !== "none")) {
+  // A probe can finish after a newer recheck or after the user leaves setup.
+  if (revision !== setupProbeRevision || previous !== reactDialogSnapshot || preferencesDialogDraft !== null) {
     return;
   }
-  if (announceOnlyWhenIncomplete && setup.complete) {
+  if (setup.complete) {
+    if (previous.kind === "setup") {
+      closeReactDialog();
+    }
     return;
   }
   setReactDialogSnapshot(buildSetupDialogSnapshot({ display: displayContext, setup }));
-  publishReactSnapshot();
-}
-
-function refreshSetupDialogSnapshot() {
-  if (reactDialogSnapshot.kind === "setup") {
-    void openSetupDialog();
-  }
 }
 
 function publishBootstrapStateSnapshot() {

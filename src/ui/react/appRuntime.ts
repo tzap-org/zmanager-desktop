@@ -52,7 +52,7 @@ import {
   type ExtractWorkspaceOptionPatch,
   type ExtractWorkspaceSnapshot,
 } from "../../app/workspaces/extractWorkspace";
-import type { ZManagerDialogSnapshot } from "../../app/display/dialogSnapshots";
+import type { ZManagerDialogSnapshot, ZManagerSetupStepRow } from "../../app/display/dialogSnapshots";
 import {
   createAccountWorkspace,
   type AccountWorkspaceSnapshot,
@@ -362,7 +362,7 @@ export type ZManagerDialogIntent =
       visibility: TableColumnVisibilityPreferences;
     }>
   | Readonly<{ type: "setupRecheck" }>
-  | Readonly<{ type: "setupOpenSettings" }>
+  | Readonly<{ type: "setupOpenSettings"; target: NonNullable<ZManagerSetupStepRow["settingsTarget"]> }>
   | Readonly<{ type: "closeCurrent" }>;
 
 export type ZManagerWindowResizeDirection =

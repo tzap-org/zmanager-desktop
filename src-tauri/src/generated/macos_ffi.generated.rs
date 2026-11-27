@@ -8,6 +8,8 @@ unsafe extern "C" {
     ) -> i32;
     pub fn zmanager_macos_host_shutdown();
     pub fn zmanager_macos_host_is_running() -> i32;
+    pub fn zmanager_macos_finder_sync_status() -> i32;
+    pub fn zmanager_macos_open_finder_sync_settings() -> i32;
     pub fn zmanager_macos_system_file_icons(
         bytes: *const u8,
         length: usize,

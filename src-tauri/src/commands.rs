@@ -6591,9 +6591,7 @@ pub fn shell_integration_setup() -> crate::dto::ShellIntegrationSetupDto {
 
 /// Open the settings pane that holds the shell-integration switches.
 ///
-/// The URL comes from the platform module rather than the caller so a renderer
-/// can never steer this at an arbitrary target.
 #[tauri::command]
-pub fn open_shell_integration_settings() -> Result<(), String> {
-    crate::platform::open_shell_integration_settings()
+pub fn open_shell_integration_settings(target: Option<crate::dto::ShellIntegrationSettingsTarget>) -> Result<(), String> {
+    crate::platform::open_shell_integration_settings(target)
 }

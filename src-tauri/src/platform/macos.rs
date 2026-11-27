@@ -15,7 +15,7 @@ use super::{
     NativeFileDragStart, NativeFileDragStreamProvider, SecureFileProtector, SystemFileIconProvider,
     staged_file_drag::{PosixDragPathPolicy, StagedFileDrag, prepare_posix_drag_items},
 };
-use crate::dto::{SystemFileIconDto, SystemFileIconRequestEntry};
+use crate::dto::{ShellIntegrationSettingsTarget, ShellIntegrationSetupDto, ShellIntegrationSetupStepDto, SystemFileIconDto, SystemFileIconRequestEntry};
 use crate::job_dto::{JobEventDto, JobKindDto, JobTerminalSummaryDto};
 use crate::job_registry::JobRegistry;
 use crate::native_drag_session::NativeDragSessionRegistry;
@@ -47,20 +47,17 @@ static EXTENSION_PROBES: OnceLock<MacOsExtensionProbes> = OnceLock::new();
 
 #[derive(Clone, Debug)]
 struct MacOsExtensionProbes {
-    finder: MacOsExtensionProbe,
     quicklook: MacOsExtensionProbe,
     spotlight: MacOsExtensionProbe,
 }
 
 fn probe_extension_status() -> &'static MacOsExtensionProbes {
     EXTENSION_PROBES.get_or_init(|| {
-        let finder = probe_plugin_kit(FINDER_EXTENSION_BUNDLE_ID);
         let quicklook_preview = probe_plugin_kit(QUICKLOOK_PREVIEW_BUNDLE_ID);
         let quicklook_thumbnail = probe_plugin_kit(QUICKLOOK_THUMBNAIL_BUNDLE_ID);
         let spotlight = probe_spotlight();
 
         MacOsExtensionProbes {
-            finder,
             quicklook: MacOsExtensionProbe {
                 is_installed: quicklook_preview.is_installed || quicklook_thumbnail.is_installed,
                 is_enabled: quicklook_preview.is_enabled || quicklook_thumbnail.is_enabled,
@@ -68,6 +65,80 @@ fn probe_extension_status() -> &'static MacOsExtensionProbes {
             spotlight,
         }
     })
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FinderSyncStatus {
+    NotRegistered,
+    RegistrationUnknown,
+    ApprovalUnknown,
+    Disabled,
+    Enabled,
+}
+
+#[derive(Clone, Copy)]
+enum FinderSyncRegistration {
+    Missing,
+    Registered { election: Option<bool> },
+}
+
+fn probe_finder_sync() -> FinderSyncStatus {
+    let registered = Command::new("/usr/bin/pluginkit")
+        .args(["-m", "-i", FINDER_EXTENSION_BUNDLE_ID])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|output| finder_sync_registration(&output));
+    finder_sync_status(registered, || {
+        let enabled = match unsafe { zmanager_macos_finder_sync_status() } {
+            0 => Some(false),
+            1 => Some(true),
+            _ => None,
+        };
+        if let (Some(FinderSyncRegistration::Registered { election: Some(elected_enabled) }), Some(native_enabled), Some(diagnostics)) =
+            (registered, enabled, NATIVE_DIAGNOSTICS.get())
+            && elected_enabled != native_enabled
+        {
+            let _ = diagnostics.record(
+                "setup",
+                "finderStatusDisagreed",
+                crate::diagnostics::fields([("nativeEnabled", serde_json::json!(native_enabled)), ("plugInKitElection", serde_json::json!(elected_enabled))]),
+            );
+        }
+        enabled
+    })
+}
+
+fn finder_sync_registration(output: &str) -> Option<FinderSyncRegistration> {
+    // The identifier filter yields one match. The optional leading tag is the
+    // user election documented in pluginkit(8).
+    let mut fields = output.split_ascii_whitespace();
+    let Some(first) = fields.next() else {
+        return Some(FinderSyncRegistration::Missing);
+    };
+    let (entry, election) = match first {
+        "+" => (fields.next()?, Some(true)),
+        "-" => (fields.next()?, Some(false)),
+        "!" | "=" | "?" => (fields.next()?, None),
+        entry => (entry, None),
+    };
+    (entry.split('(').next()? == FINDER_EXTENSION_BUNDLE_ID).then_some(FinderSyncRegistration::Registered { election })
+}
+
+fn finder_sync_status(registration: Option<FinderSyncRegistration>, query_enabled: impl FnOnce() -> Option<bool>) -> FinderSyncStatus {
+    let election = match registration {
+        Some(FinderSyncRegistration::Registered { election }) => election,
+        Some(FinderSyncRegistration::Missing) => return FinderSyncStatus::NotRegistered,
+        None => return FinderSyncStatus::RegistrationUnknown,
+    };
+    // On macOS 27.2.1, the Finder Sync API can report false even for a registered
+    // bundle with an explicit user election to use its Finder Sync extension.
+    match query_enabled().map(|enabled| election.unwrap_or(enabled)) {
+        None => FinderSyncStatus::ApprovalUnknown,
+        Some(false) => FinderSyncStatus::Disabled,
+        Some(true) => FinderSyncStatus::Enabled,
+    }
 }
 
 fn probe_plugin_kit(bundle_id: &str) -> MacOsExtensionProbe {
@@ -168,16 +239,18 @@ impl CapabilityInspector for MacOsPlatform {
 
         let probes = probe_extension_status();
         let file_assoc_installed = probe_file_associations();
-        let finder_installed =
-            if probes.finder.is_installed { NativeCapabilityInstalledState::Registered } else { NativeCapabilityInstalledState::Unregistered };
-        let finder_enabled = if !probes.finder.is_installed {
-            NativeCapabilityUserEnabledState::NotInspected
-        } else if probes.finder.is_enabled {
-            NativeCapabilityUserEnabledState::Enabled
-        } else {
-            NativeCapabilityUserEnabledState::Disabled
+        let finder_status = probe_finder_sync();
+        let finder_installed = match finder_status {
+            FinderSyncStatus::NotRegistered => NativeCapabilityInstalledState::Unregistered,
+            FinderSyncStatus::RegistrationUnknown => NativeCapabilityInstalledState::Failed,
+            _ => NativeCapabilityInstalledState::Registered,
         };
-        let finder_failure = (!probes.finder.is_installed).then_some(NativeCapabilityFailureCategory::NotRegistered);
+        let finder_enabled = match finder_status {
+            FinderSyncStatus::Enabled => NativeCapabilityUserEnabledState::Enabled,
+            FinderSyncStatus::Disabled => NativeCapabilityUserEnabledState::Disabled,
+            FinderSyncStatus::ApprovalUnknown => NativeCapabilityUserEnabledState::Failed,
+            _ => NativeCapabilityUserEnabledState::NotInspected,
+        };
 
         let mut observations =
             [NativeCapabilityId::ShellSelectedItemActions, NativeCapabilityId::ShellBackgroundActions, NativeCapabilityId::FinderTokenTransport]
@@ -190,7 +263,6 @@ impl CapabilityInspector for MacOsPlatform {
                             installed_state: Some(finder_installed),
                             user_enabled_state: Some(finder_enabled),
                             runtime_state: Some(app_group_runtime),
-                            failure_category: finder_failure,
                             ..NativeCapabilityObservation::default()
                         },
                     )
@@ -398,49 +470,38 @@ pub(super) fn shutdown() {
 /// Settings pane that holds the switches for every app extension macOS
 /// installs on the user's behalf. macOS 14+ groups them under
 /// General > Login Items & Extensions.
-pub(super) const SHELL_INTEGRATION_SETTINGS_URL: &str = "x-apple.systempreferences:com.apple.ExtensionsPreferences";
+const SHELL_INTEGRATION_SETTINGS_URL: &str = "x-apple.systempreferences:com.apple.ExtensionsPreferences";
 
-/// Build the first-run checklist.
-///
-/// What is and is not knowable here matters. Whether a bundle is REGISTERED is
-/// a fact we can read back from LaunchServices and PlugInKit. Whether the user
-/// has switched an extension ON is not: PlugInKit's own flag reports an
-/// extension as elected while System Settings still shows its switch off, so a
-/// "registered but not obviously working" extension is reported as
-/// `needsApproval` rather than being claimed as satisfied. Over-reporting
-/// success is the failure mode that leaves someone staring at a context menu
-/// that never appears, with nothing on screen telling them why.
-pub(super) fn shell_integration_setup() -> crate::dto::ShellIntegrationSetupDto {
-    use crate::dto::{ShellIntegrationSetupDto, ShellIntegrationSetupStepDto};
-
+pub(super) fn shell_integration_setup() -> ShellIntegrationSetupDto {
     let probes = probe_extension_status();
-    let settings = Some(SHELL_INTEGRATION_SETTINGS_URL);
+    shell_integration_setup_with(probe_finder_sync(), probes)
+}
 
-    let finder_state = if !probes.finder.is_installed {
-        "notRegistered"
-    } else if shell_action_has_been_received() {
-        // The extension has actually delivered a request to this app, which is
-        // the only conclusive proof that Finder loaded it and the user switched
-        // it on. Nothing weaker is treated as success.
-        "satisfied"
-    } else {
-        "needsApproval"
+fn shell_integration_setup_with(finder: FinderSyncStatus, probes: &MacOsExtensionProbes) -> ShellIntegrationSetupDto {
+    let (finder_state, finder_settings_target) = match finder {
+        FinderSyncStatus::Enabled => ("satisfied", None),
+        FinderSyncStatus::Disabled => ("needsApproval", Some(ShellIntegrationSettingsTarget::FinderSync)),
+        FinderSyncStatus::NotRegistered => ("notRegistered", None),
+        FinderSyncStatus::RegistrationUnknown | FinderSyncStatus::ApprovalUnknown => ("unknown", None),
     };
-
     let quicklook_state = if probes.quicklook.is_installed { "satisfied" } else { "notRegistered" };
     let spotlight_state = if probes.spotlight.is_installed { "satisfied" } else { "notRegistered" };
+    let settings_target = Some(ShellIntegrationSettingsTarget::Extensions);
 
     let steps = vec![
-        ShellIntegrationSetupStepDto { id: "finderContextMenu", state: finder_state, settings_url: settings },
-        ShellIntegrationSetupStepDto { id: "quickLook", state: quicklook_state, settings_url: settings },
-        ShellIntegrationSetupStepDto { id: "spotlight", state: spotlight_state, settings_url: settings },
+        ShellIntegrationSetupStepDto { id: "finderContextMenu", state: finder_state, settings_target: finder_settings_target },
+        ShellIntegrationSetupStepDto { id: "quickLook", state: quicklook_state, settings_target },
+        ShellIntegrationSetupStepDto { id: "spotlight", state: spotlight_state, settings_target },
     ];
 
     let complete = steps.iter().all(|step| step.state == "satisfied");
     ShellIntegrationSetupDto { complete, steps }
 }
 
-pub(super) fn open_shell_integration_settings() -> Result<(), String> {
+pub(super) fn open_shell_integration_settings(target: ShellIntegrationSettingsTarget) -> Result<(), String> {
+    if matches!(target, ShellIntegrationSettingsTarget::FinderSync) {
+        return if unsafe { zmanager_macos_open_finder_sync_settings() } == 0 { Ok(()) } else { Err("Finder Sync settings are unavailable".to_owned()) };
+    }
     Command::new("/usr/bin/open")
         .arg(SHELL_INTEGRATION_SETTINGS_URL)
         .status()
@@ -480,17 +541,9 @@ fn current_user_home_directory() -> Option<PathBuf> {
     (!path.is_empty()).then(|| PathBuf::from(path))
 }
 
-/// Marker proving the Finder extension has reached this app at least once.
-///
-/// The user's extension switch is not readable, so the setup checklist relies
-/// on this instead: once a request arrives, the whole chain (registered,
-/// switched on, loaded by Finder, App Group reachable) is proven end to end.
+/// Durable evidence that the Finder extension delivered a validated action.
 fn shell_action_receipt_marker() -> Option<PathBuf> {
     current_user_home_directory().map(|home| home.join("Library").join("Application Support").join("org.tzap-org.zmanager").join("shell-action-received"))
-}
-
-fn shell_action_has_been_received() -> bool {
-    shell_action_receipt_marker().is_some_and(|marker| shell_action_receipt_is_valid(&marker))
 }
 
 const SHELL_ACTION_RECEIPT_CONTENTS: &[u8] = b"validated-shell-action-v1";
@@ -882,6 +935,56 @@ mod tests {
     use crate::platform::NativeFileDragItemKind;
 
     use super::*;
+
+    #[test]
+    fn finder_setup_reports_live_approval_independently_of_action_receipts() {
+        let installed = MacOsExtensionProbe { is_installed: true, is_enabled: true };
+        let other_probes = MacOsExtensionProbes { quicklook: installed.clone(), spotlight: installed };
+        for (enabled, expected, complete, target) in [
+            (Some(true), "satisfied", true, serde_json::Value::Null),
+            (Some(false), "needsApproval", false, serde_json::json!("finderSync")),
+            (None, "unknown", false, serde_json::Value::Null),
+        ] {
+            let registration = finder_sync_registration(FINDER_EXTENSION_BUNDLE_ID);
+            let setup = shell_integration_setup_with(finder_sync_status(registration, || enabled), &other_probes);
+            assert_eq!(setup.complete, complete);
+            assert_eq!(
+                serde_json::to_value(&setup.steps[0]).unwrap(),
+                serde_json::json!({"id": "finderContextMenu", "state": expected, "settingsTarget": target})
+            );
+        }
+    }
+
+    #[test]
+    fn finder_setup_distinguishes_missing_registration_from_probe_failure() {
+        let installed = MacOsExtensionProbe { is_installed: true, is_enabled: true };
+        let other_probes = MacOsExtensionProbes { quicklook: installed.clone(), spotlight: installed };
+        for (registered, expected) in
+            [(finder_sync_registration(""), "notRegistered"), (finder_sync_registration("+ unexpected.identifier(1.0)"), "unknown"), (None, "unknown")]
+        {
+            let status = finder_sync_status(registered, || panic!("approval needs a registered extension"));
+            let setup = shell_integration_setup_with(status, &other_probes);
+            assert!(!setup.complete);
+            assert_eq!(setup.steps[0].state, expected);
+        }
+    }
+
+    #[test]
+    fn finder_setup_uses_explicit_pluginkit_election_when_native_status_disagrees() {
+        let installed = MacOsExtensionProbe { is_installed: true, is_enabled: true };
+        let other_probes = MacOsExtensionProbes { quicklook: installed.clone(), spotlight: installed };
+        for (election, native_enabled, expected) in [
+            ("+", false, "satisfied"),
+            ("-", true, "needsApproval"),
+            ("", false, "needsApproval"),
+            ("!", false, "needsApproval"),
+            ("?", false, "needsApproval"),
+        ] {
+            let registration = finder_sync_registration(&format!("{election}    {FINDER_EXTENSION_BUNDLE_ID}(1.2.9)\n"));
+            let setup = shell_integration_setup_with(finder_sync_status(registration, || Some(native_enabled)), &other_probes);
+            assert_eq!(setup.steps[0].state, expected);
+        }
+    }
 
     #[test]
     fn tauri_opened_delivers_the_server_hosted_callback_to_the_native_inbox() {

@@ -934,9 +934,14 @@ pub struct ShellIntegrationSetupStepDto {
     pub id: &'static str,
     /// `satisfied`, `needsApproval`, `notRegistered`, or `unknown`.
     pub state: &'static str,
-    /// Deep link that opens the exact settings pane holding the switch, when
-    /// the platform has one.
-    pub settings_url: Option<&'static str>,
+    pub settings_target: Option<ShellIntegrationSettingsTarget>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ShellIntegrationSettingsTarget {
+    FinderSync,
+    Extensions,
 }
 
 #[derive(Debug, Serialize)]

@@ -13,7 +13,11 @@ const COMMAND_WRAPPERS = [
   { command: "healthcheck", call: () => api.fetchHealthcheck() },
   { command: "project_contract", call: () => api.fetchProjectContract() },
   { command: "shell_integration_setup", call: () => api.fetchShellIntegrationSetup() },
-  { command: "open_shell_integration_settings", call: () => api.openShellIntegrationSettings() },
+  {
+    command: "open_shell_integration_settings",
+    args: { target: "finderSync" },
+    call: () => api.openShellIntegrationSettings("finderSync"),
+  },
   {
     command: "system_file_icons",
     request: { entries: [{ key: "root", path: "C:/demo/root.txt", isDirectory: false }] },

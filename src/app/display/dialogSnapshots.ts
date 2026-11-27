@@ -105,7 +105,7 @@ export type ZManagerSetupStepRow = Readonly<{
   instructions: string;
   stateLabel: string;
   state: ShellIntegrationSetupStep["state"];
-  settingsUrl: string | null;
+  settingsTarget: ShellIntegrationSetupStep["settingsTarget"];
 }>;
 
 export type SetupDialogSnapshotInput = Readonly<{
@@ -169,10 +169,12 @@ export function buildSetupDialogSnapshot(
         ? ""
         : step.state === "notRegistered"
           ? message(display, "setup.notRegisteredHint")
-          : message(display, copy.instructions),
+          : step.state === "unknown"
+            ? message(display, "setup.unknownHint")
+            : message(display, copy.instructions),
       stateLabel: message(display, SETUP_STATE_LABELS[step.state]),
       state: step.state,
-      settingsUrl: step.settingsUrl,
+      settingsTarget: step.settingsTarget,
     }];
   });
 

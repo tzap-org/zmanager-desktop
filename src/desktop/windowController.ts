@@ -4,6 +4,7 @@ import {
   LogicalPosition,
   LogicalSize,
 } from "@tauri-apps/api/window";
+import { TauriEvent } from "@tauri-apps/api/event";
 import {
   isFiniteNumber,
   normalizeStoredWindowGeometry,
@@ -83,6 +84,10 @@ export type WindowControllerDependencies = {
 };
 
 export type WindowControllerOptions = Partial<WindowControllerDependencies>;
+
+export function listenCurrentWindowFocus(listener: () => void): Promise<() => void> {
+  return getCurrentWindow().listen(TauriEvent.WINDOW_FOCUS, listener);
+}
 
 function browserStorage(): WindowControllerStorage | null {
   try {

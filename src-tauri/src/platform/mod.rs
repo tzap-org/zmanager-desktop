@@ -491,7 +491,7 @@ pub fn postinstall_diagnostic_log_directory() -> Option<std::path::PathBuf> {
 /// First-run shell-integration checklist for the running platform.
 ///
 /// Platforms whose shell integration needs no user approval report a complete
-/// checklist with no steps, so the caller never has to branch on the OS.
+/// checklist with no steps.
 pub fn shell_integration_setup() -> crate::dto::ShellIntegrationSetupDto {
     #[cfg(target_os = "macos")]
     {
@@ -504,13 +504,14 @@ pub fn shell_integration_setup() -> crate::dto::ShellIntegrationSetupDto {
 }
 
 /// Open the OS settings page holding the shell-integration switches.
-pub fn open_shell_integration_settings() -> Result<(), String> {
+pub fn open_shell_integration_settings(target: Option<crate::dto::ShellIntegrationSettingsTarget>) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        macos::open_shell_integration_settings()
+        macos::open_shell_integration_settings(target.unwrap_or(crate::dto::ShellIntegrationSettingsTarget::Extensions))
     }
     #[cfg(not(target_os = "macos"))]
     {
+        let _ = target;
         Err("shell integration settings are not applicable on this platform".to_owned())
     }
 }
@@ -530,6 +531,14 @@ pub fn quick_action_registers_single_instance(is_normal_singleton: bool) -> bool
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn shell_integration_setup_requires_no_action_on_this_platform() {
+        let setup = shell_integration_setup();
+        assert!(setup.complete && setup.steps.is_empty());
+        assert_eq!(open_shell_integration_settings(None), Err("shell integration settings are not applicable on this platform".to_owned()));
+    }
 
     #[test]
     fn active_platform_declares_each_cross_platform_capability_family() {

@@ -12,16 +12,16 @@ function setup(
   return { complete: steps.every((step) => step.state === "satisfied"), steps };
 }
 
-const settingsUrl = "x-apple.systempreferences:com.apple.ExtensionsPreferences";
+const finderSettingsTarget = "finderSync";
 
 describe("buildSetupDialogSnapshot", () => {
   it("lists outstanding steps before the ones already satisfied", () => {
     const snapshot = buildSetupDialogSnapshot({
       display,
       setup: setup([
-        { id: "quickLook", state: "satisfied", settingsUrl },
-        { id: "finderContextMenu", state: "needsApproval", settingsUrl },
-        { id: "spotlight", state: "satisfied", settingsUrl },
+        { id: "quickLook", state: "satisfied", settingsTarget: null },
+        { id: "finderContextMenu", state: "needsApproval", settingsTarget: finderSettingsTarget },
+        { id: "spotlight", state: "satisfied", settingsTarget: null },
       ]),
     });
 
@@ -35,21 +35,28 @@ describe("buildSetupDialogSnapshot", () => {
   it("gives an outstanding step the instructions for reaching its switch", () => {
     const snapshot = buildSetupDialogSnapshot({
       display,
-      setup: setup([{ id: "finderContextMenu", state: "needsApproval", settingsUrl }]),
+      setup: setup([{ id: "finderContextMenu", state: "needsApproval", settingsTarget: finderSettingsTarget }]),
     });
 
     const step = snapshot.steps[0];
-    expect(step.instructions).not.toBe("");
-    // The Finder extension is the one people cannot find on their own: macOS
-    // files it under "File Provider", so the copy has to say so outright.
-    expect(step.instructions).toContain("File Provider");
-    expect(step.settingsUrl).toBe(settingsUrl);
+    expect(step.instructions).toContain("ZManager Finder extension");
+    expect(step.settingsTarget).toBe(finderSettingsTarget);
+  });
+
+  it("asks the user to recheck when macOS approval could not be read", () => {
+    const snapshot = buildSetupDialogSnapshot({
+      display,
+      setup: setup([{ id: "finderContextMenu", state: "unknown", settingsTarget: null }]),
+    });
+
+    expect(snapshot.steps[0].instructions).toContain("Re-check");
+    expect(snapshot.steps[0].settingsTarget).toBeNull();
   });
 
   it("tells the user to reinstall when an extension never registered", () => {
     const snapshot = buildSetupDialogSnapshot({
       display,
-      setup: setup([{ id: "spotlight", state: "notRegistered", settingsUrl }]),
+      setup: setup([{ id: "spotlight", state: "notRegistered", settingsTarget: "extensions" }]),
     });
 
     // A missing registration is not something a settings switch can repair, so
@@ -61,9 +68,9 @@ describe("buildSetupDialogSnapshot", () => {
     const snapshot = buildSetupDialogSnapshot({
       display,
       setup: setup([
-        { id: "finderContextMenu", state: "satisfied", settingsUrl },
-        { id: "quickLook", state: "satisfied", settingsUrl },
-        { id: "spotlight", state: "satisfied", settingsUrl },
+        { id: "finderContextMenu", state: "satisfied", settingsTarget: null },
+        { id: "quickLook", state: "satisfied", settingsTarget: null },
+        { id: "spotlight", state: "satisfied", settingsTarget: null },
       ]),
     });
 

@@ -109,6 +109,7 @@ fn link_macos_host() {
     let library = find_file(&scratch, "libZManagerMacOSHost.a").expect("Swift host static library was not produced");
     println!("cargo:rustc-link-search=native={}", library.parent().unwrap().display());
     println!("cargo:rustc-link-lib=static=ZManagerMacOSHost");
+    println!("cargo:rustc-link-lib=framework=FinderSync");
     // hyper-util's macOS system-proxy support declares SystemConfiguration
     // symbols without emitting the framework link directive itself.
     println!("cargo:rustc-link-lib=framework=SystemConfiguration");

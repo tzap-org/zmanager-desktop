@@ -979,13 +979,14 @@ export type LocalSendRespondToTransferRequest = {
   reason?: string | null;
 };
 
+export type ShellIntegrationSettingsTarget = "finderSync" | "extensions";
+
 /** One row of the first-run shell-integration checklist. */
 export type ShellIntegrationSetupStep = {
   /** Stable key the message catalogue uses for this step's copy. */
   id: string;
   state: "satisfied" | "needsApproval" | "notRegistered" | "unknown";
-  /** Deep link to the settings pane holding the switch, when one exists. */
-  settingsUrl: string | null;
+  settingsTarget: ShellIntegrationSettingsTarget | null;
 };
 
 export type ShellIntegrationSetup = {

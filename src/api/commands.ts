@@ -75,6 +75,7 @@ import type {
   EnqueueShareResponse,
   ShareRecordSnapshot,
   ShareRegistrySnapshot,
+  ShellIntegrationSettingsTarget,
   ShellIntegrationSetup,
 } from "./types";
 
@@ -480,6 +481,6 @@ export async function fetchShellIntegrationSetup(): Promise<ShellIntegrationSetu
   return invoke<ShellIntegrationSetup>("shell_integration_setup");
 }
 
-export async function openShellIntegrationSettings(): Promise<void> {
-  return invoke<void>("open_shell_integration_settings");
+export async function openShellIntegrationSettings(target: ShellIntegrationSettingsTarget): Promise<void> {
+  return invoke<void>("open_shell_integration_settings", { target });
 }

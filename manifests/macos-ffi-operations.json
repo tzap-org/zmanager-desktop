@@ -24,6 +24,14 @@
       "type": "lifecycle"
     },
     {
+      "name": "zmanager_macos_finder_sync_status",
+      "type": "sync-status"
+    },
+    {
+      "name": "zmanager_macos_open_finder_sync_settings",
+      "type": "sync-status"
+    },
+    {
       "name": "zmanager_macos_system_file_icons",
       "type": "async-json"
     },

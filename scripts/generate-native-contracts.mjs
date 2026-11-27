@@ -1139,6 +1139,8 @@ put("packaging/windows/nsis-context-menu.nsh", windowsHook);
       } else {
         rust += `    pub fn ${op.name}();\n`;
       }
+    } else if (op.type === "sync-status") {
+      rust += `    pub fn ${op.name}() -> i32;\n`;
     } else if (op.type === "async-drag") {
       rust += `    pub fn ${op.name}(\n        view: *mut c_void,\n        session_bytes: *const u8,\n        session_length: usize,\n        item_bytes: *const u8,\n        item_length: usize,\n        write: Option<extern "C" fn(*const u8, usize, *const u8, usize, *mut c_void) -> i32>,\n        outcome: Option<extern "C" fn(i32, *mut c_void)>,\n        release: Option<extern "C" fn(*mut c_void)>,\n        context: *mut c_void,\n    ) -> i32;\n`;
     } else if (op.type === "sync-prompt") {

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { ShareRecordSnapshot, LocalSendDeviceInfoDto } from "../src/api/types";
+import type { ShellIntegrationSetup, ShareRecordSnapshot, LocalSendDeviceInfoDto } from "../src/api/types";
 import { shareFixture } from "../src/app/shareQueueTestFixtures";
 
 type IpcCall = {
@@ -31,6 +31,8 @@ type QuickActionStubOptions = {
   startupStateDelayMs?: number;
   catalogJobs?: { jobId: string; kind: string; status: string; createdAt: string }[];
   nativeInboundEvents?: NativeInboundEvent[];
+  platform?: "macos" | "windows" | "linux";
+  setupSnapshots?: ShellIntegrationSetup[];
 };
 
 
@@ -40,6 +42,61 @@ const notRequestedState: QuickActionStartupState = {
 };
 
 const epochSecondsAgo = (seconds: number) => String(Math.floor(Date.now() / 1000) - seconds);
+
+const finderNeedsApproval: ShellIntegrationSetup = {
+  complete: false,
+  steps: [{ id: "finderContextMenu", state: "needsApproval", settingsTarget: "finderSync" }],
+};
+
+test("returning to ZManager rechecks Finder Sync approval and dismisses completed setup", async ({ page }) => {
+  await installQuickActionTauriStub(page, [notRequestedState], {
+    platform: "macos",
+    setupSnapshots: [
+      finderNeedsApproval,
+      { complete: true, steps: [{ id: "finderContextMenu", state: "satisfied", settingsTarget: null }] },
+    ],
+  });
+  await page.goto("/");
+  const setup = page.getByRole("dialog", { name: "Finish setting up ZManager" });
+  await expect(setup.getByText("Needs your approval")).toBeVisible();
+  await setup.getByRole("button", { name: "Open Settings" }).click();
+  expect(await ipcCalls(page)).toContainEqual({
+    cmd: "open_shell_integration_settings",
+    args: { target: "finderSync" },
+  });
+
+  await expect.poll(async () => (await ipcCalls(page)).some(
+    (call) => call.cmd === "plugin:event|listen" && call.args.event === "tauri://focus",
+  )).toBe(true);
+  await page.evaluate(() => {
+    const listener = window.__zmanagerE2E?.ipcCalls.find(
+      (call) => call.cmd === "plugin:event|listen" && call.args.event === "tauri://focus",
+    );
+    window.__TAURI_INTERNALS__?.runCallback(Number(listener?.args.handler), { event: "tauri://focus", id: 1 });
+  });
+
+  await expect(setup).toHaveCount(0);
+  expect((await ipcCalls(page)).filter((call) => call.cmd === "shell_integration_setup")).toHaveLength(2);
+});
+
+for (const platform of ["windows", "linux"] as const) {
+  test(`Finder Sync setup is inactive on ${platform}`, async ({ page }) => {
+    await installQuickActionTauriStub(page, [notRequestedState], {
+      platform,
+      setupSnapshots: [finderNeedsApproval],
+    });
+    await page.goto("/");
+    await expect.poll(async () => (await ipcCalls(page)).some((call) => {
+      const event = call.args.request as { scope?: string; name?: string } | undefined;
+      return call.cmd === "record_diagnostic_event" && event?.scope === "frontend" && event.name === "bootstrapCompleted";
+    })).toBe(true);
+
+    const calls = await ipcCalls(page);
+    expect(calls.filter((call) => call.cmd === "shell_integration_setup")).toHaveLength(0);
+    expect(calls.filter((call) => call.cmd === "plugin:event|listen" && call.args.event === "tauri://focus")).toHaveLength(0);
+    await expect(page.getByRole("dialog", { name: "Finish setting up ZManager" })).toHaveCount(0);
+  });
+}
 
 test("restored main window reconciles terminal jobs from the catalog without per-Job subscriptions", async ({ page }) => {
   await installQuickActionTauriStub(page, [notRequestedState], {
@@ -201,6 +258,7 @@ async function installQuickActionTauriStub(
     let shareItems = payload.options.shareItems ?? [];
     let shareRevision = 1;
     const discoveries = [...(payload.options.discoveries ?? [[]])];
+    const setupSnapshots = [...(payload.options.setupSnapshots ?? [])];
     const shareChanged = () => {
       shareRevision++;
       if (shareHandler !== null) window.__TAURI_INTERNALS__?.runCallback(shareHandler, { event: "zmanager-share-queue-changed", id: 1, payload: String(shareRevision) });
@@ -271,6 +329,11 @@ async function installQuickActionTauriStub(
         shareItems = shareItems.filter(item => item.shareId !== (args.request as { shareId: string }).shareId);
         shareChanged(); return;
       }
+      if (cmd === "shell_integration_setup") {
+        return setupSnapshots.shift() ?? { complete: true, steps: [] };
+      }
+      if (cmd === "open_shell_integration_settings") return undefined;
+
       if (cmd === "healthcheck") {
         return {
           engine: "zmanager-core",
@@ -288,7 +351,7 @@ async function installQuickActionTauriStub(
           platformStrategy: "e2e",
           coreDependency: "stub",
           platformIntegration: {
-            platform: "linux",
+            platform: payload.options.platform ?? "linux",
             packageKind: "development",
             capabilities: [
               "shellSelectedItemActions",
