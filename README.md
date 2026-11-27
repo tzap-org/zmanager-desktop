@@ -2,7 +2,7 @@
 
 [![Package](https://github.com/tzap-org/zmanager-desktop/actions/workflows/package.yml/badge.svg?branch=main)](https://github.com/tzap-org/zmanager-desktop/actions/workflows/package.yml)
 [![Release](https://github.com/tzap-org/zmanager-desktop/actions/workflows/release.yml/badge.svg)](https://github.com/tzap-org/zmanager-desktop/actions/workflows/release.yml)
-[![Release version](https://img.shields.io/github/v/release/tzap-org/zmanager-desktop?include_prereleases&label=release)](https://github.com/tzap-org/zmanager-desktop/releases)
+[![Release version](https://img.shields.io/github/v/release/tzap-org/zmanager-desktop?label=release)](https://github.com/tzap-org/zmanager-desktop/releases)
 [![Latest tag](https://img.shields.io/github/v/tag/tzap-org/zmanager-desktop?sort=semver&label=latest%20tag)](https://github.com/tzap-org/zmanager-desktop/tags)
 [![Downloads](https://img.shields.io/github/downloads/tzap-org/zmanager-desktop/total)](https://github.com/tzap-org/zmanager-desktop/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
