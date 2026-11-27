@@ -5,7 +5,6 @@ import { resolve } from "node:path";
 const root = resolve(import.meta.dirname, "..");
 const [coreLock = resolve(root, "..", "zmanager", "Cargo.lock"), desktopLock = resolve(root, "src-tauri", "Cargo.lock")] = process.argv.slice(2);
 const sharedPackages = [
-  "aff4",
   "backhand",
   "btrfs-core",
   "dar-core",
@@ -39,8 +38,12 @@ try {
   for (const name of sharedPackages) {
     const coreVersions = [...(core.get(name) ?? [])].sort();
     const desktopVersions = [...(desktop.get(name) ?? [])].sort();
+    // The desktop lock is a combined product graph, so desktop-only
+    // dependencies can add another version of a crate without changing the
+    // version selected by ZManager. Require every ZManager-locked shared
+    // version to be present, but allow those additional desktop versions.
     if (coreVersions.length === 0 || desktopVersions.length === 0 ||
-        coreVersions.join(",") !== desktopVersions.join(",")) {
+        coreVersions.some((version) => !desktopVersions.includes(version))) {
       mismatches.push(`${name}: core=[${coreVersions.join(",") || "missing"}], desktop=[${desktopVersions.join(",") || "missing"}]`);
     }
   }

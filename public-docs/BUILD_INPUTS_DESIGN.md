@@ -131,6 +131,16 @@ running for a tag. CI uploads the report with its artifacts. Artifact hashes
 belong in a separate attestation or release index, not inside the artifact
 whose digest they describe.
 
+Local Cargo resolution follows the current sibling source checkouts. The
+desktop preparation step runs Cargo offline without `--locked`, allowing the
+combined desktop graph to refresh `src-tauri/Cargo.lock` when a preserved
+ZManager development checkout changes its manifests. It then checks that the
+desktop lock contains the versions of shared production dependencies selected
+by `zmanager/Cargo.lock`; additional versions required only by the desktop
+graph are allowed. CI snapshot and release modes use `--locked` and never
+rewrite the committed desktop lockfile. Review and commit lockfile changes
+before relying on them in CI or release builds.
+
 The shared commands are:
 
 - `scripts/prepare-sibling-inputs.sh` — local, CI snapshot, or release setup;

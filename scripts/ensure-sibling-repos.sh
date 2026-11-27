@@ -21,10 +21,16 @@ if [[ "$mode" == release ]]; then
   bash "$root/scripts/release-gate.sh" verify-build
 fi
 
-# Validate the exact Cargo graph after sibling sources are ready. Release and
-# CI lock modes must never rewrite Cargo.lock as a side effect.
+# Local builds use the current sibling manifests and may need to refresh the
+# desktop lockfile. Keep that resolution offline so the local build does not
+# silently select new registry releases. CI snapshots and releases must use
+# their committed lockfiles without rewriting them.
 if [[ -f "$root/src-tauri/Cargo.toml" ]]; then
-  cargo tree --locked --all-features --target all --depth 0 --manifest-path "$root/src-tauri/Cargo.toml"
+  if [[ "$mode" == local ]]; then
+    cargo tree --offline --all-features --target all --depth 0 --manifest-path "$root/src-tauri/Cargo.toml"
+  else
+    cargo tree --locked --all-features --target all --depth 0 --manifest-path "$root/src-tauri/Cargo.toml"
+  fi
   sibling_zmanager="$(dirname "$root")/zmanager"
   if [[ -f "$sibling_zmanager/Cargo.lock" ]]; then
     node "$root/scripts/check-shared-dependency-locks.mjs" "$sibling_zmanager/Cargo.lock" "$root/src-tauri/Cargo.lock"

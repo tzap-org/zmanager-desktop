@@ -145,7 +145,9 @@ test("release lock captures controlled sibling commits and gate verifies them", 
   assert.ok(reviewedCoreRevision, "release lock must pin the reviewed core commit");
   assert.ok(reviewedTzapRevision, "release lock must pin the reviewed TZAP commit");
   assert.match(read(".github/workflows/release.yml"), /scripts\/ensure-sibling-repos\.sh --mode release/);
-  assert.match(read("scripts/ensure-sibling-repos.sh"), /cargo tree --locked --all-features --target all/);
+  const siblingPreparation = read("scripts/ensure-sibling-repos.sh");
+  assert.match(siblingPreparation, /if \[\[ "\$mode" == local \]\]; then\s+cargo tree --offline --all-features --target all/);
+  assert.match(siblingPreparation, /else\s+cargo tree --locked --all-features --target all/);
   assert.match(read("scripts/ensure-sibling-repos.sh"), /release-gate\.sh" verify-build/);
   assert.match(read("scripts/ensure-sibling-repos.ps1"), /ensure-sibling-repos\.sh/);
   assert.match(read("scripts/release-gate.sh"), /refs\/tags\/\$zmanager_tag\^\{commit\}/);
