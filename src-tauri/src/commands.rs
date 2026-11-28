@@ -2451,13 +2451,9 @@ fn start_test_archive_internal(request: TestArchiveRequest, registry: &JobRegist
                 )
                 .map_err(crate::platform::archive_error::map_engine_error)?;
             let selected_paths = selected_entry_keys.iter().cloned().collect::<Vec<_>>();
-            let selection_is_explicit = !selected_paths.is_empty();
             let report = handle
                 .test(&zmanager_core::engine::TestOptions {
                     selected_paths,
-                    // `None` is normalized to an empty selection (test all);
-                    // explicit empty input is rejected before this job starts.
-                    selection_is_explicit,
                     recipient_key: None,
                     recipient_key_bytes: None,
                     tzap_x509_trust: None,
