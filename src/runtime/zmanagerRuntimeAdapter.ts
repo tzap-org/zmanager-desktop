@@ -1295,15 +1295,16 @@ const startupController = createStartupController({
       compressCapabilitySet = COMPRESS_SAFE_BASE_IDS;
     }
 
+    let hasNativeHostLifecycle = false;
     if (state.contract) {
       const hasNativeMenu = state.contract.platformIntegration.capabilities.some(
         c => c.id === "nativeApplicationMenu" && c.availability === "available"
       );
-      const isMacOs = state.contract.platformIntegration.capabilities.some(
+      hasNativeHostLifecycle = state.contract.platformIntegration.capabilities.some(
         c => c.id === "nativeHostLifecycle" && c.availability === "available"
       );
       browserDocument.setNativeMenuBar(hasNativeMenu);
-      browserDocument.setMacOsOverlayTitleBar(isMacOs);
+      browserDocument.setMacOsOverlayTitleBar(hasNativeHostLifecycle);
     }
     
     if (isDesktopRuntime()) {
@@ -1320,7 +1321,7 @@ const startupController = createStartupController({
       browserDocument.setCustomWindowChrome(false);
     }
 
-    if (isDesktopRuntime() && state.contract?.platformIntegration.platform === "macos") {
+    if (isDesktopRuntime() && hasNativeHostLifecycle) {
       initializeMacOsSetup();
     }
   },
