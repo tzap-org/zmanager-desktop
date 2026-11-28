@@ -503,6 +503,7 @@ async function installQuickActionTauriStub(
               "shellBackgroundActions",
               "fileAssociations",
               "defaultHandlerControl",
+              ...(payload.options.platform === "macos" ? ["nativeHostLifecycle"] : []),
             ].map((id) => ({ id, availability: "available" })),
 
           },
