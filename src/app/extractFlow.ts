@@ -62,12 +62,14 @@ export type BuildStartExtractRequestInput = {
 
 export function buildStartExtractRequest(input: BuildStartExtractRequestInput): StartExtractRequest {
   const tzapRestorePolicy = input.tzapRestorePolicy ?? "portable";
+  const destinationCollisionStrategy = input.destinationCollisionStrategy ??
+    (input.overwrite === "rename" ? "renameIfBlocked" : undefined);
   return {
     archivePath: input.archivePath,
     destinationPath: input.destinationPath,
     overwrite: input.overwrite,
-    ...(input.destinationCollisionStrategy
-      ? { destinationCollisionStrategy: input.destinationCollisionStrategy }
+    ...(destinationCollisionStrategy
+      ? { destinationCollisionStrategy }
       : {}),
     ...(input.entryPaths ? { entryPaths: [...input.entryPaths] } : {}),
     ...(input.selectAll ? { selectAll: true } : {}),

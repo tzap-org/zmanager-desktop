@@ -838,6 +838,7 @@ describe("archive workspace load state", () => {
       archivePath: "C:/tmp/project.zip",
       destinationPath: "D:/out",
       overwrite: "rename",
+      destinationCollisionStrategy: "renameIfBlocked",
       stripComponents: 2,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: true,

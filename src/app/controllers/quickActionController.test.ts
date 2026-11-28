@@ -452,6 +452,7 @@ describe("quick action controller", () => {
       archivePath: "C:/archives/demo.tzap",
       destinationPath: "C:/archives",
       overwrite: "rename",
+      destinationCollisionStrategy: "renameIfBlocked",
       stripComponents: 2,
       deduplicateRoot: true,
       tzapRestorePolicy: "sameOs",

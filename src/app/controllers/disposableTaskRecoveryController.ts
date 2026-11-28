@@ -7,7 +7,6 @@ import type {
   NativeFileDragRequest,
 } from "../../api/types";
 import { isPasswordErrorCode } from "../jobs";
-import { resolveDestinationCollisionStrategy } from "../collisionPolicy";
 
 export type DisposableTaskRecoveryResult =
   | "started"
@@ -74,11 +73,7 @@ export function createDisposableTaskRecoveryController(
               archivePath: descriptor.archivePath,
               destinationPath: descriptor.destinationPath,
               overwrite: descriptor.overwrite,
-              destinationCollisionStrategy: resolveDestinationCollisionStrategy({
-                isDisposableTask: true,
-                overwrite: descriptor.overwrite,
-                destinationCollisionStrategy: descriptor.destinationCollisionStrategy,
-              }),
+              destinationCollisionStrategy: descriptor.destinationCollisionStrategy,
               ...(descriptor.entryPaths.length
                 ? { entryPaths: [...descriptor.entryPaths] }
                 : {}),

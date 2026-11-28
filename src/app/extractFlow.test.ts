@@ -46,6 +46,7 @@ describe("extract flow helpers", () => {
       archivePath: "C:/tmp/archive.zip",
       destinationPath: "C:/tmp/out",
       overwrite: "rename",
+      destinationCollisionStrategy: "renameIfBlocked",
       entryPaths: ["source/hello.txt"],
       stripComponents: 1,
       tzapRestorePolicy: "portable",

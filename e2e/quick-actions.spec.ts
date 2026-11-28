@@ -232,6 +232,7 @@ test.describe("main-window Extract All options", () => {
     await expect.poll(() => extractRequest(page)).toMatchObject({
       destinationPath: "/tmp/extract-options",
       overwrite: "rename",
+      destinationCollisionStrategy: "renameIfBlocked",
       stripComponents: 1,
       deduplicateRoot: true,
       ignoreSymlinks: true,

@@ -516,6 +516,7 @@ pub enum DestinationCollisionStrategyDto {
     #[default]
     Refuse,
     Rename,
+    RenameIfBlocked,
 }
 
 #[derive(Debug, Clone, Deserialize)]

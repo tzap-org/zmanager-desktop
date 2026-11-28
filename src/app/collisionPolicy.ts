@@ -1,4 +1,4 @@
-import type { StartExtractRequest } from "../api/types";
+import type { StartCreateRequest } from "../api/types";
 import type { ExtractOverwritePolicy } from "./extractFlow";
 
 export type CollisionPolicyContext = Readonly<{
@@ -6,7 +6,7 @@ export type CollisionPolicyContext = Readonly<{
   isQuickAction?: boolean;
   replaceExisting?: boolean;
   overwrite?: ExtractOverwritePolicy;
-  destinationCollisionStrategy?: StartExtractRequest["destinationCollisionStrategy"];
+  destinationCollisionStrategy?: StartCreateRequest["destinationCollisionStrategy"];
 }>;
 
 /**
@@ -22,7 +22,7 @@ export type CollisionPolicyContext = Readonly<{
  */
 export function resolveDestinationCollisionStrategy(
   context: CollisionPolicyContext,
-): StartExtractRequest["destinationCollisionStrategy"] | undefined {
+): StartCreateRequest["destinationCollisionStrategy"] {
   if (context.destinationCollisionStrategy) {
     return context.destinationCollisionStrategy;
   }

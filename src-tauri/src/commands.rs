@@ -494,7 +494,7 @@ fn start_create_internal_with_resolver(
     } else {
         destination_file_candidates(&destination_path)
             .filter_map(destination_reservation::try_reserve)
-            .find(|reservation| destination_file_is_available(reservation.path()))
+            .find(|reservation| destination_path_is_available(reservation.path()))
     }
     .ok_or_else(|| CommandErrorDto::new("destination_busy", "No destination file name is available", None::<String>, ErrorSeverityDto::Warning, true))?;
     let destination_path = reservation.path().to_string_lossy().into_owned();
@@ -979,11 +979,28 @@ fn start_extract_internal_with_origin_and_spawner(
 ) -> Result<StartJobResponseDto, CommandErrorDto> {
     let archive_path = ensure_non_empty_path(request.archive_path, "archivePath")?;
     let requested_destination_path = ensure_non_empty_path(request.destination_path, "destinationPath")?;
-    let destination_path = if request.destination_collision_strategy == DestinationCollisionStrategyDto::Rename {
-        next_available_destination_directory_path(&requested_destination_path)
-    } else {
-        requested_destination_path
+    let should_rename_destination = match request.destination_collision_strategy {
+        DestinationCollisionStrategyDto::Refuse => false,
+        DestinationCollisionStrategyDto::Rename => true,
+        DestinationCollisionStrategyDto::RenameIfBlocked => {
+            let path = Path::new(&requested_destination_path);
+            // The engine can apply the overwrite policy to entries once it has a directory.
+            path.symlink_metadata().is_ok() && !path.is_dir()
+        }
     };
+    let destination_reservation = if should_rename_destination {
+        Some(
+            destination_directory_candidates(&requested_destination_path)
+                .filter_map(destination_reservation::try_reserve)
+                .find(|reservation| destination_path_is_available(reservation.path()))
+                .ok_or_else(|| {
+                    CommandErrorDto::new("destination_busy", "No destination folder name is available", None::<String>, ErrorSeverityDto::Warning, true)
+                })?,
+        )
+    } else {
+        None
+    };
+    let destination_path = destination_reservation.as_ref().map_or(requested_destination_path, |reservation| reservation.path().to_string_lossy().into_owned());
     let entry_paths = normalize_optional_entry_paths(request.entry_paths)?;
     let excluded_entry_paths = normalize_entry_paths(request.excluded_entry_paths);
     if request.select_all && !entry_paths.is_empty() {
@@ -1056,6 +1073,7 @@ fn start_extract_internal_with_origin_and_spawner(
     let recipient_private_key = recipient_private_key;
 
     spawn_worker(Box::new(move || {
+        let _destination_reservation = destination_reservation;
         let mut sink = JobEventCollector::new(&registry_for_thread, job_id.clone());
         let result = run_extract_job(
             &archive_path,
@@ -1086,6 +1104,7 @@ fn start_extract_internal_with_origin_and_spawner(
                         crate::diagnostics::fields([
                             ("jobKind", serde_json::json!(kind)),
                             ("overwrite", serde_json::json!(overwrite)),
+                            ("destinationCollisionStrategy", serde_json::json!(request.destination_collision_strategy)),
                             ("code", serde_json::json!(error.code)),
                         ]),
                     );
@@ -3105,23 +3124,18 @@ fn ensure_non_empty_path(value: String, field: &str) -> Result<String, CommandEr
     Ok(value)
 }
 
-pub(crate) fn next_available_destination_directory_path(path: &str) -> String {
+fn destination_directory_candidates(path: &str) -> impl Iterator<Item = PathBuf> + '_ {
     let candidate = Path::new(path);
-    if !candidate.exists() {
-        return path.to_string();
-    }
-
     let parent = candidate.parent().unwrap_or(Path::new(""));
     let dir_name = candidate.file_name().and_then(|value| value.to_str()).unwrap_or(path);
+    std::iter::once(candidate.to_path_buf()).chain((2..10_000).map(move |index| parent.join(format!("{dir_name} {index}"))))
+}
 
-    for index in 2..10_000 {
-        let renamed = parent.join(format!("{dir_name} {index}"));
-        if !renamed.exists() {
-            return renamed.to_string_lossy().to_string();
-        }
-    }
-
-    path.to_string()
+#[cfg(test)]
+fn next_available_destination_directory_path(path: &str) -> String {
+    destination_directory_candidates(path)
+        .find(|candidate| destination_path_is_available(candidate))
+        .map_or_else(|| path.to_owned(), |candidate| candidate.to_string_lossy().into_owned())
 }
 
 fn destination_file_candidates(path: &str) -> impl Iterator<Item = PathBuf> + '_ {
@@ -3132,14 +3146,14 @@ fn destination_file_candidates(path: &str) -> impl Iterator<Item = PathBuf> + '_
     std::iter::once(candidate.to_path_buf()).chain((2..10_000).map(move |index| parent.join(format!("{stem} {index}{suffix}"))))
 }
 
-fn destination_file_is_available(path: &Path) -> bool {
+fn destination_path_is_available(path: &Path) -> bool {
     std::fs::symlink_metadata(path).is_err_and(|error| error.kind() == io::ErrorKind::NotFound)
 }
 
 #[cfg(test)]
 fn next_available_destination_file_path(path: &str) -> String {
     destination_file_candidates(path)
-        .find(|candidate| destination_file_is_available(candidate))
+        .find(|candidate| destination_path_is_available(candidate))
         .map_or_else(|| path.to_owned(), |candidate| candidate.to_string_lossy().into_owned())
 }
 
@@ -6729,6 +6743,31 @@ mod tests {
         let create_job = start_create_internal(create_request, &registry).unwrap();
         let (poll, events) = wait_for_job_terminal(&registry, &create_job.job_id);
         assert_eq!(poll.status, JobStatusDto::Completed, "{events:?}");
+
+        let blocked = workspace.join("archive.png");
+        let occupied = workspace.join("archive.png 2");
+        let in_use = workspace.join("archive.png 3");
+        let output = workspace.join("archive.png 4");
+        fs::write(&blocked, b"original file").unwrap();
+        fs::write(&occupied, b"occupied name").unwrap();
+        let _reservation = destination_reservation::try_reserve(&in_use).unwrap();
+        let request = serde_json::from_value(serde_json::json!({
+            "archivePath": archive,
+            "destinationPath": blocked,
+            "overwrite": "rename",
+            "destinationCollisionStrategy": "renameIfBlocked",
+            "tzapAllowDegraded": true,
+        }))
+        .unwrap();
+        let job = start_extract_internal(request, &registry).unwrap();
+        let (poll, events) = wait_for_job_terminal(&registry, &job.job_id);
+        assert_eq!(poll.status, JobStatusDto::Completed, "{events:?}");
+        let snapshot = registry.current_job_snapshot(&job.job_id).unwrap();
+        assert_eq!(Path::new(&snapshot.output_artifacts[0].path), output);
+        assert_eq!(fs::read(blocked).unwrap(), b"original file");
+        assert_eq!(fs::read(occupied).unwrap(), b"occupied name");
+        assert!(!in_use.exists());
+        assert_eq!(fs::read(output.join("sources/README.md")).unwrap(), b"archived file");
 
         let extract_with_rename = |destination: &Path, renamed: &str| {
             let request = serde_json::from_value(serde_json::json!({
