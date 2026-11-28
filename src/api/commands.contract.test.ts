@@ -238,7 +238,7 @@ const COMMAND_WRAPPERS = [
     request: {
       archivePath: "C:/archives/demo.zip",
       destinationPath: "C:/output",
-      overwrite: "refuse",
+      overwrite: "ask",
       stripComponents: 0,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: false,
@@ -247,7 +247,7 @@ const COMMAND_WRAPPERS = [
     call: () => api.runStartExtract({
       archivePath: "C:/archives/demo.zip",
       destinationPath: "C:/output",
-      overwrite: "refuse",
+      overwrite: "ask",
       stripComponents: 0,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: false,

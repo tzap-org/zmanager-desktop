@@ -25,7 +25,7 @@ import {
 const EXTRACT_DEFAULTS = {
   password: null,
   recipientKeyId: null,
-  overwrite: "replace",
+  overwrite: "ask",
   destinationCollisionStrategy: "refuse",
   entryPaths: null,
   stripComponents: 0,

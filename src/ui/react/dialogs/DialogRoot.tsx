@@ -569,17 +569,11 @@ function ExtractDialog({
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="refuse">
-                        {i18n.t("extract.overwrite.refuse")}
-                      </SelectItem>
                       <SelectItem value="ask">
                         {i18n.t("extract.overwrite.ask")}
                       </SelectItem>
                       <SelectItem value="rename">
                         {i18n.t("extract.overwrite.rename")}
-                      </SelectItem>
-                      <SelectItem value="replace">
-                        {i18n.t("extract.overwrite.replace")}
                       </SelectItem>
                     </SelectContent>
                   </Select>

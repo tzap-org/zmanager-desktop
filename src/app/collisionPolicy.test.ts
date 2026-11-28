@@ -23,12 +23,9 @@ describe("collisionPolicy", () => {
     ).toBe("rename");
   });
 
-  it("returns undefined when replace/overwrite is explicitly requested without an explicit strategy override", () => {
+  it("returns undefined when replacement is explicitly requested without a strategy override", () => {
     expect(
       resolveDestinationCollisionStrategy({ isDisposableTask: true, replaceExisting: true }),
-    ).toBeUndefined();
-    expect(
-      resolveDestinationCollisionStrategy({ isQuickAction: true, overwrite: "replace" }),
     ).toBeUndefined();
     expect(
       resolveDestinationCollisionStrategy({ replaceExisting: true }),

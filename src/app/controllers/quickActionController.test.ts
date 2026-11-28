@@ -394,6 +394,7 @@ describe("quick action controller", () => {
       archivePath: "C:/archives/demo.zip",
       destinationPath: "C:/archives/demo",
       overwrite: "ask",
+      destinationCollisionStrategy: "renameIfBlocked",
       stripComponents: 0,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: true,
@@ -403,6 +404,7 @@ describe("quick action controller", () => {
       archivePath: "C:/archives/demo.zip",
       destinationPath: "C:/archives/demo",
       overwrite: "ask",
+      destinationCollisionStrategy: "renameIfBlocked",
       stripComponents: 0,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: true,
@@ -414,7 +416,7 @@ describe("quick action controller", () => {
     expect(harness.calls.jobs[0]).toEqual(startJobResponse({ kind: "zipExtract" }));
   });
 
-  it("starts quick extract for extractHere without destination collision renaming on parent directory", async () => {
+  it("keeps an existing extractHere parent when using renameIfBlocked", async () => {
     const harness = createHarness();
     harness.runStartExtract.mockResolvedValueOnce(startJobResponse({ kind: "zipExtract" }));
 
@@ -424,6 +426,7 @@ describe("quick action controller", () => {
       archivePath: "C:/archives/demo.zip",
       destinationPath: "C:/archives",
       overwrite: "ask",
+      destinationCollisionStrategy: "renameIfBlocked",
       stripComponents: 0,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: true,
@@ -461,27 +464,6 @@ describe("quick action controller", () => {
     } satisfies StartExtractRequest);
   });
 
-  it("uses replace for quick extract only when defaultExtractOverwrite is set to replace", async () => {
-    const harness = createHarness();
-    harness.setPreferences({
-      ...DEFAULT_APP_PREFERENCES,
-      defaultExtractOverwrite: "replace",
-    });
-    harness.runStartExtract.mockResolvedValueOnce(startJobResponse({ kind: "zipExtract" }));
-
-    await harness.controller.startQuickExtract(["C:/archives/demo.zip"], "extractToFolder");
-
-    expect(harness.runStartExtract).toHaveBeenCalledWith({
-      archivePath: "C:/archives/demo.zip",
-      destinationPath: "C:/archives/demo",
-      overwrite: "replace",
-      stripComponents: 0,
-      tzapRestorePolicy: "portable",
-      tzapAllowDegraded: true,
-      ignoreSymlinks: false,
-    } satisfies StartExtractRequest);
-  });
-
   it("asks about each conflict in the existing folder when defaultExtractOverwrite is ask", async () => {
     const harness = createHarness();
     harness.setPreferences({
@@ -496,6 +478,7 @@ describe("quick action controller", () => {
       archivePath: "C:/archives/demo.zip",
       destinationPath: "C:/archives/demo",
       overwrite: "ask",
+      destinationCollisionStrategy: "renameIfBlocked",
       stripComponents: 0,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: true,
@@ -503,11 +486,11 @@ describe("quick action controller", () => {
     } satisfies StartExtractRequest);
   });
 
-  it("honors Refuse and No paths for Extract to Folder", async () => {
+  it("honors Ask and No paths for Extract to Folder", async () => {
     const harness = createHarness();
     harness.setPreferences({
       ...DEFAULT_APP_PREFERENCES,
-      defaultExtractOverwrite: "refuse",
+      defaultExtractOverwrite: "ask",
       defaultExtractPathMode: "none",
       customExtractFolderPath: "C:/output",
     });
@@ -518,7 +501,8 @@ describe("quick action controller", () => {
     expect(harness.runStartExtract).toHaveBeenCalledWith({
       archivePath: "C:/archives/demo.zip",
       destinationPath: "C:/output/demo",
-      overwrite: "refuse",
+      overwrite: "ask",
+      destinationCollisionStrategy: "renameIfBlocked",
       flattenPaths: true,
       stripComponents: 0,
       tzapRestorePolicy: "portable",

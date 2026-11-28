@@ -38,6 +38,14 @@ describe("preferences helpers", () => {
     expect(loadAppPreferences(null)).toEqual(DEFAULT_APP_PREFERENCES);
   });
 
+  it.each(["refuse", "replace", "unrecognized"])("defaults legacy or unknown extraction policy %s to Ask", (value) => {
+    const preferences = loadAppPreferences(memoryStorage({
+      [PREFERENCE_KEYS.defaultExtractOverwrite]: value,
+    }));
+
+    expect(preferences.defaultExtractOverwrite).toBe("ask");
+  });
+
   it("uses safe archive creation defaults for every supported format", () => {
     expect(DEFAULT_APP_PREFERENCES.defaultCleanSourceEnabled).toBe(false);
 

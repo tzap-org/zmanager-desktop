@@ -6754,7 +6754,7 @@ mod tests {
         let request = serde_json::from_value(serde_json::json!({
             "archivePath": archive,
             "destinationPath": blocked,
-            "overwrite": "rename",
+            "overwrite": "ask",
             "destinationCollisionStrategy": "renameIfBlocked",
             "tzapAllowDegraded": true,
         }))

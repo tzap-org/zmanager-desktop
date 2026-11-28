@@ -229,7 +229,7 @@ if (!hasFixtureCorpus()) {
             request: {
               archivePath,
               entryPath: "rar-fixture/docs/readme.txt",
-              overwrite: "replace",
+              overwrite: "ask",
               stripComponents: 1,
             },
           });
@@ -253,7 +253,7 @@ if (!hasFixtureCorpus()) {
             request: {
               archivePath,
               entryPath: "payload/README.txt",
-              overwrite: "replace",
+              overwrite: "ask",
               stripComponents: 1,
             },
           });

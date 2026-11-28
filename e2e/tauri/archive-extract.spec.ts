@@ -32,7 +32,7 @@ const ROUND_TRIP_TIMEOUT_MS = 180_000;
 const EXTRACT_DEFAULTS = {
   password: null,
   recipientKeyId: null,
-  overwrite: "replace",
+  overwrite: "ask",
   destinationCollisionStrategy: "refuse",
   entryPaths: null,
   stripComponents: 0,
@@ -335,42 +335,10 @@ if (!hasFixtureCorpus()) {
     );
 
     it(
-      "honors replace, refuse, and rename overwrite policies",
+      "rename preserves colliding archive members",
       async () => {
         const temp = makeTempDir("extract-overwrite-policies");
         try {
-          const replaceDestination = path.join(temp.dir, "replace");
-          const replaceTarget = path.join(replaceDestination, "payload", "README.txt");
-          await runJobExpectingSuccess("start_extract", {
-            ...EXTRACT_DEFAULTS,
-            archivePath: fixturePath("basic.tar.gz"),
-            destinationPath: replaceDestination,
-          });
-          writeFileSync(replaceTarget, "old contents\n");
-          await runJobExpectingSuccess("start_extract", {
-            ...EXTRACT_DEFAULTS,
-            archivePath: fixturePath("basic.tar.gz"),
-            destinationPath: replaceDestination,
-            overwrite: "replace",
-          });
-          assert.equal(readTree(replaceDestination).get("payload/README.txt")?.contents, "ZManager fixture payload\n");
-
-          const refuseDestination = path.join(temp.dir, "refuse");
-          const refuseTarget = path.join(refuseDestination, "payload", "README.txt");
-          mkdirForFile(refuseTarget);
-          writeFileSync(refuseTarget, "must survive\n");
-          const refused = await runJobToCompletion("start_extract", {
-            ...EXTRACT_DEFAULTS,
-            archivePath: fixturePath("basic.tar.gz"),
-            destinationPath: refuseDestination,
-            overwrite: "refuse",
-          });
-          // Refuse is a safety failure, not a successful no-op.  The job must
-          // leave the pre-existing destination untouched and surface the
-          // collision through its terminal status.
-          assert.equal(refused.status, "failed");
-          assert.equal(readTree(refuseDestination).get("payload/README.txt")?.contents, "must survive\n");
-
           const renameDestination = path.join(temp.dir, "rename");
           const renameTarget = path.join(renameDestination, "payload", "README.txt");
           mkdirForFile(renameTarget);
@@ -389,7 +357,7 @@ if (!hasFixtureCorpus()) {
           temp.cleanup(false);
         }
       },
-      EXTRACT_TIMEOUT_MS * 2,
+      EXTRACT_TIMEOUT_MS,
     );
 
     describe("round trips", () => {

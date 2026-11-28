@@ -255,7 +255,7 @@ if (!hasFixtureCorpus()) {
             await runJobExpectingSuccess("start_extract", {
               archivePath: firstVolume,
               destinationPath: extracted,
-              overwrite: "replace",
+              overwrite: "ask",
               stripComponents: 0,
               tzapRestorePolicy: "portable",
               tzapAllowDegraded: false,

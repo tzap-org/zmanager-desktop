@@ -232,7 +232,7 @@ function normalizeDefaults(defaults: ExtractWorkspaceDefaults): ExtractWorkspace
   return {
     destinationPath: defaults.destinationPath,
     pathMode: normalizePathMode(defaults.pathMode),
-    overwrite: normalizeOverwrite(defaults.overwrite),
+    overwrite: defaults.overwrite,
     stripComponents: normalizeStripComponents(defaults.stripComponents),
     deduplicateRoot: Boolean(defaults.deduplicateRoot),
     tzapRestorePolicy: normalizeTzapRestorePolicy(defaults.tzapRestorePolicy),
@@ -248,7 +248,7 @@ function normalizedPatch(
   return {
     ...(patch.destinationPath === undefined ? {} : { destinationPath: patch.destinationPath }),
     ...(patch.pathMode === undefined ? {} : { pathMode: normalizePathMode(patch.pathMode) }),
-    ...(patch.overwrite === undefined ? {} : { overwrite: normalizeOverwrite(patch.overwrite) }),
+    ...(patch.overwrite === undefined ? {} : { overwrite: patch.overwrite }),
     ...(patch.stripComponents === undefined
       ? {}
       : { stripComponents: normalizeStripComponents(patch.stripComponents) }),
@@ -270,10 +270,6 @@ function normalizeRecipientKeyId(value: string): string {
 
 function normalizePathMode(value: ExtractPathMode): ExtractPathMode {
   return value === "current" || value === "none" ? value : "full";
-}
-
-function normalizeOverwrite(value: ExtractOverwritePolicy): ExtractOverwritePolicy {
-  return value === "refuse" || value === "replace" || value === "rename" ? value : "ask";
 }
 
 function normalizeTzapRestorePolicy(value?: TzapRestorePolicy): TzapRestorePolicy {

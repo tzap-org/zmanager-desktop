@@ -562,7 +562,7 @@ export type StartExtractRequest = {
   destinationPath: string;
   password?: string;
   recipientKeyId?: string;
-  overwrite: "refuse" | "replace" | "rename" | "ask";
+  overwrite: "rename" | "ask";
   destinationCollisionStrategy?: "refuse" | "rename" | "renameIfBlocked";
   entryPaths?: string[];
   selectAll?: boolean;

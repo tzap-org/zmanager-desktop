@@ -8,7 +8,7 @@ describe("extraction policy", () => {
     const preferences = {
       ...DEFAULT_APP_PREFERENCES,
       customExtractFolderPath: "/out",
-      defaultExtractOverwrite: "refuse" as const,
+      defaultExtractOverwrite: "ask" as const,
       defaultExtractPathMode: "none" as const,
       defaultExtractStripComponents: 2,
       defaultExtractIgnoreSymlinks: true,
@@ -20,7 +20,7 @@ describe("extraction policy", () => {
     const defaults = extractDefaultsForArchive("/archives/demo.tar.zst", preferences, paths);
     expect(defaults).toMatchObject({
       destinationPath: "/out/demo",
-      overwrite: "refuse",
+      overwrite: "ask",
       pathMode: "none",
       stripComponents: 2,
       ignoreSymlinks: true,

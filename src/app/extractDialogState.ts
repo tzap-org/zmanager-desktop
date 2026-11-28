@@ -38,7 +38,7 @@ export function createExtractDialogFormSnapshot(
     useSubfolder: patch.useSubfolder ?? DEFAULT_EXTRACT_DIALOG_FORM.useSubfolder,
     subfolder: patch.subfolder ?? DEFAULT_EXTRACT_DIALOG_FORM.subfolder,
     pathMode: normalizeExtractPathMode(patch.pathMode),
-    overwrite: normalizeExtractOverwrite(patch.overwrite),
+    overwrite: patch.overwrite ?? DEFAULT_EXTRACT_DIALOG_FORM.overwrite,
     stripComponents: normalizeStripComponentsText(patch.stripComponents),
     deduplicateRoot: patch.deduplicateRoot ?? DEFAULT_EXTRACT_DIALOG_FORM.deduplicateRoot,
     tzapRestorePolicy: normalizeTzapRestorePolicy(patch.tzapRestorePolicy),
@@ -79,17 +79,6 @@ export function extractStartInputFromDialogForm(
 
 function normalizeExtractPathMode(value: ExtractPathMode | undefined): ExtractPathMode {
   return value === "current" || value === "none" ? value : "full";
-}
-
-function normalizeExtractOverwrite(value: ExtractOverwritePolicy | undefined): ExtractOverwritePolicy {
-  if (value === undefined) {
-    return DEFAULT_EXTRACT_DIALOG_FORM.overwrite;
-  }
-  if (value === "replace" || value === "rename" || value === "ask") {
-    return value;
-  }
-
-  return "refuse";
 }
 
 function normalizeTzapRestorePolicy(value: TzapRestorePolicy | undefined): TzapRestorePolicy {

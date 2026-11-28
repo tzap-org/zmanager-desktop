@@ -902,7 +902,7 @@ describe("archive workspace load state", () => {
     const request = requestOf(workspace.buildExtractRequest({
       mode: "selection",
       destinationPath: "D:/out",
-      overwrite: "replace",
+      overwrite: "ask",
       stripComponents: 1,
     }));
 
@@ -920,7 +920,7 @@ describe("archive workspace load state", () => {
     expect(reasonOf(workspace.buildExtractRequest({
       mode: "selection",
       destinationPath: "D:/out",
-      overwrite: "replace",
+      overwrite: "ask",
       stripComponents: 1,
     }))).toBe("noSelectedEntries");
   });
@@ -974,7 +974,7 @@ describe("archive workspace load state", () => {
     const extractRequest = requestOf(workspace.buildExtractRequest({
       mode: "selection",
       destinationPath: "D:/out",
-      overwrite: "replace",
+      overwrite: "ask",
       stripComponents: 0,
     }));
     expect(extractRequest).toMatchObject({
@@ -1026,7 +1026,7 @@ describe("archive workspace load state", () => {
     const emptyWorkspace = createArchiveWorkspace();
 
     expect(reasonOf(emptyWorkspace.buildPreviewRequest({
-      overwrite: "replace",
+      overwrite: "ask",
       stripComponents: 0,
     }))).toBe("noArchive");
 
@@ -1039,19 +1039,19 @@ describe("archive workspace load state", () => {
     });
 
     expect(reasonOf(workspace.buildPreviewRequest({
-      overwrite: "replace",
+      overwrite: "ask",
       stripComponents: 0,
     }))).toBe("singleFileRequired");
 
     selectPaths(workspace, ["docs/readme.txt", "src/main.rs"]);
     expect(reasonOf(workspace.buildPreviewRequest({
-      overwrite: "replace",
+      overwrite: "ask",
       stripComponents: 0,
     }))).toBe("singleFileRequired");
 
     selectPaths(workspace, ["docs"]);
     expect(reasonOf(workspace.buildPreviewRequest({
-      overwrite: "replace",
+      overwrite: "ask",
       stripComponents: 0,
     }))).toBe("directorySelected");
 
@@ -1170,7 +1170,7 @@ describe("archive workspace load state", () => {
     selectPaths(workspace, ["docs/readme.txt"]);
 
     const request = requestOf(workspace.buildPreviewRequest({
-      overwrite: "replace",
+      overwrite: "ask",
       stripComponents: 0,
       password: secret,
     }));

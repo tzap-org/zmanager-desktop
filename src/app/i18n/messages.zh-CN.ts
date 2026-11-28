@@ -383,7 +383,7 @@ export const zhCnMessages = {
   "extract.ignoreSymlinks": "忽略符号链接",
   "extract.stripComponents": "剥离路径层级",
   "extract.pathMode.tooltip": "完整路径保留归档的文件夹结构。当前文件夹至少剥离所选文件夹的层级。无路径将文件直接提取到目标位置，并跳过符号链接和硬链接。",
-  "extract.overwritePolicy.tooltip": "拒绝：跳过已有文件。询问：对每个冲突弹出提示。重命名：自动生成唯一名称。替换：直接覆盖而不询问。",
+  "extract.overwritePolicy.tooltip": "询问：为每个冲突选择处理方式。重命名：自动创建唯一名称的副本。",
   "extract.stripComponents.tooltip": "从每个提取文件的路径中移除前导目录层级的数量。例如，从 \"project/src/main.ts\" 中剥离 1 层将提取为 \"src/main.ts\"。超过文件深度的值会跳过该文件。",
   "extract.deduplicateRoot.tooltip": "当每个所选条目共享同一个顶层文件夹时，自动将其剥离，以避免目标中出现多余的嵌套文件夹。",
   "extract.password.tooltip": "用于解密归档的密码。未加密归档请留空。",

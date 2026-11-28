@@ -11,14 +11,15 @@ describe("extract flow helpers", () => {
       buildStartExtractRequest({
         archivePath: "C:/tmp/archive.zip",
         destinationPath: "C:/tmp/out",
-        overwrite: "replace",
+        overwrite: "ask",
         stripComponents: 0,
         password: "",
       }),
     ).toEqual({
       archivePath: "C:/tmp/archive.zip",
       destinationPath: "C:/tmp/out",
-      overwrite: "replace",
+      overwrite: "ask",
+      destinationCollisionStrategy: "renameIfBlocked",
       stripComponents: 0,
       tzapRestorePolicy: "portable",
       tzapAllowDegraded: true,
@@ -121,7 +122,7 @@ describe("extract flow helpers", () => {
       useSubfolder: true,
       subfolder: "ignored",
       pathMode: "full",
-      overwrite: "refuse",
+      overwrite: "ask",
       stripComponents: "0",
       deduplicateRoot: false,
     }, {

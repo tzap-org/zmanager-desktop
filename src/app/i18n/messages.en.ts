@@ -555,7 +555,7 @@ export const enMessages = {
   "extract.ignoreSymlinks": "Ignore symbolic links",
   "extract.stripComponents": "Strip components",
   "extract.pathMode.tooltip": "Full paths preserves the archive folder structure. Current folder strips at least the selected folder's depth. No paths places files directly in the destination and skips symbolic links and hard links.",
-  "extract.overwritePolicy.tooltip": "Refuse: skip existing files. Ask: prompt for each conflict. Rename: auto-generate unique names. Replace: overwrite without asking.",
+  "extract.overwritePolicy.tooltip": "Ask: choose how to handle each conflict. Rename: automatically create a uniquely named copy.",
   "extract.stripComponents.tooltip": "Number of leading directory levels to remove from each extracted file. For example, stripping 1 from \"project/src/main.ts\" extracts as \"src/main.ts\". A value higher than a file's depth drops that file.",
   "extract.deduplicateRoot.tooltip": "When every selected entry shares a single top-level folder, automatically strip it to avoid a redundant nested folder at the destination.",
   "extract.password.tooltip": "Password to decrypt the archive. Leave empty for unencrypted archives.",

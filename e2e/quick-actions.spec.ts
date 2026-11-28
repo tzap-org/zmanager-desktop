@@ -190,14 +190,14 @@ test("cold right-click Extract to Folder uses the saved extraction options", asy
   await page.goto("/");
   await expect.poll(() => extractRequest(page)).toMatchObject({
     destinationPath: "/tmp/output/archive",
-    overwrite: "refuse",
+    overwrite: "ask",
     flattenPaths: true,
     stripComponents: 0,
     ignoreSymlinks: true,
     tzapRestorePolicy: "sameOs",
     tzapAllowDegraded: false,
   });
-  expect(await extractRequest(page)).not.toHaveProperty("destinationCollisionStrategy");
+  expect(await extractRequest(page)).toHaveProperty("destinationCollisionStrategy", "renameIfBlocked");
   expect(await extractRequest(page)).not.toHaveProperty("tzapAllowAbsoluteSymlinks");
 });
 
@@ -244,7 +244,7 @@ test.describe("main-window Extract All options", () => {
 
   test("submits inline overrides and the entered password", async ({ page }) => {
     await page.locator("#extract-overwrite").click();
-    await page.getByRole("option", { name: "Replace", exact: true }).click();
+    await page.getByRole("option", { name: "Ask", exact: true }).click();
     await page.locator("#extract-deduplicate-root").click();
     await page.locator("#extract-ignore-symlinks").click();
     await page.getByText("Advanced options", { exact: true }).click();
@@ -254,7 +254,7 @@ test.describe("main-window Extract All options", () => {
     await page.locator("#extract-password").fill("fixture-password");
     await page.locator("#extract-all").click();
     await expect.poll(() => extractRequest(page)).toMatchObject({
-      overwrite: "replace",
+      overwrite: "ask",
       stripComponents: 0,
       ignoreSymlinks: false,
       tzapRestorePolicy: "sameOs",
@@ -282,17 +282,17 @@ test.describe("main-window Extract All options", () => {
 
   test("opens the extraction dialog with the current options and submits its override", async ({ page }) => {
     await page.locator("#extract-overwrite").click();
-    await page.getByRole("option", { name: "Replace", exact: true }).click();
+    await page.getByRole("option", { name: "Ask", exact: true }).click();
     await page.locator('tr[data-entry-path="root"] [data-row-primary]').click();
     await page.locator("#extract-selected").click();
-    await expect(page.locator("#browse-overwrite")).toHaveText("Replace");
+    await expect(page.locator("#browse-overwrite")).toHaveText("Ask");
     await page.getByRole("dialog").getByText("Advanced options", { exact: true }).click();
     await expect(page.getByRole("dialog").getByText("Allow absolute symlinks", { exact: true })).toHaveCount(0);
     await page.locator("#browse-overwrite").click();
-    await page.getByRole("option", { name: "Refuse", exact: true }).click();
+    await page.getByRole("option", { name: "Rename", exact: true }).click();
     await page.locator("#extract-start").click();
     await expect.poll(() => extractRequest(page)).toMatchObject({
-      overwrite: "refuse",
+      overwrite: "rename",
       stripComponents: 1,
       deduplicateRoot: true,
       ignoreSymlinks: true,

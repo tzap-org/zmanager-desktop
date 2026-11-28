@@ -307,7 +307,7 @@ describe("Online TZAP account lifecycle", () => {
     await startExtract({
       archivePath,
       destinationPath: extractedRoot,
-      overwrite: "replace",
+      overwrite: "ask",
       destinationCollisionStrategy: "refuse",
       stripComponents: 0,
       tzapRestorePolicy: "portable",
